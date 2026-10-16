@@ -1,0 +1,19 @@
+{
+  "candidates": [
+    {
+      "index": 0,
+      "content": {
+        "role": "model",
+        "parts": []
+      },
+      "finishReason": "NO_IMAGE"
+    }
+  ],
+  "modelVersion": "gemini-3.1-flash-image",
+  "responseId": "resp-abc123",
+  "usageMetadata": {
+    "promptTokenCount": 12,
+    "candidatesTokenCount": 1290,
+    "totalTokenCount": 1302
+  }
+}

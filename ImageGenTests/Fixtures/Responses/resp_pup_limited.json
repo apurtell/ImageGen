@@ -1,0 +1,15 @@
+{
+  "candidates": [
+    {
+      "index": 0,
+      "finishReason": "PUP_LIMITED_DISABLED"
+    }
+  ],
+  "modelVersion": "gemini-3.1-flash-image",
+  "responseId": "resp-abc123",
+  "usageMetadata": {
+    "promptTokenCount": 12,
+    "candidatesTokenCount": 1290,
+    "totalTokenCount": 1302
+  }
+}

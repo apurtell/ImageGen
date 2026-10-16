@@ -203,7 +203,7 @@ No full-body `String` or `Data` is ever built in memory. The exact body size is 
 ### 2.7 Parsing responses (the `ResponseParser`)
 **Inputs:** the HTTP status and the response body file. **Output:** a `ParsedOutcome` (Sendable):
 - `.success(parts: [OutputPart], finishReason, notices, modelVersion, responseId)`, where `OutputPart` is `.text(String)` or `.image(StoredOutputImage)`. `StoredOutputImage` is `{fileURL, mimeType, byteCount, pixelWidth, pixelHeight}`: the parser writes each decoded image straight to the directory the caller passes in, which is always `Requests/<requestID>/out-<attempt>/` (section 4.4), and `GenerationService` moves the files into `Images/<conv>/` (see Memory below). No image `Data` is held in the outcome. `notices` are short user-facing strings (for example "1 image could not be decoded"); they're stored on the request (`noticesData`, section 4.3) so they survive a relaunch.
-- `.refused(reason, message?, details)`: a safety or policy refusal. `reason` is the API's string, verbatim, and is stored as `GenerationRequest.refusalReason`; `message` is `finishMessage` when present, and is stored as `GenerationRequest.errorMessage` (section 4.3), which the reply's Info sheet shows as "Message: …" (section 3.6). It never appears on the card.
+- `.refused(reason, message?, notices, details)`: a safety or policy refusal. `reason` is the API's string, verbatim, and is stored as `GenerationRequest.refusalReason`; `message` is `finishMessage` when present, and is stored as `GenerationRequest.errorMessage` (section 4.3), which the reply's Info sheet shows as "Message: …" (section 3.6). It never appears on the card.
 - `.empty(finishReason?, details)`
 - `.apiError(httpStatus, status?, message, details)`
 - `.malformed(details)`

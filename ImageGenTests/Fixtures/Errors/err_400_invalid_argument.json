@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": 400,
+    "message": "Unsupported value for imageConfig.aspectRatio: '7:3'.",
+    "status": "INVALID_ARGUMENT"
+  }
+}

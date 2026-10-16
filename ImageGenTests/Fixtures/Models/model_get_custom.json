@@ -1,0 +1,13 @@
+{
+  "name": "models/gemini-x-test",
+  "baseModelId": "gemini-x-test",
+  "version": "001",
+  "displayName": "Gemini X Test",
+  "description": "Gemini X Test",
+  "inputTokenLimit": 32768,
+  "outputTokenLimit": 32768,
+  "supportedGenerationMethods": [
+    "generateContent",
+    "countTokens"
+  ]
+}

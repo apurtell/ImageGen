@@ -1,0 +1,29 @@
+{
+  "candidates": [
+    {
+      "index": 0,
+      "content": {
+        "role": "model",
+        "parts": [
+          {
+            "text": "Here you go."
+          },
+          {
+            "inlineData": {
+              "mimeType": "image/png",
+              "data": "dGhpcyBpcyBkZWZpbml0ZWx5IG5vdCBhbiBpbWFnZSwganVzdCBzb21lIGJ5dGVz"
+            }
+          }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "modelVersion": "gemini-3.1-flash-image",
+  "responseId": "resp-abc123",
+  "usageMetadata": {
+    "promptTokenCount": 12,
+    "candidatesTokenCount": 1290,
+    "totalTokenCount": 1302
+  }
+}

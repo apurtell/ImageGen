@@ -1,0 +1,30 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-2.5-flash",
+      "baseModelId": "gemini-2.5-flash",
+      "version": "001",
+      "displayName": "Gemini 2.5 Flash",
+      "description": "Gemini 2.5 Flash",
+      "inputTokenLimit": 32768,
+      "outputTokenLimit": 32768,
+      "supportedGenerationMethods": [
+        "generateContent",
+        "countTokens"
+      ]
+    },
+    {
+      "name": "models/gemini-3-pro-image",
+      "baseModelId": "gemini-3-pro-image",
+      "version": "001",
+      "displayName": "Gemini 3 Pro Image",
+      "description": "Gemini 3 Pro Image",
+      "inputTokenLimit": 32768,
+      "outputTokenLimit": 32768,
+      "supportedGenerationMethods": [
+        "generateContent",
+        "countTokens"
+      ]
+    }
+  ]
+}

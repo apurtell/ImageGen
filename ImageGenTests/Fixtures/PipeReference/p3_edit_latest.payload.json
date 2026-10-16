@@ -1,0 +1,46 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "inlineData": {
+            "data": "iVBORw0KGgoAAAANSUhEUgAAACAAAAASCAIAAAC1qksFAAAAAXNSR0IArs4c6QAAAERlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAIKADAAQAAAABAAAAEgAAAAB3Z4kVAAACpUlEQVQ4EVWVUZLjIAxEIcbJx+yh9hx7lL35JLaZ91okVUMlDohWqyWE0//++3/f5rjN+2hMeO55ft2vveZbu4+5F2BZJpivxy+8Xpv2MEBy/QEw2ngerc02R++ne0xdt6a9td56z7KN3k79Mfpt/XWyy3zOrPPsaCqG3vvz1DbECBQVUhYS+z0vfvZNA4NgrzNkcdBHsk5+7qrk+jCwcsw5XmemEVg2GZewzu/bp6hv7MEonaQYATif7WrjRpYCtnfw3ilRRwnlA1Vpkrt4NWGUiS/FcURCVa+tzIzVDxhUk/32PI1cfJRIJuqlJSch8ZT6Q8oeOhwRaMADG8VRaQo1VyWqapJbUnKtEoEm91Vx2U1eHwZZ84CJJ+4ozRzT9X2s7oh75WfU97C8lIjeSMTksIQgILSwsKtIh3G+j7UwyZiqtVgg2TM7xeugLrqop+Gct8aeKpN7uwqEgoW1xCHt3oy4izdRt2rEvLUHrZUouQdWzBZQhWC7bW5O3dlibHOn095EnrOcIjLj2Iwa7cTuyMopeA8cAFOcCrrOEE+rZxzJBLifwBocAAySE7Jfo0YcR0Wi2/U5ZDsngeziX6SwSxexm40hcgVdF77EFsM+qO2KjyYDeEpACJlPpVKkqRJCFOnHhmae5aohto5Sk4uGuNdUxerB5CmlNU0jx1MVV9SkOEXqNRYQd1ORVUuunqWTx2GR7jkzMyiZQO1xdz2lF82zuCq2O2lo6T+kwvlA4autOl4kVjtl5pCLCaMtnE1Uhbzv+cWquPd7SXmoO+D1FYJH4N6LSgVD4uqcQy5JoWDD99JKiuqpjtU8vOcuTv8GoNSY8krHIq/3yDLROcUja5Tq/WGQMHkVGZWCnpX7I++yyA1AbAZR9N3vrhaDwW4IwP4Dt6fj6DiIdYYAAAAASUVORK5CYII=",
+            "mimeType": "image/png"
+          }
+        },
+        {
+          "text": "add a full moon"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "responseModalities": [
+      "TEXT",
+      "IMAGE"
+    ]
+  },
+  "safetySettings": [
+    {
+      "category": "HARM_CATEGORY_HARASSMENT",
+      "threshold": "BLOCK_NONE"
+    },
+    {
+      "category": "HARM_CATEGORY_HATE_SPEECH",
+      "threshold": "BLOCK_NONE"
+    },
+    {
+      "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+      "threshold": "BLOCK_NONE"
+    },
+    {
+      "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+      "threshold": "BLOCK_NONE"
+    },
+    {
+      "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
+      "threshold": "BLOCK_NONE"
+    }
+  ]
+}

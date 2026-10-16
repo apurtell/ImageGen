@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": 400,
+    "message": "Invalid value at 'safety_settings[4].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \"HARM_CATEGORY_CIVIC_INTEGRITY\"",
+    "status": "INVALID_ARGUMENT"
+  }
+}

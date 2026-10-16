@@ -209,7 +209,7 @@ DEVELOPMENT_TEAM = ABCDE12345
 
 All scripts `source scripts/env.sh`, which:
 - picks `DEVELOPER_DIR`: `$IMAGEGEN_XCODE`, then `/Applications/Xcode.app`, then `~/Downloads/Xcode.app`, keeping the first whose version is 26 or later;
-- sets `SIM_NAME=ImageGen-Sim`, `BUNDLE_ID=com.andrewpurtell.imagegen`, `DERIVED=build/DerivedData`, `LOGS=build/logs`.
+- sets `SIM_NAME=ImageGen-Sim` (or `$IMAGEGEN_SIM`, a simulator name or UDID, to use an already-booted simulator instead), `BUNDLE_ID=com.andrewpurtell.imagegen`, `DERIVED=build/DerivedData`, `LOGS=build/logs`.
 
 | Purpose | Command | Underlying invocation |
 |---|---|---|
@@ -407,7 +407,7 @@ no-reencoding-exports                  'UIImageWriteToSavedPhotosAlbum|jpegData\
 no-swiftui-in-pure-layers              '^import SwiftUI'                                        ImageGen/{Gemini,Imaging,Pipeline,Security,Networking}/
 no-print                               '\bprint\('                                              ImageGen/ except DebugSupport/
 no-async-urlsession-for-generation     '\.data\(for:|\.upload\(for:'                            ImageGen/Networking/ ImageGen/Pipeline/
-debug-names-only-via-hooks             'LaunchOptions|MockGeminiURLProtocol|DemoSeeder|SceneRoute'   ImageGen/ except DebugSupport/ and App/DebugHooks.swift
+debug-names-only-via-hooks             '\bLaunchOptions\b|MockGeminiURLProtocol|DemoSeeder|SceneRoute'   ImageGen/ except DebugSupport/ and App/DebugHooks.swift
 no-key-in-activity-log                 (multiline, perl; see below)                             ImageGen/
 debug-guard                            first non-comment line of each DebugSupport/*.swift and of App/DebugHooks.swift is '#if DEBUG'
 ```
@@ -741,7 +741,8 @@ The input and output types (`GenerationDefaults`, `ChatOverrides`, `EffectiveSet
     static func predictedSize(_ spec: RequestBodySpec) throws -> Int
     @concurrent static func write(_ spec: RequestBodySpec, to url: URL) async throws -> Int   // returns bytes written
   }
-  enum RequestBodyError: Error { case emptyParts }   // no images and no text (D§2.2)
+  enum RequestBodyError: Error { case emptyParts                                   // no images and no text (D§2.2)
+                                 case imageSizeMismatch(index: Int, expected: Int, actual: Int) }   // file changed since byteCount was read
   ```
   `EffectiveSettings` comes from M0's shared types; tests construct it by hand.
   - Build the envelope as `Encodable` structs whose image `data` values are unique placeholder strings (`"__IMG_<uuid>_<i>__"`).
@@ -779,11 +780,11 @@ The input and output types (`GenerationDefaults`, `ChatOverrides`, `EffectiveSet
   struct StoredOutputImage: Sendable, Equatable { let fileURL: URL; let mimeType: String; let byteCount: Int; let pixelWidth: Int; let pixelHeight: Int }
   enum OutputPart: Sendable, Equatable { case text(String); case image(StoredOutputImage) }
   enum ParsedOutcome: Sendable { case success(parts: [OutputPart], finishReason: String?, notices: [String], modelVersion: String?, responseID: String?, details: String)
-                                 case refused(reason: String, message: String?, details: String)   // reason verbatim, D§2.7 rules 3 and 6
+                                 case refused(reason: String, message: String?, notices: [String], details: String)   // reason verbatim, D§2.7 rules 3 and 6
                                  case empty(finishReason: String?, details: String)
                                  case apiError(httpStatus: Int, status: String?, message: String, details: String)
                                  case malformed(details: String) }
-  enum ResponseParser { @concurrent static func parse(httpStatus: Int, bodyURL: URL, outputDirectory: URL) async -> ParsedOutcome }
+  enum ResponseParser { @concurrent static func parse(httpStatus: Int, bodyURL: URL, outputDirectory: URL) async throws -> ParsedOutcome }   // throws only when writing an image fails (D§6 #27)
   ```
   The parser writes each decoded image straight to `outputDirectory/<uuid>.<ext>`; in the app the caller always passes `Requests/<id>/out-<attempt>/` (D§4.4). `GenerationService` later moves the files into `Images/<conv>/` (D§2.7, as updated). Text parts follow D§2.7 rule 5 exactly: consecutive parts concatenated verbatim with no separator, each run trimmed only at its two ends, whitespace-only runs dropped. Refusals follow D§2.7 rules 3 and 6: `promptFeedback.blockReason`, or no surviving image with a `finishReason` outside {`STOP`, `MAX_TOKENS`, `FINISH_REASON_UNSPECIFIED`}, gives `.refused` with the reason verbatim (unknown reasons included, and `ESCALATION` and `PUP_LIMITED_DISABLED` too). Text parts of a refused candidate never become `OutputPart`s; they stay only in `details`. `.empty` is only for no candidates, or no parts with `STOP`/`MAX_TOKENS`/`FINISH_REASON_UNSPECIFIED`/missing. Rule 6 is tested on both sides: a decodable image with a refusing finish reason is `.success` with a footnote, an only-undecodable image with one is `.refused`, and each non-refusing reason (including a missing one) is checked on a no-parts and a text-only candidate. The refusal `message` (`finishMessage`) goes to `RequestPatch.errorMessage`.
 - `Gemini/Redactor.swift`: pretty-prints JSON, replaces `inlineData.data` with `"<N bytes mime>"` and `thoughtSignature` with `"<redacted>"`, and caps the output at 64 KB. For the activity log (D§4.13) it also has:
@@ -1782,3 +1783,10 @@ Record each result in `artifacts/M10/DEVICE_RESULTS.txt` (`D<n>: PASS|FAIL notes
       - M5: `DeveloperMenuModel` (one shared instance fed by `changes()`) drives Last Error's disabled state; `LogViewerModel` refreshes incrementally and stays on the action it opened with; `LogTextView` (read-only `UITextView`) replaces the `LazyVStack` of `Text` so ranges can be selected; onboarding registers the typed key and the key-save refresh is its own Models refresh action; `ChatScreenModel` logs Chat setting change and Notification permission. New `DeveloperMenuModelTests`, `LogViewerModelTests.openSheetStaysOnItsAction`, `ChatScreenModelTests.chatSettingChangesLogged` and `notificationPermissionLogged`, and `APIKeySectionTests.removeKeyLogged` (so M5's Remove API key logging has a test in M5).
       - M6: Attach and Edit & Resend end after their Prepare attachment children; partial failures end `failed`; Tray change is logged; new `attachPartialFailureEndsFailed`, `attachCapDropIsNotFailure`, `removeWhilePreparingCancelsChild` and `trayReorderLogged`. M7: Share is a button presenting the new `Export/ActivityShareSheet.swift` (`UIActivityViewController`), so Share is begun on tap and ended from its completion handler; `shareLogged` defined and `shareProviderCarriesOriginalType` added. M8: `customIDHoldingKeyIsScrubbed`; `deleteAllChatsLogged` covers a partial failure.
       - M9 task 10 runs as three launches with complete arguments (only the first resets; launch 2 has `-MockLatency 30` for the kill), with `simctl addmedia`, the `photos-add` grant and `-SeedPasteboardImage 1` listed. M10 D28 notes its dependence on D§11 Q5 (Last Action skipping system actions; confirmed by the user on 2026-10-16). Matrix rows R-31 and R-32 cite the new tests.
+- 2026-10-16: M0 and M1 executed (branch `m0-m1`). Refinements found during implementation; DESIGN.md D§2.7 updated for the first:
+  1. `ParsedOutcome.refused` gains `notices: [String]`, so an only-undecodable image with a refusing finish reason keeps its "1 image could not be decoded" notice, as D§2.7 rule 6 requires (the earlier signature had nowhere to put it).
+  2. `ResponseParser.parse` is `async throws`; it throws only when writing a decoded image fails (disk full, D§6 #27), which M4 maps to "Not enough storage to save the result". Every response shape still maps to a `ParsedOutcome`.
+  3. `RequestBodyError.imageSizeMismatch`: `write` checks that each image file still has its `byteCount`, so the `Content-Length` from `predictedSize` can't silently disagree with the body.
+  4. Section 2.7: `debug-names-only-via-hooks` uses `\bLaunchOptions\b`, because the plain pattern also matched `UIApplication.LaunchOptionsKey` in M0's `AppDelegate`. `lint.sh` uses `/usr/bin/grep`, whose `-E` supports `\b`.
+  5. Section 1.4: `scripts/env.sh` honors `IMAGEGEN_SIM` (a simulator name or UDID) to target an already-booted simulator instead of `ImageGen-Sim`.
+  6. `scripts/gen_pipe_fixtures.py` compiles the pipe with `from __future__ import annotations` prepended, because the pipe's `dict | None` annotation can't be evaluated by Python 3.9 at import time. Behavior is unchanged.
