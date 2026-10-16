@@ -7,8 +7,15 @@ final class Navigator {
   /// Conversation IDs pushed on the chat list.
   var path: [UUID] = []
   var showSettings = false
+  /// Pages pushed inside the Settings sheet when it opens (the 404 card's Open Models).
+  var settingsPath: [SettingsPage] = []
   /// No key is stored (or `-Scene onboarding`), so onboarding replaces the chat list.
   var needsOnboarding = false
+
+  func openSettings(_ page: SettingsPage? = nil) {
+    settingsPath = page.map { [$0] } ?? []
+    showSettings = true
+  }
 
   func open(_ conversationID: UUID) {
     path = [conversationID]
@@ -18,4 +25,8 @@ final class Navigator {
   func replaceTop(with conversationID: UUID) {
     if path.isEmpty { path = [conversationID] } else { path[path.count - 1] = conversationID }
   }
+}
+
+enum SettingsPage: Hashable {
+  case models
 }

@@ -438,6 +438,11 @@ actor DataStore: ModelActor {
     return result
   }
 
+  /// How many chats and images there are (Delete All Chats states them).
+  func inventory() throws -> (chats: Int, images: Int) {
+    (try modelContext.fetchCount(FetchDescriptor<Conversation>()), try modelContext.fetchCount(FetchDescriptor<ImageAsset>()))
+  }
+
   func deleteAll() throws -> DeletionResult {
     var total = DeletionResult()
     for conversation in try modelContext.fetch(FetchDescriptor<Conversation>()) {

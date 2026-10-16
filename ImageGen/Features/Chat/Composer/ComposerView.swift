@@ -7,6 +7,12 @@ struct ComposerView: View {
   var body: some View {
     GlassEffectContainer(spacing: 8) {
       VStack(alignment: .leading, spacing: 8) {
+        if model.flashUnlisted {
+          Label(OnboardingModel.flashWarning, systemImage: "exclamationmark.triangle")
+            .font(.footnote)
+            .foregroundStyle(.orange)
+            .accessibilityLabel("Warning: \(OnboardingModel.flashWarning)")
+        }
         ContextChips(model: model)
         AttachmentTray(model: model)
         SettingsPills(model: model)

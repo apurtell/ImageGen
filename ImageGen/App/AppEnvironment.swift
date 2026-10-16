@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import SwiftData
 import UIKit
+import UserNotifications
 
 /// What DEBUG mock mode swaps in (D§2.6 of the plan): an ephemeral configuration with the mock
 /// protocol, and an in-memory key store holding "mock-key".
@@ -151,6 +152,22 @@ final class AppEnvironment {
       store: store, files: files, generation: service, settings: settings, log: log, connectivity: connectivity,
       activity: activity, notifications: notificationPermission, navigator: navigator, thumbnails: thumbnails,
       copyToPasteboard: { UIPasteboard.general.string = $0 })
+  }
+
+  /// What the Settings sheet needs.
+  func settingsModel() -> SettingsModel {
+    SettingsModel(
+      services: SettingsModel.Services(
+        settings: settings, keyStore: keyStore, availability: availability, modelsClient: modelsClient, store: store,
+        files: files, thumbnails: thumbnails, generation: service, log: log, navigator: navigator,
+        notificationStatus: {
+          if let forced = DebugHooks.forcedNotificationState { return forced }
+          return UserNotificationAuthorizer.name(await UNUserNotificationCenter.current().notificationSettings().authorizationStatus)
+        }))
+  }
+
+  func apiKeySectionModel() -> APIKeySectionModel {
+    APIKeySectionModel(keyStore: keyStore, log: log, availability: availability, registry: registry)
   }
 
   var chatActions: ChatActions {

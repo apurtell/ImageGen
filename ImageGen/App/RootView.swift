@@ -25,7 +25,7 @@ struct RootView: View {
       }
     }
     .sheet(isPresented: $navigator.showSettings) {
-      SettingsView(model: APIKeySectionModel(keyStore: env.keyStore, log: env.log))
+      SettingsView(keyModel: env.apiKeySectionModel(), model: env.settingsModel())
     }
     .onChange(of: env.router.pendingConversationID) { _, id in
       guard let id else { return }
@@ -45,8 +45,10 @@ struct RootView: View {
       navigator.path = []
     case .chat(let id):
       navigator.path = [id]
-    case .settings, .settingsModels:
-      navigator.showSettings = true
+    case .settings:
+      navigator.openSettings()
+    case .settingsModels:
+      navigator.openSettings(.models)
     case .viewer(let id):
       navigator.path = [id]
     case .onboarding:

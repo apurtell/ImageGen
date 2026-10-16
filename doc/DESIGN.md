@@ -442,7 +442,7 @@ Failed, refused, empty, cancelled and interrupted cards show the buttons from th
 - A toggle per catalog model other than Flash (3 Pro, 2.1, Flash Lite, 2.5 Flash Image and the legacy 3 Pro preview alias), **on by default**, with availability ("Available", "Not listed for this key", "Unknown — not checked"). Turning a model off hides it from the per-chat model menu.
 - Custom model IDs: add or remove a text ID, validated against `GET v1beta/models/{id}` before it's added.
 - Footnote: "Chats set to a model you turn off or remove use Gemini 3.1 Flash Image until it's turned back on." (section 2.5, step 1).
-- Pull to refresh re-runs `models.list` and shows "Last checked 5 min ago".
+- Pull to refresh, or the Check Now button, re-runs `models.list` and shows "Last checked 5 min ago".
 
 **Generation defaults**
 - Aspect ratio: a picker over the default model's 14 ratios. Default **16:9**.
@@ -1416,3 +1416,4 @@ A test injects a sentinel key and asserts that it never appears in the log file 
 - 2026-10-16 (M7 executed). Section 4.9: Save to Files exports an `ImageFileDocument` (the original file in a `FileWrapper`, named with the suggested name) instead of the `ImageFile` Transferable item, which crashed inside SwiftUI on iOS 26.5; the bytes are unchanged.
 - 2026-10-16 (user request). Sections 3.3 and 3.4: chats can be renamed in place. In the chat list, Rename (context menu or swipe) edits the row's title in place; on the chat screen, long-pressing the title edits it in place in the navigation bar, and tapping it still opens the Rename alert.
 - 2026-10-16 (user request). Section 3.3: long-pressing a chat-list row edits its title in place directly; the row's context menu is removed, so Delete is on the trailing swipe only.
+- 2026-10-16 (M8 executed). Section 3.8: Settings › Models has a Check Now button beside pull to refresh (the simulator can't drive a pull reliably, and a button is easier to find); Delete All Chats also clears the thumbnail cache; a reply's Info lists what was sent for each input (type, pixel size, bytes).

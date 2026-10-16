@@ -7,7 +7,7 @@ final class ModelAvailabilityService {
   enum Reason: String, Sendable {
     case keySaved = "key saved"
     case foreground = "foreground check"
-    case manual = "pull to refresh"
+    case manual = "manual check"
   }
 
   enum RefreshOutcome: Sendable, Equatable {

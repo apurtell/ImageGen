@@ -72,6 +72,15 @@ enum SafetyThreshold: String, Sendable, Codable, CaseIterable {
   case blockOnlyHigh = "BLOCK_ONLY_HIGH"
   case blockMediumAndAbove = "BLOCK_MEDIUM_AND_ABOVE"
   case blockLowAndAbove = "BLOCK_LOW_AND_ABOVE"
+
+  var displayName: String {
+    switch self {
+    case .blockNone: "Block none"
+    case .blockOnlyHigh: "Block only high"
+    case .blockMediumAndAbove: "Block medium and above"
+    case .blockLowAndAbove: "Block low and above"
+    }
+  }
 }
 
 /// In the pipe's order, which is also the wire order.

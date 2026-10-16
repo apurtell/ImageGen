@@ -23,6 +23,9 @@ enum DebugHooks {
       description: "on (\(options.mockScenario.rawValue), \(options.mockLatency) s)")
   }
 
+  /// `-ForceNotificationState denied`: what Settings shows as the notification status.
+  static var forcedNotificationState: String? { LaunchOptions.read().forceNotificationState }
+
   /// `-SkipNotificationPrompt 1`: unattended runs aren't blocked by the system alert.
   static var skipNotificationPrompt: Bool { LaunchOptions.read().skipNotificationPrompt }
 
@@ -55,6 +58,7 @@ enum DebugHooks {
   static func resetBeforeLaunchIfRequested(root: URL, cachesRoot: URL) {}
   static func mockEnvironment() -> MockEnvironment? { nil }
   static var skipNotificationPrompt: Bool { false }
+  static var forcedNotificationState: String? { nil }
   static func prepareLaunch(_ env: AppEnvironment) async -> LaunchRoute? { nil }
 }
 #endif

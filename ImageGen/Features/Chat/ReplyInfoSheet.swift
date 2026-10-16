@@ -44,6 +44,12 @@ struct ReplyInfoSheet: View {
               HStack { ForEach(inputAssets) { SquareThumbnail(asset: $0, size: 56) } }
             }
           }
+          // What was sent for each input (the prepared file, or a model output's original).
+          ForEach(Array(request.inputs.enumerated()), id: \.offset) { i, input in
+            row(
+              "Sent \(i + 1)",
+              "\(input.mimeType) · \(input.pixelWidth)×\(input.pixelHeight) · \(ByteCountFormatter.string(fromByteCount: Int64(input.byteCount), countStyle: .file))")
+          }
         }
         Section("Response") {
           if let reason = request.refusalReason { row("Refused", reason) }

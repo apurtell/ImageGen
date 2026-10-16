@@ -157,6 +157,12 @@ final class ChatScreenModel {
   /// The informational "Editing latest image" chip: rule 3 applies (no attachments, no usable pin).
   var showsImplicitChip: Bool { !hasAttachments && !showsPinChip && implicitBaseID != nil }
 
+  /// The key's model list doesn't include Flash (D§2.5): Flash stays selectable, with a banner.
+  var flashUnlisted: Bool {
+    guard let cache = services.settings.modelAvailabilityCache else { return false }
+    return cache.models[ModelCatalog.defaultModelID] != true
+  }
+
   /// "Waiting for network" on a pending card: no usable path, in the foreground, request on the wire.
   var showsWaitingForNetwork: Bool {
     guard isNetworkUnavailable, services.activity.isActive, let live = liveRequest else { return false }

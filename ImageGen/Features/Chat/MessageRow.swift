@@ -12,6 +12,7 @@ struct MessageRowActions {
   var editAndResend: (UUID) -> Void
   var newChat: () -> Void
   var openSettings: () -> Void
+  var openModels: () -> Void
   var showInfo: (GenerationRequest) -> Void
   var showDetails: (String) -> Void
   var deleteMessage: (Message) -> Void
@@ -157,7 +158,8 @@ struct ModelReplyView: View {
         case .retry: actions.retry(request.id)
         case .edit: actions.editRefused(request.id)
         case .newChat: actions.newChat()
-        case .settings, .openModels: actions.openSettings()
+        case .settings: actions.openSettings()
+        case .openModels: actions.openModels()
         case .details: actions.showDetails(request.details ?? "")
         }
       }

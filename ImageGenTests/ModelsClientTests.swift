@@ -130,7 +130,7 @@ struct ModelAvailabilityServiceTests {
     #expect(await rig.service.refresh(reason: .manual) == .refreshed(modelCount: 5, flashListed: true))
     let tree = await rig.probe.action(named: "Models refresh")
     #expect(tree.first?.origin == .user)
-    #expect(tree.first?.message == "reason pull to refresh · GET /v1beta/models?pageSize=1000")
+    #expect(tree.first?.message == "reason manual check · GET /v1beta/models?pageSize=1000")
     let result = try #require(tree.last)
     #expect(result.outcome == .success)
     #expect(result.message.contains("2 pages · 5 models · Flash listed"))
