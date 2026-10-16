@@ -1,0 +1,80 @@
+name: ImageGen
+options:
+  bundleIdPrefix: com.andrewpurtell
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated   # D§5: keep @Model/@ModelActor compatible
+    SWIFT_APPROACHABLE_CONCURRENCY: NO
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+targets:
+  ImageGen:
+    type: application
+    platform: iOS
+    sources:
+      - path: ImageGen
+        excludes: ["Info.plist"]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(IMAGEGEN_BUNDLE_ID)
+        PRODUCT_NAME: ImageGen
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+    info:
+      path: ImageGen/Info.plist
+      properties:
+        CFBundleDisplayName: ImageGen
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSPhotoLibraryAddUsageDescription: "ImageGen saves the images you choose to your photo library."
+        ITSAppUsesNonExemptEncryption: false
+        # No UIBackgroundModes and no BGTaskSchedulerPermittedIdentifiers in v1 (D§10).
+  ImageGenTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: ImageGenTests
+        excludes: ["Fixtures/**"]
+      - path: ImageGenTests/Fixtures
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: ImageGen
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(IMAGEGEN_BUNDLE_ID).tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  ImageGen:
+    build:
+      targets:
+        ImageGen: all
+        ImageGenTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: true
+      targets:
+        - ImageGenTests
+    archive:
+      config: Release

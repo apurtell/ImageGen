@@ -1,0 +1,6 @@
+ImageGen.xcodeproj/
+build/
+artifacts/
+Config/Local.xcconfig
+.DS_Store
+ImageGen/Info.plist

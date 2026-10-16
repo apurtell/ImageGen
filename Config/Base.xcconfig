@@ -1,0 +1,5 @@
+// Checked in. Local overrides (team ID) go in Local.xcconfig, which is git-ignored and optional.
+IMAGEGEN_BUNDLE_ID = com.andrewpurtell.imagegen
+DEVELOPMENT_TEAM =
+CODE_SIGN_IDENTITY[sdk=iphonesimulator*] = -
+#include? "Local.xcconfig"
