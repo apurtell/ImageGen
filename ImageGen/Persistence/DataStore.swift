@@ -472,6 +472,12 @@ actor DataStore: ModelActor {
     return JanitorSnapshot(referencedPaths: paths, requests: requests)
   }
 
+  /// One request as the Janitor sees it now (checked again just before its folder is removed).
+  func janitorRequestInfo(_ id: UUID) throws -> JanitorSnapshot.RequestInfo? {
+    guard let r = try fetchRequest(id) else { return nil }
+    return .init(isTerminal: r.requestState.isTerminal, finishedOrCreatedAt: r.completedAt ?? r.createdAt)
+  }
+
   // MARK: Helpers
 
   private func fetchConversation(_ id: UUID) throws -> Conversation {

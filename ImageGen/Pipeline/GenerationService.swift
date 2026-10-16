@@ -49,12 +49,42 @@ actor GenerationService: GenerationServicing {
     var clock: @Sendable () -> Date = { Date() }
   }
 
-  /// A cancellable preparation, and whether the background-task assertion expired during it.
-  private final class Preparation: Sendable {
-    let expired = Locked(false)
+  /// A cancellable preparation. Its phase decides, atomically, who writes the request action's
+  /// result when the background-task assertion expires: the expiry handler (nothing sent yet) or
+  /// the preparation itself (finished, or the task already started).
+  final class Preparation: Sendable {
+    enum Phase: Sendable { case preparing, sending, finished, expired }
+    let phase = Locked(Phase.preparing)
     let task = Locked<Task<Void, any Error>?>(nil)
 
+    var expired: Bool { phase.value == .expired }
     func cancel() { task.value?.cancel() }
+
+    /// The expiry handler: true when it owns the result (nothing sent, the work not finished).
+    func claimExpiry() -> Bool {
+      phase.withLock { p in
+        guard p == .preparing else { return false }
+        p = .expired
+        return true
+      }
+    }
+
+    /// Just before the task starts: false when the assertion already expired.
+    func claimSending() -> Bool {
+      phase.withLock { p in
+        if p == .preparing { p = .sending }
+        return p == .sending
+      }
+    }
+
+    /// When the work ends: false when the expiry handler already wrote the result.
+    func claimFinish() -> Bool {
+      phase.withLock { p in
+        guard p != .expired else { return false }
+        p = .finished
+        return true
+      }
+    }
   }
 
   private final class ConsumerBox: Sendable {
@@ -65,8 +95,9 @@ actor GenerationService: GenerationServicing {
   private let preparer: RequestPreparer
   private let consumer = ConsumerBox()
 
-  /// Chats with a send between the tap and the request record's creation.
-  private var busyConversations: Set<UUID> = []
+  /// Chats with a send between the tap and the request record's creation, each with the token of
+  /// the call that claimed it: only that call releases it.
+  private var busyConversations: [UUID: UUID] = [:]
   private var conversationOf: [UUID: UUID] = [:]
   /// requestID → the action following it in this process (begun here or adopted).
   private var actions: [UUID: ActionID] = [:]
@@ -75,10 +106,15 @@ actor GenerationService: GenerationServicing {
   /// requestID → its open Attempt sub-action.
   private var attemptActions: [UUID: ActionID] = [:]
   private var startedAt: [UUID: ContinuousClock.Instant] = [:]
+  /// Requests the user stopped. Checked just before a task is created, so a Stop that arrives
+  /// while no task exists (preparing, between attempts, rebuilding) still holds.
   private var userCancelled: Set<UUID> = []
-  private var replacedTasks: Set<Int> = []
   private var preparations: [UUID: Preparation] = [:]
   private var completionsSinceFinished = 0
+  /// One handler at a time per request (see `exclusive`): requestID → callers waiting their turn.
+  private var requestLocks: [UUID: [CheckedContinuation<Void, Never>]] = [:]
+  /// The latest foreground re-creation pass; each pass waits for the one before it.
+  private var reactivation: Task<Void, Never>?
 
   init(_ dependencies: Dependencies) {
     d = dependencies
@@ -105,9 +141,8 @@ actor GenerationService: GenerationServicing {
 
   func send(_ draft: SendDraft) async throws -> UUID {
     let conv = draft.conversationID
-    try await claim(conv)
-    var claimed = true
-    defer { if claimed { busyConversations.remove(conv) } }
+    let claim = try await claim(conv)
+    defer { release(conv, claim) }
 
     let history = try await d.store.selectorHistory(conv: conv)
     let pin = try await d.store.pinState(conv: conv)
@@ -127,22 +162,19 @@ actor GenerationService: GenerationServicing {
     let input = SendRecordInput(
       conversationID: conv, promptText: draft.promptText, attachments: draft.attachments, selection: selection,
       settings: draft.settings, activityActionID: action)
-    let requestID = try await prepareWithAssertion(
-      action: action, conversation: conv, started: started, reuseRecorded: false
+    return try await prepareWithAssertion(
+      action: action, conversation: conv, claim: claim, started: started, reuseRecorded: false
     ) {
       let record = try await self.d.store.createSend(input)
       return record.requestID
     }
-    claimed = false
-    return requestID
   }
 
   func regenerate(sourceRequestID: UUID) async throws -> UUID {
     guard let source = try await d.store.requestSnapshot(sourceRequestID) else { throw GenerationError.requestNotFound }
     let conv = source.conversationID
-    try await claim(conv)
-    var claimed = true
-    defer { if claimed { busyConversations.remove(conv) } }
+    let claim = try await claim(conv)
+    defer { release(conv, claim) }
 
     let action = d.log.begin(
       "Regenerate", origin: .user,
@@ -151,8 +183,8 @@ actor GenerationService: GenerationServicing {
     await d.log.flush(timeout: .seconds(1))
     let started = ContinuousClock.now
     let omitCivic = d.defaults().omitCivicIntegrity && source.settings.categories.contains(.civicIntegrity)
-    let requestID = try await prepareWithAssertion(
-      action: action, conversation: conv, started: started, reuseRecorded: true,
+    return try await prepareWithAssertion(
+      action: action, conversation: conv, claim: claim, started: started, reuseRecorded: true,
       categories: omitCivic ? source.settings.categories.filter { $0 != .civicIntegrity } : nil
     ) {
       guard let record = try await self.d.store.createRegenerate(sourceRequestID: sourceRequestID, activityActionID: action)
@@ -160,19 +192,14 @@ actor GenerationService: GenerationServicing {
       if omitCivic { self.d.log.step(action, "CIVIC_INTEGRITY omitted since the original: 4 categories") }
       return record.requestID
     }
-    claimed = false
-    return requestID
   }
 
   func retry(requestID: UUID) async throws {
     guard let snap = try await d.store.requestSnapshot(requestID) else { throw GenerationError.requestNotFound }
-    guard [.failed, .refused, .cancelled, .interrupted].contains(snap.state) else {
-      throw GenerationError.notRetryable(snap.state)
-    }
+    guard Self.retryable.contains(snap.state) else { throw GenerationError.notRetryable(snap.state) }
     let conv = snap.conversationID
-    try await claim(conv)
-    var claimed = true
-    defer { if claimed { busyConversations.remove(conv) } }
+    let claim = try await claim(conv)
+    defer { release(conv, claim) }
 
     let action = d.log.begin(
       "Retry", origin: .user,
@@ -181,10 +208,25 @@ actor GenerationService: GenerationServicing {
     await d.log.flush(timeout: .seconds(1))
     let started = ContinuousClock.now
     _ = try await prepareWithAssertion(
-      action: action, conversation: conv, started: started, reuseRecorded: true,
+      action: action, conversation: conv, claim: claim, started: started, reuseRecorded: true,
       rebuildBody: !FileManager.default.fileExists(atPath: d.files.bodyURL(requestID).path)
     ) {
-      try await self.d.store.updateRequest(requestID) { p in
+      try await self.beginRetry(requestID, action: action)
+      return requestID
+    }
+  }
+
+  static let retryable: Set<RequestState> = [.failed, .refused, .cancelled, .interrupted]
+
+  /// Moves a finished request back to `preparing` for a Retry, in its turn: a late completion
+  /// being saved at this moment finishes first, and the state is checked again afterwards.
+  private func beginRetry(_ id: UUID, action: ActionID) async throws {
+    try await exclusive(id) {
+      guard let snap = try await d.store.requestSnapshot(id) else { throw GenerationError.requestNotFound }
+      guard Self.retryable.contains(snap.state) else { throw GenerationError.notRetryable(snap.state) }
+      // A Stop of an earlier attempt doesn't carry over to this one.
+      userCancelled.remove(id)
+      try await d.store.updateRequest(id) { p in
         p.clearOutcome = true
         p.state = .preparing
         p.autoRetriesUsed = 0
@@ -193,82 +235,171 @@ actor GenerationService: GenerationServicing {
         p.nextAttemptCreatedInBackground = false
         p.activityActionID = action
       }
-      return requestID
     }
-    claimed = false
   }
 
+  /// Stops a request wherever it is: its preparation, its task, or the gap between the two (the
+  /// next task is never created). A record already deleted (Delete chat found it live a moment
+  /// later) is stopped without a Cancel action of its own; the deleting action logged it.
   func cancel(requestID: UUID) async {
-    guard let snap = try? await d.store.requestSnapshot(requestID), snap.state.isLive else { return }
-    let action = d.log.begin("Cancel", origin: .user, "req \(Format.short(requestID)) · state \(snap.state.rawValue)")
-    userCancelled.insert(requestID)
-    if let prep = preparations[requestID] {
-      prep.cancel()
-      d.log.result(action, .success, "preparation cancelled")
-      return
+    let snap: RequestSnapshot?
+    do { snap = try await d.store.requestSnapshot(requestID) } catch { return }
+    if let snap, !snap.state.isLive { return }
+    let action = snap.map {
+      d.log.begin("Cancel", origin: .user, "req \(Format.short(requestID)) · state \($0.state.rawValue)")
     }
+    userCancelled.insert(requestID)
+    // A request adopted after a relaunch: remember its action (and Attempt) now, so the cancelled
+    // completion closes them even if the record is deleted first (Delete chat, message, all).
+    if actions[requestID] == nil, let adopted = snap?.activityActionID {
+      actions[requestID] = adopted
+      conversationOf[requestID] = snap?.conversationID
+    }
+    let preparing = preparations[requestID]
+    preparing?.cancel()
+    // Also when preparing: its task may have been created a moment ago.
     await d.transport.cancel(requestID: requestID)
-    d.log.result(action, .success, "task cancelled")
+    if let action { d.log.result(action, .success, preparing != nil ? "preparation cancelled" : "task cancelled") }
   }
 
   /// Re-creates in the foreground every retry task created while the app was inactive, which the
-  /// system may treat as discretionary (D§6).
+  /// system may treat as discretionary (D§6). Scene activations can come in quick succession
+  /// (Control Center, a system alert); each pass waits for the one before it, so a request is
+  /// never replaced twice.
   func appBecameActive() async {
+    let previous = reactivation
+    let pass = Task {
+      await previous?.value
+      await self.recreateBackgroundRetries()
+    }
+    reactivation = pass
+    await pass.value
+  }
+
+  private func recreateBackgroundRetries() async {
     guard let pending = try? await d.store.nonTerminalRequests() else { return }
     for snap in pending where snap.state == .retryScheduled && snap.nextAttemptCreatedInBackground {
       guard let old = snap.taskIdentifier, let key = try? d.keyStore.read(), !key.isEmpty else { continue }
-      let action = actionFor(snap)
-      replacedTasks.insert(old)
-      await d.transport.cancel(taskIdentifier: old)
-      closeAttempt(snap, action: action, outcome: .cancelled, "replaced: re-created in the foreground")
-      d.log.step(action, "background-created retry re-created in the foreground")
-      let begin = max(d.clock(), snap.nextAttemptAt ?? d.clock())
-      do {
-        try await startAttempt(
-          snap, action: action, attempt: snap.attempt, bodyURL: d.files.bodyURL(snap.id),
-          bodySize: Self.fileSize(d.files.bodyURL(snap.id)), earliestBegin: begin, apiKey: key, createdInBackground: false)
-      } catch {
-        await finishFailed(snap.id, status: .network, message: "couldn't re-create the retry: \(error.localizedDescription)")
-      }
+      await exclusive(snap.id) { await replaceBackgroundRetry(snap.id, oldTask: old, apiKey: key) }
+    }
+  }
+
+  /// Replaces one background-created retry task, if it is still the one recorded and still waiting
+  /// to begin. A task that began, or finished while the app was suspended, keeps its result: its
+  /// events may be queued behind this call.
+  private func replaceBackgroundRetry(_ id: UUID, oldTask old: Int, apiKey key: String) async {
+    guard let snap = try? await d.store.requestSnapshot(id), snap.state == .retryScheduled,
+      snap.nextAttemptCreatedInBackground, snap.taskIdentifier == old
+    else { return }
+    guard let live = await d.transport.liveTasks().first(where: { $0.taskIdentifier == old }), live.countOfBytesSent == 0
+    else { return }
+    let action = actionFor(snap)
+    // Adopt it, so `finish` closes it if re-creating the task fails.
+    actions[id] = action
+    conversationOf[id] = snap.conversationID
+    await d.transport.cancel(taskIdentifier: old)
+    closeAttempt(snap, action: action, outcome: .cancelled, "replaced: re-created in the foreground")
+    d.log.step(action, "background-created retry re-created in the foreground")
+    let begin = max(d.clock(), snap.nextAttemptAt ?? d.clock())
+    do {
+      // A new attempt number, so the old task's cancellation (and any event it already queued)
+      // fails the attempt check and never touches the new attempt's response file.
+      try await startAttempt(
+        snap, action: action, attempt: snap.attempt + 1, bodyURL: d.files.bodyURL(id),
+        bodySize: Self.fileSize(d.files.bodyURL(id)), earliestBegin: begin, apiKey: key, createdInBackground: false)
+    } catch {
+      await finishAfterStartError(id, error, context: "couldn't re-create the retry")
     }
   }
 
   // MARK: Reconciler hooks (D§4.7)
 
-  /// Marks a request interrupted (if it's still live) and closes its action; returns that action.
+  /// Marks a request interrupted (if it's still live, and still in `expected` when given) and
+  /// closes its action; returns that action. A request this process is preparing is left alone.
   @discardableResult
-  func markInterrupted(_ requestID: UUID, reason: String) async -> ActionID? {
-    guard let snap = try? await d.store.requestSnapshot(requestID), snap.state.isLive else { return nil }
-    try? await d.store.updateRequest(requestID) { p in
+  func markInterrupted(_ requestID: UUID, reason: String, expected: (state: RequestState, attempt: Int)? = nil) async
+    -> ActionID?
+  {
+    await exclusive(requestID) {
+      guard preparations[requestID] == nil, let snap = try? await d.store.requestSnapshot(requestID), snap.state.isLive
+      else { return nil }
+      if let expected, snap.state != expected.state || snap.attempt != expected.attempt { return nil }
+      return await interrupt(snap, reason: reason)
+    }
+  }
+
+  /// Within the request's turn.
+  private func interrupt(_ snap: RequestSnapshot, reason: String) async -> ActionID {
+    try? await d.store.updateRequest(snap.id) { p in
       p.state = .interrupted
       p.completedAt = self.d.clock()
     }
     let action = actionFor(snap)
     closeAttempt(snap, action: action, outcome: .interrupted, "\(reason)")
     d.log.result(action, .interrupted, "\(reason)")
-    forget(requestID, conversation: snap.conversationID)
+    forget(snap.id)
     return action
   }
 
-  /// Refreshes a request's live task; a delayed task that has begun moves to `inFlight`.
-  func refreshLiveTask(_ requestID: UUID, taskIdentifier: Int, began: Bool) async {
-    try? await d.store.updateRequest(requestID) { p in
-      p.taskIdentifier = .some(taskIdentifier)
-    }
-    if began, let snap = try? await d.store.requestSnapshot(requestID), snap.state == .retryScheduled {
-      try? await d.store.updateRequest(requestID) { $0.state = .inFlight }
+  /// Refreshes a request's live task; a delayed task that has begun moves to `inFlight`. Nothing
+  /// changes when the request has moved past that attempt since the Reconciler listed the tasks.
+  func refreshLiveTask(_ requestID: UUID, attempt: Int, taskIdentifier: Int, began: Bool) async {
+    await exclusive(requestID) {
+      guard let snap = try? await d.store.requestSnapshot(requestID), snap.attempt == attempt,
+        snap.state == .inFlight || snap.state == .retryScheduled
+      else { return }
+      try? await d.store.updateRequest(requestID) { p in
+        p.taskIdentifier = .some(taskIdentifier)
+        if began && snap.state == .retryScheduled { p.state = .inFlight }
+      }
     }
   }
 
-  /// Re-parses a response whose `.complete` marker survived a crash (D§4.7 step 4).
-  func reparse(_ requestID: UUID) async {
-    guard let snap = try? await d.store.requestSnapshot(requestID) else { return }
-    let part = d.files.partURL(requestID, attempt: snap.attempt)
-    let completion = TransportCompletion(
-      requestID: requestID, attempt: snap.attempt, taskIdentifier: -1,
-      httpStatus: ResponseAccumulator.markerStatus(d.files.completeMarkerURL(requestID, attempt: snap.attempt)) ?? 200,
-      headers: [:], partURL: part, bytesReceived: Self.fileSize(part), error: nil, cancelReason: nil, elapsed: .zero)
-    await handleCompleted(completion, reparse: true)
+  /// Re-parses a response whose `.complete` marker survived a crash (D§4.7 step 4): only for the
+  /// attempt the Reconciler checked, and only while it is still that request's live attempt. The
+  /// transport may be delivering the same completion right now; the request's turn makes the
+  /// second of the two find it finished.
+  func reparse(_ requestID: UUID, attempt: Int) async {
+    await exclusive(requestID) {
+      guard let snap = try? await d.store.requestSnapshot(requestID), snap.attempt == attempt, snap.state.isLive else { return }
+      let marker = d.files.completeMarkerURL(requestID, attempt: attempt)
+      guard FileManager.default.fileExists(atPath: marker.path) else { return }
+      guard let status = ResponseAccumulator.markerStatus(marker) else {
+        // A transport error ended the attempt (no HTTP status): there is nothing to parse.
+        _ = await interrupt(snap, reason: "\(Reconciler.closedReason) (the connection ended without a response)")
+        return
+      }
+      let part = d.files.partURL(requestID, attempt: attempt)
+      let completion = TransportCompletion(
+        requestID: requestID, attempt: attempt, taskIdentifier: -1, httpStatus: status, headers: [:], partURL: part,
+        bytesReceived: Self.fileSize(part), error: nil, cancelReason: nil, elapsed: .zero)
+      await handleCompleted(completion, reparse: true)
+    }
+  }
+
+  // MARK: One handler at a time per request
+
+  /// Runs `body` when no other handler is working on the request: the transport's events, a
+  /// re-parse, an interruption, a Retry's first step and a foreground re-creation each read the
+  /// request, await, then write it. An actor runs one call at a time but lets another call in at
+  /// every `await`, so without this two of them could act on the same stale reading. Waiters go
+  /// in arrival order. `body` must not call `exclusive` for the same request (it would wait for
+  /// itself).
+  private func exclusive<T>(_ id: UUID, _ body: () async throws -> T) async rethrows -> T {
+    if requestLocks[id] == nil {
+      requestLocks[id] = []
+    } else {
+      await withCheckedContinuation { requestLocks[id, default: []].append($0) }
+    }
+    defer {
+      if var waiters = requestLocks[id], !waiters.isEmpty {
+        waiters.removeFirst().resume()
+        requestLocks[id] = waiters
+      } else {
+        requestLocks[id] = nil
+      }
+    }
+    return try await body()
   }
 
   // MARK: Preparation
@@ -276,13 +407,14 @@ actor GenerationService: GenerationServicing {
   /// Takes the background-task assertion, records the request (`create`), prepares the body and
   /// starts the first attempt, then ends the assertion (D§4.6).
   private func prepareWithAssertion(
-    action: ActionID, conversation: UUID, started: ContinuousClock.Instant, reuseRecorded: Bool, rebuildBody: Bool = true,
-    categories: [HarmCategory]? = nil, create: @escaping @Sendable () async throws -> UUID
+    action: ActionID, conversation: UUID, claim: UUID, started: ContinuousClock.Instant, reuseRecorded: Bool,
+    rebuildBody: Bool = true, categories: [HarmCategory]? = nil, create: @escaping @Sendable () async throws -> UUID
   ) async throws -> UUID {
     let prep = Preparation()
     let log = d.log
     let token = await d.backgroundTasks.begin(name: "gen-prepare") {
-      prep.expired.withLock { $0 = true }
+      // Once the task has started (or the work finished) the request no longer needs the assertion.
+      guard prep.claimExpiry() else { return }
       prep.cancel()
       log.result(action, .interrupted, "background time ran out before the request was sent")
     }
@@ -291,14 +423,15 @@ actor GenerationService: GenerationServicing {
     let work = Task<Void, any Error> {
       let id = try await create()
       recorded.withLock { $0 = id }
-      self.register(id, action: action, conversation: conversation, started: started, preparation: prep)
+      self.register(id, action: action, conversation: conversation, claim: claim, started: started, preparation: prep)
       try Task.checkCancellation()
       try await self.prepareAndStart(
         id, action: action, reuseRecorded: reuseRecorded, rebuildBody: rebuildBody, categories: categories)
     }
     prep.task.withLock { $0 = work }
-    if prep.expired.value { work.cancel() }
+    if prep.expired { work.cancel() }
     let result = await work.result
+    let ownsResult = prep.claimFinish()
     let requestID = recorded.value
     if let id = requestID { preparations[id] = nil }
     await d.backgroundTasks.end(token)
@@ -309,24 +442,24 @@ actor GenerationService: GenerationServicing {
     case .failure(let error):
       guard let id = requestID else {
         // Nothing was recorded (createSend failed, or a regenerate input is missing).
-        if !prep.expired.value {
+        if ownsResult {
           d.log.result(action, .failed, "\(Self.describeError(error))")
         }
-        busyConversations.remove(conversation)
         throw (error as? PrepareError) == .inputMissing ? GenerationError.inputMissing : error
       }
-      if prep.expired.value {
-        // The expiry handler already logged the result.
+      if !ownsResult {
+        // The expiry handler already logged the result. Cleanup; the Janitor removes anything left.
         try? FileManager.default.removeItem(at: d.files.bodyURL(id))
         try? await d.store.updateRequest(id) { p in
           p.state = .interrupted
           p.completedAt = self.d.clock()
         }
-        forget(id, conversation: conversation)
+        forget(id)
         throw GenerationError.interrupted
       }
       if error is CancellationError || userCancelled.contains(id) {
         userCancelled.remove(id)
+        // Cleanup; the Janitor removes anything left (D§4.4).
         try? FileManager.default.removeItem(at: d.files.bodyURL(id))
         try? await d.store.updateRequest(id) { p in
           p.state = .cancelled
@@ -343,7 +476,8 @@ actor GenerationService: GenerationServicing {
   }
 
   private func register(
-    _ id: UUID, action: ActionID, conversation: UUID, started: ContinuousClock.Instant, preparation: Preparation
+    _ id: UUID, action: ActionID, conversation: UUID, claim: UUID, started: ContinuousClock.Instant,
+    preparation: Preparation
   ) {
     actions[id] = action
     conversationOf[id] = conversation
@@ -351,7 +485,7 @@ actor GenerationService: GenerationServicing {
     preparations[id] = preparation
     // From here the request record (live until terminal) keeps the chat to one request; releasing
     // the in-memory claim now means the chat is free the moment the record turns terminal.
-    busyConversations.remove(conversation)
+    release(conversation, claim)
   }
 
   /// Writes the body (unless an existing one is reused) and starts the next attempt.
@@ -400,6 +534,19 @@ actor GenerationService: GenerationServicing {
     let job = TransportJob(
       requestID: snap.id, attempt: attempt, modelID: snap.settings.modelID, bodyURL: bodyURL, bodySize: bodySize,
       expectedReceiveBytes: expected, earliestBegin: earliestBegin)
+    // From here to `transport.start` nothing awaits, so a Stop either happened before this check or
+    // happens after the task exists (and `cancel` finds it).
+    if userCancelled.contains(snap.id) {
+      attemptActions[snap.id] = nil
+      d.log.result(attemptAction, .cancelled, "stopped by the user before the task started")
+      throw CancellationError()
+    }
+    // A first attempt still under its preparation's assertion starts only if that hasn't expired.
+    if let prep = preparations[snap.id], !prep.claimSending() {
+      attemptActions[snap.id] = nil
+      d.log.result(attemptAction, .cancelled, "background time ran out before the task started")
+      throw CancellationError()
+    }
     let taskID: Int
     do {
       taskID = try d.transport.start(job, apiKey: apiKey)
@@ -417,18 +564,20 @@ actor GenerationService: GenerationServicing {
   private func handle(_ event: TransportEvent) async {
     switch event {
     case .began(let requestID, let attempt, let taskIdentifier):
-      guard let snap = try? await d.store.requestSnapshot(requestID), snap.attempt == attempt,
-        snap.state == .retryScheduled
-      else { return }
-      try? await d.store.updateRequest(requestID) { p in
-        p.state = .inFlight
-        p.startedAt = self.d.clock()
-        p.taskIdentifier = .some(taskIdentifier)
+      await exclusive(requestID) {
+        guard let snap = try? await d.store.requestSnapshot(requestID), snap.attempt == attempt,
+          snap.state == .retryScheduled
+        else { return }
+        try? await d.store.updateRequest(requestID) { p in
+          p.state = .inFlight
+          p.startedAt = self.d.clock()
+          p.taskIdentifier = .some(taskIdentifier)
+        }
+        if let att = attemptActions[requestID] { d.log.step(att, "task \(taskIdentifier) began") }
       }
-      if let att = attemptActions[requestID] { d.log.step(att, "task \(taskIdentifier) began") }
     case .completed(let completion):
       completionsSinceFinished += 1
-      await handleCompleted(completion, reparse: false)
+      await exclusive(completion.requestID) { await handleCompleted(completion, reparse: false) }
     case .finishedEvents(let id):
       let handled = completionsSinceFinished
       completionsSinceFinished = 0
@@ -436,19 +585,27 @@ actor GenerationService: GenerationServicing {
     }
   }
 
+  /// Within the request's turn (`exclusive`).
   private func handleCompleted(_ c: TransportCompletion, reparse: Bool) async {
-    if replacedTasks.remove(c.taskIdentifier) != nil { return }
     let id = c.requestID
     guard let snap = try? await d.store.requestSnapshot(id) else {
-      // The record was deleted (with its chat or message): discard the result and its files.
+      // The record was deleted (with its chat or message): discard the result and its files (best
+      // effort; the Janitor removes anything left).
       try? FileManager.default.removeItem(at: d.files.requestDir(id))
-      if let att = attemptActions.removeValue(forKey: id) { d.log.result(att, .cancelled, "the request was deleted") }
+      if let att = attemptActions.removeValue(forKey: id) {
+        d.log.result(att, .cancelled, "the request was deleted")
+      } else if let action = actions[id] {
+        // An adopted request's Attempt was begun by an earlier process.
+        d.log.result(ofOpenChild: "Attempt \(c.attempt)", of: action, .cancelled, "the request was deleted")
+      }
       if let action = actions[id] { d.log.result(action, .cancelled, "the request was deleted") }
-      forget(id, conversation: conversationOf[id])
+      forget(id)
       return
     }
     guard c.attempt == snap.attempt else { return }
-    guard snap.state.isLive || snap.state == .interrupted else { return }
+    // `preparing` has no task: a Retry is rebuilding the request, and this is the completion of
+    // an attempt it replaces.
+    guard (snap.state.isLive && snap.state != .preparing) || snap.state == .interrupted else { return }
 
     let isLate = snap.state == .interrupted
     let action: ActionID
@@ -516,8 +673,7 @@ actor GenerationService: GenerationServicing {
       do {
         try await prepareAndStart(id, action: action, reuseRecorded: true, rebuildBody: true, categories: four)
       } catch {
-        let prepError = error as? PrepareError
-        await finishFailed(id, status: prepError?.status ?? .network, message: prepError?.message ?? Self.describeError(error))
+        await finishAfterStartError(id, error)
       }
     case .finish:
       if let code = c.error {
@@ -554,9 +710,23 @@ actor GenerationService: GenerationServicing {
       try await prepareAndStart(
         snap.id, action: action, reuseRecorded: true, rebuildBody: false, categories: nil, earliestBegin: begin)
     } catch {
-      let prepError = error as? PrepareError
-      await finishFailed(snap.id, status: prepError?.status ?? .network, message: prepError?.message ?? Self.describeError(error))
+      await finishAfterStartError(snap.id, error)
     }
+  }
+
+  /// A later attempt couldn't start: the user stopped it, or preparing or creating it failed.
+  private func finishAfterStartError(_ id: UUID, _ error: any Error, context: String? = nil) async {
+    if userCancelled.contains(id) || error is CancellationError {
+      try? await d.store.updateRequest(id) { p in
+        p.state = .cancelled
+        p.completedAt = self.d.clock()
+      }
+      await finish(id, outcome: .cancelled, summary: "stopped by the user\(durationSuffix(id))", notify: false)
+      return
+    }
+    let prepError = error as? PrepareError
+    let message = prepError?.message ?? (context.map { "\($0): \(error.localizedDescription)" } ?? Self.describeError(error))
+    await finishFailed(id, status: prepError?.status ?? .network, message: message)
   }
 
   // MARK: Parsing and saving
@@ -586,8 +756,9 @@ actor GenerationService: GenerationServicing {
 
     switch outcome {
     case .success(let parts, let finishReason, let notices, let modelVersion, let responseID, let details):
+      var moved: [URL] = []
       do {
-        let (messageParts, images) = try moveImages(parts, conversation: snap.conversationID)
+        let (messageParts, images) = try moveImages(parts, conversation: snap.conversationID, moved: &moved)
         var patch = RequestPatch()
         patch.state = .succeeded
         patch.completedAt = now
@@ -611,6 +782,15 @@ actor GenerationService: GenerationServicing {
           id, outcome: .success, summary: "\(durationPrefix(id))HTTP \(status) · \(summary)\(attemptsSuffix(c.attempt))",
           body: NotificationPoster.body(state: .succeeded, imageCount: images.count, text: text, refusalReason: nil, failure: nil))
       } catch {
+        if !(await recordExists(id)) {
+          // Deleted while parsing (with its chat or message): the moved images belong to nothing.
+          for url in moved {
+            try? FileManager.default.removeItem(at: url)  // Best effort; the Janitor removes anything left.
+          }
+          d.log.result(parseAction, .cancelled, "\(took) · the request was deleted")
+          await finish(id, outcome: .cancelled, summary: "the request was deleted")
+          return
+        }
         d.log.result(parseAction, .failed, "\(took) · couldn't save the reply: \(error.localizedDescription)")
         await finishFailed(
           id, status: RequestPreparer.isDiskFull(error) ? .diskFull : .malformed,
@@ -685,7 +865,7 @@ actor GenerationService: GenerationServicing {
   }
 
   /// Moves parsed images into `Images/<conv>/` (a rename on the same volume) and builds the parts.
-  private func moveImages(_ parts: [OutputPart], conversation: UUID) throws -> ([MessagePart], [ReplyImage]) {
+  private func moveImages(_ parts: [OutputPart], conversation: UUID, moved: inout [URL]) throws -> ([MessagePart], [ReplyImage]) {
     var messageParts: [MessagePart] = []
     var images: [ReplyImage] = []
     for part in parts {
@@ -697,6 +877,7 @@ actor GenerationService: GenerationServicing {
         let ext = MimeTypes.fileExtension(for: img.mimeType)
         let relative = d.files.imageRelativePath(conv: conversation, image: imageID, ext: ext)
         try d.files.moveStaged(img.fileURL, to: d.files.url(relative: relative))
+        moved.append(d.files.url(relative: relative))
         images.append(
           ReplyImage(
             id: imageID, relativePath: relative, mimeType: img.mimeType, byteCount: img.byteCount, pixelWidth: img.pixelWidth,
@@ -735,8 +916,18 @@ actor GenerationService: GenerationServicing {
       body: NotificationPoster.body(state: .failed, imageCount: 0, text: nil, refusalReason: nil, failure: message))
   }
 
-  /// Notifies (unless suppressed), writes the action's one result, and releases the chat.
-  private func finish(_ id: UUID, outcome: ActivityOutcome, summary: ActivityMessage, body: String? = nil, notify: Bool = true) async {
+  /// Notifies (unless suppressed) and writes the action's one result. A request deleted meanwhile
+  /// (with its chat or message, while this handler awaited) ends cancelled, with no notification.
+  private func finish(
+    _ id: UUID, outcome: ActivityOutcome, summary: ActivityMessage, body: String? = nil, notify: Bool = true
+  ) async {
+    var outcome = outcome
+    var summary = summary
+    var notify = notify
+    if !(await recordExists(id)) {
+      (outcome, summary, notify) = (.cancelled, "the request was deleted", false)
+      try? FileManager.default.removeItem(at: d.files.requestDir(id))  // Best effort; the Janitor removes anything left.
+    }
     let conversation: UUID? = await conversationID(of: id)
     let action = lateActions[id] ?? actions[id]
     if action != nil, let attempt = attemptActions.removeValue(forKey: id) {
@@ -748,11 +939,16 @@ actor GenerationService: GenerationServicing {
       d.log.step(action, "\(result.logText)")
     }
     if let action { d.log.result(action, outcome, summary) }
-    forget(id, conversation: conversation)
+    forget(id)
   }
 
-  private func forget(_ id: UUID, conversation: UUID?) {
-    if let conversation { busyConversations.remove(conversation) }
+  /// False only when the store answers that the record is gone (a store error counts as present).
+  private func recordExists(_ id: UUID) async -> Bool {
+    do { return try await d.store.requestSnapshot(id) != nil } catch { return true }
+  }
+
+  private func forget(_ id: UUID) {
+    userCancelled.remove(id)
     actions[id] = nil
     lateActions[id] = nil
     attemptActions[id] = nil
@@ -766,13 +962,21 @@ actor GenerationService: GenerationServicing {
     return (try? await d.store.requestSnapshot(id))?.conversationID
   }
 
-  private func claim(_ conv: UUID) async throws {
-    if busyConversations.contains(conv) { throw GenerationError.chatBusy }
-    busyConversations.insert(conv)
+  /// Claims the chat for one new request until its record exists; returns the claim's token.
+  private func claim(_ conv: UUID) async throws -> UUID {
+    if busyConversations[conv] != nil { throw GenerationError.chatBusy }
+    let token = UUID()
+    busyConversations[conv] = token
     if (try? await d.store.hasLiveRequest(conv: conv)) == true {
-      busyConversations.remove(conv)
+      release(conv, token)
       throw GenerationError.chatBusy
     }
+    return token
+  }
+
+  /// Releases the chat only if this token still holds it (a later call may have claimed it since).
+  private func release(_ conv: UUID, _ token: UUID) {
+    if busyConversations[conv] == token { busyConversations[conv] = nil }
   }
 
   /// The action following a request: this process's, or the one recorded on it (adopted).

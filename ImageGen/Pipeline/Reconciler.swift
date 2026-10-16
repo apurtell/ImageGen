@@ -39,14 +39,14 @@ struct Reconciler: Sendable {
       }
       if let task = live.first(where: { $0.requestID == snap.id && $0.attempt == snap.attempt }) {
         let began = snap.state == .retryScheduled && task.countOfBytesSent > 0
-        await service.refreshLiveTask(snap.id, taskIdentifier: task.taskIdentifier, began: began)
+        await service.refreshLiveTask(snap.id, attempt: snap.attempt, taskIdentifier: task.taskIdentifier, began: began)
         log.step(action, "\(req): \(began ? "began; now inFlight" : "kept"), task \(task.taskIdentifier)")
         if began { counts.began += 1 } else { counts.kept += 1 }
         continue
       }
       if FileManager.default.fileExists(atPath: files.completeMarkerURL(snap.id, attempt: snap.attempt).path) {
         log.step(action, "\(req): re-parse, the response was saved")
-        await service.reparse(snap.id)
+        await service.reparse(snap.id, attempt: snap.attempt)
         counts.reparsed += 1
         continue
       }
@@ -95,9 +95,11 @@ struct Reconciler: Sendable {
       for snap in graced {
         group.addTask {
           await sleeper(grace)
-          guard let now = try? await store.requestSnapshot(snap.id), now.state == snap.state, now.attempt == snap.attempt
-          else { return }
-          await service.markInterrupted(snap.id, reason: "\(Self.closedReason) (no live task after the \(Format.seconds(grace)) grace)")
+          // Only if nothing happened to it meanwhile; the service checks this in the request's turn,
+          // so a completion being handled right now wins.
+          await service.markInterrupted(
+            snap.id, reason: "\(Self.closedReason) (no live task after the \(Format.seconds(grace)) grace)",
+            expected: (snap.state, snap.attempt))
         }
       }
     }

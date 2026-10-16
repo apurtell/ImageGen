@@ -284,6 +284,7 @@ extension ChatScreenModel {
   }
 
   private static func discard(_ urls: [URL]) -> TrayItemOutcome {
+    // Staged files of a removed item; the Janitor clears Staging/ of anything left.
     for url in urls { try? FileManager.default.removeItem(at: url) }
     return .removed
   }
@@ -314,6 +315,7 @@ extension ChatScreenModel {
       "Tray change", origin: .user, "img \(Format.short(id)) · removed (\(item.stateName)) · tray \(tray.count - 1)")
     tray.remove(at: i)
     trayTasks[id]?.cancel()
+    // Best effort; the Janitor clears Staging/ of anything left.
     for url in [item.originalURL, item.prepared?.url].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }
     services.log.result(action, .success, "done")
   }
@@ -322,6 +324,7 @@ extension ChatScreenModel {
   private func clearTray() {
     for item in tray {
       trayTasks[item.id]?.cancel()
+      // Best effort; the Janitor clears Staging/ of anything left.
       for url in [item.originalURL, item.prepared?.url].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }
     }
     tray = []

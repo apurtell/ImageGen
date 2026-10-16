@@ -36,6 +36,9 @@ enum DebugHooks {
     if options.seedDemoData {
       keys = await DemoSeeder.seedIfEmpty(store: env.store, files: env.files)
     }
+    if options.seedLargeChat, let id = await DemoSeeder.seedLargeChat(store: env.store, files: env.files) {
+      keys["large"] = id
+    }
     if options.seedPasteboardImage {
       // Writing the pasteboard never prompts; the PasteButton then appears.
       let jpeg = MockImageRenderer.jpeg(width: 1024, height: 768, prompt: "Pasted image", caption: "from the pasteboard")

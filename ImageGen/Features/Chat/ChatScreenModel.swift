@@ -62,6 +62,9 @@ final class ChatScreenModel {
   var tray: [TrayItem] = []
   /// A transient message over the composer, such as "Up to 14 images per message".
   private(set) var toast: String?
+  /// A Send, Retry or Regenerate between the tap and the reload after it: the buttons stay off,
+  /// because `liveRequest` doesn't show the new request until that reload.
+  private(set) var isStarting = false
 
   @ObservationIgnored private var loadingDraft = false
   @ObservationIgnored private var draftTask: Task<Void, Never>?
@@ -69,6 +72,7 @@ final class ChatScreenModel {
   @ObservationIgnored private var lastLiveID: UUID?
   @ObservationIgnored var trayTasks: [UUID: Task<TrayItemOutcome, Never>] = [:]
   @ObservationIgnored private var toastTask: Task<Void, Never>?
+  @ObservationIgnored private var isOnScreen = false
 
   init(conversationID: UUID, services: ChatServices) {
     self.conversationID = conversationID
@@ -78,17 +82,21 @@ final class ChatScreenModel {
   // MARK: Lifecycle
 
   func onAppear() async {
+    isOnScreen = true
     services.activity.setVisible(conversationID)
     startConnectivity()
     await load()
   }
 
   func onDisappear() async {
+    isOnScreen = false
     services.activity.setVisible(nil, leaving: conversationID)
     connectivityTask?.cancel()
     connectivityTask = nil
     await flushDraft()
-    await services.actions.discardIfEmpty(conversationID)
+    // A send still on its way to its record would find its chat deleted; it discards the chat
+    // itself when it ends, if it's still empty then.
+    if !isStarting { await services.actions.discardIfEmpty(conversationID) }
   }
 
   /// Loads the draft and the chat's state.
@@ -145,7 +153,7 @@ final class ChatScreenModel {
   var trimmedText: String { composerText.trimmingCharacters(in: .whitespacesAndNewlines) }
 
   var canSend: Bool {
-    InputSelector.canSend(trimmedText: trimmedText, tray: trayCounts, chatHasLiveRequest: liveRequest != nil)
+    !isStarting && InputSelector.canSend(trimmedText: trimmedText, tray: trayCounts, chatHasLiveRequest: liveRequest != nil)
   }
 
   var hasAttachments: Bool { trayCounts.ready + trayCounts.pending + trayCounts.failed > 0 }
@@ -270,24 +278,49 @@ final class ChatScreenModel {
 
   // MARK: Generation
 
+  /// Sends the composer's text and tray. Both leave the composer at once: the call below can take
+  /// seconds (it returns once the body is prepared and the task started), and the composer stays
+  /// usable meanwhile; anything attached or typed then is for the next message. If nothing was
+  /// recorded, the text and the items come back.
   func send() async {
     guard canSend else { return }
+    let sent = tray
     let draft = SendDraft(
-      conversationID: conversationID, promptText: trimmedText, attachments: tray.compactMap(\.staged), settings: effective)
+      conversationID: conversationID, promptText: trimmedText, attachments: sent.compactMap(\.staged), settings: effective)
+    isStarting = true
+    tray = []
     sendCount += 1
     composerText = ""
     await flushDraft()
     do {
       _ = try await services.generation.send(draft)
-      tray = []
-    } catch GenerationError.chatBusy {
-      alertMessage = "A request is already running in this chat."
     } catch {
-      // The staged files now belong to the request; preparation failures are shown on the reply card.
-      tray = []
+      if case GenerationError.chatBusy = error { alertMessage = "A request is already running in this chat." }
+      // A recorded request shows its failure on its reply card; its staged files now belong to it.
+      if !Self.recorded(despite: error) { restoreComposer(text: draft.promptText, items: sent) }
     }
+    isStarting = false
     await reload()
+    if !isOnScreen { await services.actions.discardIfEmpty(conversationID) }
     await services.notifications.requestOnFirstSend()
+  }
+
+  /// Whether a request record exists although `send` threw (its reply card shows the outcome).
+  static func recorded(despite error: any Error) -> Bool {
+    switch error as? GenerationError {
+    case .preparationFailed, .cancelled, .interrupted: true
+    default: false
+    }
+  }
+
+  /// Puts a send that was never recorded back: its text (unless new text was typed meanwhile) and
+  /// its items ahead of any attached since, if their staged files are still there.
+  private func restoreComposer(text: String, items: [TrayItem]) {
+    if composerText.isEmpty { composerText = text }
+    let intact = items.filter { item in
+      [item.originalURL, item.prepared?.url].allSatisfy { url in url.map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
+    }
+    tray = intact + tray
   }
 
   func stop() async {
@@ -297,6 +330,9 @@ final class ChatScreenModel {
   }
 
   func regenerate(requestID: UUID) async {
+    guard !isStarting else { return }
+    isStarting = true
+    defer { isStarting = false }
     do {
       _ = try await services.generation.regenerate(sourceRequestID: requestID)
     } catch GenerationError.chatBusy {
@@ -308,6 +344,9 @@ final class ChatScreenModel {
   }
 
   func retry(requestID: UUID) async {
+    guard !isStarting else { return }
+    isStarting = true
+    defer { isStarting = false }
     do {
       try await services.generation.retry(requestID: requestID)
     } catch GenerationError.chatBusy {
@@ -330,6 +369,7 @@ final class ChatScreenModel {
     if let live { await services.generation.cancel(requestID: live.id) }
     do {
       let result = try await services.store.deleteMessage(id)
+      for request in result.liveRequestIDs where request != live?.id { await services.generation.cancel(requestID: request) }
       let removed = "files removed \(result.filesRemoved) (\(Format.mb(Int(result.bytesFreed))))"
       services.log.result(action, result.failures == 0 ? .success : .failed, "done · \(removed)")
     } catch {
@@ -397,16 +437,20 @@ final class ChatScreenModel {
   /// The title being edited in place (long-press on the navigation title), or nil.
   var titleDraft: String?
   var isEditingTitle: Bool { titleDraft != nil }
+  /// The title when editing began: an untouched draft changes nothing, even if the automatic
+  /// title arrived meanwhile.
+  @ObservationIgnored private var titleAtEditStart = ""
 
   func beginTitleEdit() {
     titleDraft = title
+    titleAtEditStart = title
   }
 
   /// Renames when the text changed; an empty name reverts to the automatic title, as in the alert.
   func commitTitleEdit() async {
     guard let draft = titleDraft else { return }
     titleDraft = nil
-    guard let name = TitleEdit.change(draft: draft, current: title) else { return }
+    guard let name = TitleEdit.change(draft: draft, current: titleAtEditStart) else { return }
     await rename(to: name)
   }
 

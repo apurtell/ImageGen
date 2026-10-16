@@ -11,6 +11,7 @@ struct ChatRow: View {
 
   let conversation: Conversation
   var titleEditing: TitleEditing?
+  @Environment(\.dynamicTypeSize) private var typeSize
 
   private var messages: [Message] { conversation.messages.sorted { $0.sequence < $1.sequence } }
 
@@ -37,6 +38,13 @@ struct ChatRow: View {
         HStack {
           if let editing = titleEditing {
             InlineTitleField(text: editing.text, onSave: editing.onSave, onCancel: editing.onCancel)
+          } else if typeSize.isAccessibilitySize {
+            // Title first and whole; the time goes under it rather than squeezing it.
+            VStack(alignment: .leading, spacing: 2) {
+              Text(conversation.title).font(.headline).lineLimit(2)
+              Text(conversation.updatedAt, format: .relative(presentation: .named))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
           } else {
             Text(conversation.title).font(.headline).lineLimit(1)
             Spacer(minLength: 4)

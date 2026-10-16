@@ -396,6 +396,33 @@ struct ActivityLogTests {
 
   // MARK: Across instances
 
+  @Test func flushTimeoutReturnsWhileTheStoreIsBusy() async throws {
+    let probe = ActivityLogProbe(limits: ActivityLogStore.Limits(rotateAbove: 1 << 30, keepAfterRotation: 1 << 29, writeDelay: .milliseconds(200)))
+    for n in 0..<20 { probe.log.begin("Copy", origin: .user, "\(n)") }
+    let started = ContinuousClock.now
+    await probe.log.flush(timeout: .milliseconds(100))
+    // The writes take about 4 s; the caller waits only the timeout.
+    #expect(ContinuousClock.now - started < .seconds(1))
+  }
+
+  @Test func callsAfterCloseReturnAtOnce() async throws {
+    let probe = ActivityLogProbe()
+    probe.log.begin("Copy", origin: .user, "before")
+    await probe.log.close()
+    let done = Locked(false)
+    let calls = Task {
+      await probe.log.flush()
+      _ = await probe.log.entries(after: 0)
+      _ = await probe.log.status()
+      await probe.log.clear()
+      for await _ in probe.log.changes() {}
+      done.withLock { $0 = true }
+    }
+    for _ in 0..<200 where !done.value { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(done.value)
+    calls.cancel()
+  }
+
   @Test func persistsAcrossInstances() async throws {
     let first = ActivityLogProbe()
     var ids: [ActionID] = []
@@ -413,7 +440,9 @@ struct ActivityLogTests {
 
   @Test func idSeededFromFileNotDefaults() async throws {
     let empty = ActivityLogProbe()
-    #expect(empty.log.begin("Copy", origin: .user, "") == ActivityLog.actionID(counter: 0))
+    // Counter 0 is skipped: its ID is the "no action" placeholder.
+    #expect(empty.log.begin("Copy", origin: .user, "") == ActivityLog.actionID(counter: 1))
+    #expect(ActivityLog.actionID(counter: 0) == ActionID(raw: "0000"))
 
     let first = ActivityLogProbe()
     var ids: [ActionID] = []

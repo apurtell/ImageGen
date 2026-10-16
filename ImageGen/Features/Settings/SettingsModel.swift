@@ -98,6 +98,8 @@ final class SettingsModel {
   /// A custom ID, validated with `GET v1beta/models/{id}` before it's added (D§3.8). The ID is
   /// logged as private.
   func addCustomModel(_ raw: String) async -> CustomModelResult {
+    // Return in the field submits again while the first check runs; one check at a time.
+    guard !isAddingModel else { return .invalid("Checking the previous model…") }
     var id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if id.hasPrefix("models/") { id.removeFirst("models/".count) }
     guard !id.isEmpty else { return .invalid("Enter a model ID.") }
@@ -120,7 +122,8 @@ final class SettingsModel {
         log.result(action, .failed, "HTTP 200 · no generateContent · not added")
         return .rejected("This model doesn't support image generation (generateContent).")
       }
-      settings.customModelIDs.append(id)
+      // Checked again: the list may have changed while the model was looked up.
+      if !settings.customModelIDs.contains(id) { settings.customModelIDs.append(id) }
       log.result(action, .success, "HTTP 200 · added")
       return .added
     } catch ModelsClientError.notFound {
@@ -206,6 +209,7 @@ final class SettingsModel {
     await services.thumbnails.removeFromMemory()
     let result = await Task.detached(priority: .utility) { () -> DeletionResult in
       var r = DeletionResult()
+      // No thumbnail folder yet means nothing to clear.
       let items = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
       for item in items { files.remove(item, into: &r) }
       return r
@@ -232,10 +236,14 @@ final class SettingsModel {
     for request in live { await services.generation.cancel(requestID: request.id) }
     do {
       var r = try await store.deleteAll()
+      // A request recorded after the list above was read (a send that was on its way) is stopped too.
+      let cancelled = Set(live.map(\.id))
+      for id in r.liveRequestIDs where !cancelled.contains(id) { await services.generation.cancel(requestID: id) }
       // Their thumbnails go too.
       let files = services.files
       let thumbs = await Task.detached(priority: .utility) { () -> DeletionResult in
         var t = DeletionResult()
+        // No thumbnail folder yet means nothing to clear.
         let items = (try? FileManager.default.contentsOfDirectory(at: files.thumbnailsDir, includingPropertiesForKeys: nil)) ?? []
         for item in items { files.remove(item, into: &t) }
         return t

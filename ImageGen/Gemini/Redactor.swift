@@ -64,7 +64,9 @@ enum Redactor {
   static func forLog(secrets: @escaping @Sendable () -> [String]) -> @Sendable (String) -> String {
     { text in
       var s = text
-      for secret in secrets() where secret.count >= 8 {
+      // Longest first: a shorter secret inside a longer one (a truncated paste validated earlier)
+      // would otherwise cut the longer one apart and leave its tail in the text.
+      for secret in secrets().sorted(by: { $0.count > $1.count }) where secret.count >= 8 {
         s = s.replacingOccurrences(of: secret, with: keyRemoved)
       }
       s = replace(Patterns.keyShaped, in: s) { _ in keyRemoved }

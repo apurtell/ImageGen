@@ -96,16 +96,24 @@ enum ImagePreprocessor {
   }
 
   /// Writes with no metadata dictionary, so nothing from the source's EXIF, TIFF or GPS survives.
+  /// The image goes to a temporary file in the same folder, then a rename puts it in place in one
+  /// step: a process killed mid-write leaves no truncated image under the real name (which a
+  /// reader would decode partially, and the thumbnail cache would keep serving).
   static func write(_ image: CGImage, to url: URL, type: UTType, quality: Double?) throws {
+    let dir = url.deletingLastPathComponent()
     try FileManager.default.createDirectory(
-      at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+      at: dir, withIntermediateDirectories: true,
       attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
-    guard let dest = CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil) else {
+    let temp = dir.appendingPathComponent(".\(UUID().uuidString).tmp")
+    guard let dest = CGImageDestinationCreateWithURL(temp as CFURL, type.identifier as CFString, 1, nil) else {
       throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
     }
     let props: [CFString: Any] = quality.map { [kCGImageDestinationLossyCompressionQuality: $0] } ?? [:]
     CGImageDestinationAddImage(dest, image, props as CFDictionary)
-    guard CGImageDestinationFinalize(dest) else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path]) }
+    guard CGImageDestinationFinalize(dest), rename(temp.path, url.path) == 0 else {
+      try? FileManager.default.removeItem(at: temp)  // Nothing else refers to the temporary file.
+      throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+    }
   }
 
   private static func described(_ url: URL, mimeType: String, longEdgeSetting: Int) throws -> PreparedImage {

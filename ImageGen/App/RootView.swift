@@ -27,15 +27,23 @@ struct RootView: View {
     .sheet(isPresented: $navigator.showSettings) {
       SettingsView(keyModel: env.apiKeySectionModel(), model: env.settingsModel())
     }
-    .onChange(of: env.router.pendingConversationID) { _, id in
+    // `initial: true`: a tap that cold-launches the app sets the chat before this view exists, and
+    // a plain onChange treats that first value as the starting point, not a change.
+    .onChange(of: env.router.pendingConversationID, initial: true) { _, id in
       guard let id else { return }
-      navigator.open(id)
       env.router.pendingConversationID = nil
+      Task { await openFromNotification(id) }
     }
     .task {
       env.firstFrameAppeared()
       if let route = await DebugHooks.prepareLaunch(env) { apply(route) }
     }
+  }
+
+  /// Opens a notification's chat, unless it was deleted since the notification was posted.
+  private func openFromNotification(_ id: UUID) async {
+    guard (try? await env.store.conversationTitle(id)) != nil else { return }
+    env.navigator.open(id)
   }
 
   private func apply(_ route: LaunchRoute) {

@@ -10,8 +10,15 @@ final class FakeGeneration: GenerationServicing {
   let retries = Locked<[UUID]>([])
   let regenerates = Locked<[UUID]>([])
 
+  /// Awaited inside `send`, so a test can act while a send is on its way.
+  let sendGate = Locked<(@Sendable () async -> Void)?>(nil)
+  /// Thrown by `send` (after the gate), when set.
+  let sendError = Locked<(any Error)?>(nil)
+
   func send(_ d: SendDraft) async throws -> UUID {
     sends.withLock { $0.append(d) }
+    if let gate = sendGate.value { await gate() }
+    if let error = sendError.value { throw error }
     return UUID()
   }
   func regenerate(sourceRequestID: UUID) async throws -> UUID {

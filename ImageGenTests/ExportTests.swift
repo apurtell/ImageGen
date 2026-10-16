@@ -207,6 +207,22 @@ struct ExportTests {
     await probe.assertPaired()
   }
 
+  @Test func openExportsClosedWhenSupersededOrScreenCloses() async throws {
+    let probe = ActivityLogProbe(root: TestFileRoot())
+    let item = try exportItem(in: probe.root, data: ImageFactory.png(), mime: "image/png", ext: "png")
+    let model = ImageExportModel(log: probe.log, photoLibrary: FakePhotoLibrary(status: .authorized))
+    model.saveToFiles(item)
+    model.saveToFiles(item)
+    model.beginShare(item)
+    model.beginShare(item)
+    model.closeOpenActions()
+    let entries = await probe.entries()
+    #expect(entries.filter { $0.name == "Save to Files" && $0.kind == .result }.map(\.outcome) == [.cancelled, .cancelled])
+    #expect(entries.filter { $0.name == "Share" && $0.kind == .result }.map(\.outcome) == [.cancelled, .cancelled])
+    #expect(entries.contains { $0.message == "superseded by another Save to Files" })
+    await probe.assertPaired()
+  }
+
   @Test func shareProviderCarriesOriginalType() throws {
     let root = TestFileRoot()
     let item = try exportItem(in: root, data: ImageFactory.heic(), mime: "image/heic", ext: "heic")

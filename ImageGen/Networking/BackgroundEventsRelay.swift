@@ -14,9 +14,18 @@ final class BackgroundEventsRelay {
 
   private let log: ActivityLog
   private var pending: [String: Pending] = [:]
+  /// Sessions whose events finished before UIKit handed over the handler (the session is made at
+  /// launch, so its events can arrive first): a `store` soon after completes at once. Events can
+  /// also finish with no handler to follow (queued events delivered when the user opens the app),
+  /// so the note is honoured only for `earlyWindow`; an older one would end a later wake's handler
+  /// before that wake's completions were handled.
+  private var finishedEarly: [String: (handled: Int, at: ContinuousClock.Instant)] = [:]
+  static let earlyWindow: Duration = .seconds(10)
+  private let now: @MainActor () -> ContinuousClock.Instant
 
-  init(log: ActivityLog) {
+  init(log: ActivityLog, now: @escaping @MainActor () -> ContinuousClock.Instant = { .now }) {
     self.log = log
+    self.now = now
   }
 
   func store(identifier: String, handler: @escaping @MainActor () -> Void) {
@@ -25,17 +34,24 @@ final class BackgroundEventsRelay {
       log.result(previous.action, .success, "superseded by a newer wake")
       previous.handler()
     }
-    pending[identifier] = Pending(handler: handler, action: action, storedAt: .now)
+    pending[identifier] = Pending(handler: handler, action: action, storedAt: now())
+    if let early = finishedEarly.removeValue(forKey: identifier), now() - early.at <= Self.earlyWindow {
+      Task { await self.callAndClear(identifier: identifier, completionsHandled: early.handled, early: true) }
+    }
   }
 
   var hasPending: Bool { !pending.isEmpty }
 
-  func callAndClear(identifier: String, completionsHandled: Int) async {
-    guard let p = pending.removeValue(forKey: identifier) else { return }
-    let elapsed = ContinuousClock.now - p.storedAt
+  func callAndClear(identifier: String, completionsHandled: Int, early: Bool = false) async {
+    guard let p = pending.removeValue(forKey: identifier) else {
+      // The early path found the handler already completed by the real end of events: nothing to note.
+      if !early { finishedEarly[identifier] = (completionsHandled, now()) }
+      return
+    }
+    let elapsed = now() - p.storedAt
     log.result(
       p.action, .success,
-      "in \(Format.seconds(elapsed)) · \(completionsHandled) completion\(completionsHandled == 1 ? "" : "s") handled before the system handler")
+      "in \(Format.seconds(elapsed)) · \(completionsHandled) completion\(completionsHandled == 1 ? "" : "s") handled before the system handler\(early ? " (events finished before the handler arrived)" : "")")
     await log.flush(timeout: .seconds(1))
     p.handler()
   }

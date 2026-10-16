@@ -16,6 +16,7 @@ final class ResponseAccumulator: Sendable {
   func prepareNewAttempt(requestID: UUID, attempt: Int) throws {
     let part = files.partURL(requestID, attempt: attempt)
     try FileStore.createDirectory(part.deletingLastPathComponent())
+    // Usually there's no marker yet; a stale one from an earlier run must not survive.
     try? FileManager.default.removeItem(at: files.completeMarkerURL(requestID, attempt: attempt))
     guard FileManager.default.createFile(atPath: part.path, contents: Data(), attributes: [.protectionKey: FileStore.protection])
     else { throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: part.path]) }

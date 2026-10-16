@@ -29,6 +29,22 @@ enum DemoSeeder {
     return keys
   }
 
+  /// `-SeedLargeChat 1` (M9): one chat with 60 messages and 40 images, keyed "large", for
+  /// scrolling and decode-timing checks. Seeded once per store.
+  static func seedLargeChat(store: DataStore, files: FileStore) async -> UUID? {
+    var keys = storedKeys()
+    if let existing = keys["large"], (try? await store.conversationTitle(existing)) != nil { return existing }
+    do {
+      let id = try await Seeder(store: store, files: files).large()
+      keys["large"] = id
+      UserDefaults.standard.set(keys.mapValues(\.uuidString), forKey: keysDefault)
+      return id
+    } catch {
+      Log.store.error("large chat seed failed: \(error.localizedDescription, privacy: .public)")
+      return nil
+    }
+  }
+
   private struct Seeder {
     let store: DataStore
     let files: FileStore
@@ -113,6 +129,20 @@ enum DemoSeeder {
       let t3 = try await send(conv, p3, reason: .latest, imageIDs: latest.map { [$0] } ?? [])
       _ = try await succeed(t3.requestID, conv: conv, prompt: p3)
       if let first { try await store.setPin(conv, imageID: first) }
+      return conv
+    }
+
+    /// 30 turns: every reply has an image (30), and every sixth turn sends two uploads (10).
+    func large() async throws -> UUID {
+      let conv = try await store.createConversation()
+      let aspects: [AspectRatio] = [.r16x9, .r1x1, .r9x16, .r4x3, .r21x9, .r3x4]
+      for turn in 1...30 {
+        let prompt = "Scene \(turn): a harbor at a different hour"
+        let uploads = turn % 6 == 0 ? [try stage(turn * 10 + 1), try stage(turn * 10 + 2)] : []
+        let t = try await send(conv, prompt, attachments: uploads, reason: uploads.isEmpty && turn > 1 ? .latest : nil)
+        try await succeed(t.requestID, conv: conv, prompt: prompt, text: "Turn \(turn).", aspect: aspects[turn % aspects.count])
+      }
+      try await store.rename(conv, to: "Large chat (60 messages)")
       return conv
     }
 

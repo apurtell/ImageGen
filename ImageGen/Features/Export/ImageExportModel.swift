@@ -59,6 +59,7 @@ final class ImageExportModel {
   // MARK: Files
 
   func saveToFiles(_ item: ExportItem) {
+    closeOpenActions(reason: "superseded by another Save to Files")
     filesAction = exportLog.beginFiles(item)
     fileExport = item
   }
@@ -84,7 +85,22 @@ final class ImageExportModel {
 
   /// The Share button's action: begins the Share before the sheet is presented.
   func beginShare(_ item: ExportItem) {
+    if let open = share { exportLog.endShareIfOpen(open) }
     share = exportLog.beginShare(item)
+  }
+
+  /// Ends a Save to Files or Share whose completion never came (its screen went away, or another
+  /// started), so each still gets exactly one Result.
+  func closeOpenActions(reason: String = "the screen closed") {
+    if let action = filesAction {
+      filesAction = nil
+      fileExport = nil
+      log.result(action, .cancelled, "\(reason)")
+    }
+    if let ticket = share {
+      exportLog.endShareIfOpen(ticket)
+      share = nil
+    }
   }
 
   func shareFinished(_ ticket: ShareTicket, activityType: UIActivity.ActivityType?, completed: Bool, error: (any Error)?) {
@@ -151,5 +167,6 @@ struct ImageExportPresenter: ViewModifier {
       }
       .toast(model.toast, alignment: toastAlignment, offset: toastOffset)
       .sensoryFeedback(.success, trigger: model.savedCount)
+      .onDisappear { model.closeOpenActions() }
   }
 }

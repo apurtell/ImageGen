@@ -38,9 +38,13 @@ actor ThumbnailService {
     let file = fileURL(id: id, px: px)
     if FileManager.default.fileExists(atPath: file.path),
       let source = CGImageSourceCreateWithURL(file as CFURL, ImageInspector.noCache),
-      let image = decodeTimer.measure("thumbnail \(px)", { CGImageSourceCreateImageAtIndex(source, 0, nil) })
+      // Decoded here, off the main thread. Without "cache immediately" ImageIO returns an image that
+      // decodes lazily, the first time it is drawn: on the main thread, while scrolling.
+      let image = decodeTimer.measure("thumbnail \(px)", {
+        CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+      })
     {
-      // Marks it recently used for the Janitor's LRU trim.
+      // Marks it recently used for the Janitor's LRU trim; a failure only changes the eviction order.
       try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
       return remember(image, key)
     }

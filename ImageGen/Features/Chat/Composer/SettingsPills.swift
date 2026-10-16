@@ -5,7 +5,8 @@ struct SettingsPills: View {
   let model: ChatScreenModel
 
   var body: some View {
-    HStack(spacing: 8) {
+    // Wraps whole pills to a new row at large text sizes, instead of breaking their labels.
+    FlowLayout(spacing: 8) {
       Menu {
         Button(model.defaultModelItemLabel) { Task { await model.setModel(nil, from: .pill) } }
         Divider()
@@ -60,7 +61,7 @@ struct SettingsPills: View {
   private func pill(_ text: String, dot: Bool, caution: Bool) -> some View {
     HStack(spacing: 4) {
       if dot { Circle().fill(Color.accentColor).frame(width: 6, height: 6) }
-      Text(text).font(.footnote.weight(.medium))
+      Text(text).font(.footnote.weight(.medium)).lineLimit(1).fixedSize()
       if caution { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange) }
       Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
     }

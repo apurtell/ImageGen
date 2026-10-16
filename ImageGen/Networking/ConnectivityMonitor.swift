@@ -15,11 +15,12 @@ final class NWPathConnectivityMonitor: ConnectivityMonitoring {
   init() {
     monitor.pathUpdateHandler = { [state] path in
       let satisfied = path.status == .satisfied
-      let subscribers = state.withLock { s in
+      // Yielding under the lock keeps every subscriber's values in the order they were set
+      // (`yield` never blocks).
+      state.withLock { s in
         s.current = satisfied
-        return Array(s.subscribers.values)
+        for c in s.subscribers.values { c.yield(satisfied) }
       }
-      for s in subscribers { s.yield(satisfied) }
     }
     monitor.start(queue: queue)
   }
@@ -29,12 +30,12 @@ final class NWPathConnectivityMonitor: ConnectivityMonitoring {
   var isSatisfied: AsyncStream<Bool> {
     let (stream, continuation) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingNewest(1))
     let id = UUID()
-    let current = state.withLock { s in
-      s.subscribers[id] = continuation
-      return s.current
-    }
-    continuation.yield(current)
     continuation.onTermination = { [state] _ in _ = state.withLock { $0.subscribers.removeValue(forKey: id) } }
+    // The current value and the registration together, so no change can slip in between.
+    state.withLock { s in
+      s.subscribers[id] = continuation
+      continuation.yield(s.current)
+    }
     return stream
   }
 }

@@ -15,8 +15,6 @@ struct AttachmentTray: View {
               TrayThumbnail(model: model, item: item, index: index, count: model.tray.count)
             }
           }
-          .padding(.top, 6)
-          .padding(.trailing, 6)
         }
         Text(model.trayCaption)
           .font(.caption)
@@ -36,29 +34,31 @@ private struct TrayThumbnail: View {
   @State private var showFailure = false
 
   var body: some View {
-    ZStack(alignment: .topTrailing) {
-      ZStack {
-        if let image {
-          Image(decorative: image, scale: 1).resizable().scaledToFill()
-        } else {
-          Rectangle().fill(.quaternary)
-        }
-        if item.isPending {
-          Rectangle().fill(.black.opacity(0.25))
-          ProgressView().tint(.white)
-        } else if item.failure != nil {
-          Rectangle().fill(.black.opacity(0.35))
-          Button {
-            showFailure = true
-          } label: {
-            Image(systemName: "exclamationmark.triangle.fill").font(.title3).foregroundStyle(.yellow)
-          }
-          .accessibilityLabel("Couldn't prepare this image")
-        }
+    ZStack {
+      if let image {
+        Image(decorative: image, scale: 1).resizable().scaledToFill()
+      } else {
+        Rectangle().fill(.quaternary)
       }
-      .frame(width: 56, height: 56)
-      .clipShape(RoundedRectangle(cornerRadius: 10))
-
+      if item.isPending {
+        Rectangle().fill(.black.opacity(0.25))
+        ProgressView().tint(.white)
+      } else if item.failure != nil {
+        Rectangle().fill(.black.opacity(0.35))
+        Button {
+          showFailure = true
+        } label: {
+          Image(systemName: "exclamationmark.triangle.fill").font(.title3).foregroundStyle(.yellow)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Couldn't prepare this image")
+      }
+    }
+    .frame(width: 56, height: 56)
+    .clipShape(RoundedRectangle(cornerRadius: 10))
+    // Inside the thumbnail's bounds: an offset badge hung outside the tray's scroll view and
+    // didn't receive taps.
+    .overlay(alignment: .topTrailing) {
       Button {
         model.removeTrayItem(item.id)
       } label: {
@@ -66,8 +66,10 @@ private struct TrayThumbnail: View {
           .symbolRenderingMode(.palette)
           .foregroundStyle(.white, .black.opacity(0.6))
           .font(.system(size: 18))
+          .frame(width: 28, height: 28)
+          .contentShape(Rectangle())
       }
-      .offset(x: 6, y: -6)
+      .buttonStyle(.plain)
       .accessibilityLabel("Remove image \(index + 1)")
     }
     .contextMenu {

@@ -10,6 +10,16 @@ struct RedactorTests {
 
   func object(_ s: String) throws -> Any { try JSONSerialization.jsonObject(with: Data(s.utf8)) }
 
+  @Test func overlappingSecretsRemovedWhole() {
+    let full = "AIzaSyD-0123456789abcdefghijklmnopqrstu"
+    let truncated = String(full.prefix(20))
+    // Either registration order: the longer secret goes first.
+    for order in [[truncated, full], [full, truncated]] {
+      let out = Redactor.forLog(secrets: { order })("echo \(full) end")
+      #expect(out == "echo \(Redactor.keyRemoved) end")
+    }
+  }
+
   @Test func nestedArrays() throws {
     let body = """
       {"candidates":[{"content":{"parts":[[{"inlineData":{"mimeType":"image/png","data":"\(Self.b64)"}}],

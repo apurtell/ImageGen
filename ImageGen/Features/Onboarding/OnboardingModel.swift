@@ -19,6 +19,8 @@ final class OnboardingModel {
   var keyText = ""
   var reveal = false
   private(set) var phase: Phase = .idle
+  /// Set when the form is closed: a validation still running then saves nothing.
+  private(set) var isCancelled = false
 
   private let keyStore: any APIKeyStore
   private let availability: ModelAvailabilityService
@@ -36,6 +38,9 @@ final class OnboardingModel {
   }
 
   var trimmedKey: String { keyText.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+  /// Cancel on the inline Replace Key form.
+  func cancel() { isCancelled = true }
   var canValidate: Bool { !trimmedKey.isEmpty && phase != .validating }
 
   /// Validate & Save. Returns true once the key is saved.
@@ -46,7 +51,13 @@ final class OnboardingModel {
     registry.register(key)
     phase = .validating
     let action = log.begin("Save API key", origin: .user, "from \(source)")
-    switch await availability.validateKey(key, parent: action) {
+    let validation = await availability.validateKey(key, parent: action)
+    // The form was cancelled while the key was checked: the user no longer wants it saved.
+    if isCancelled {
+      log.result(action, .cancelled, "not saved · cancelled while validating")
+      return false
+    }
+    switch validation {
     case .valid(_, let flashListed):
       return save(key, action: action, flashWarning: !flashListed, note: "validated")
     case .rejected(let message, let reason):

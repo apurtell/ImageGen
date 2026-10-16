@@ -58,6 +58,9 @@ struct ChatActions {
     if let live { await generation.cancel(requestID: live.id) }
     do {
       let result = try await store.deleteConversation(id)
+      // A request recorded after `live` was read is stopped too (its record is gone; the service
+      // still stops its task).
+      for request in result.liveRequestIDs where request != live?.id { await generation.cancel(requestID: request) }
       let removed = "files removed \(result.filesRemoved) (\(Format.mb(Int(result.bytesFreed))))"
       if result.failures == 0 {
         log.result(action, .success, "done · \(removed)")

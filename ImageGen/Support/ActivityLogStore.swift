@@ -137,6 +137,16 @@ actor ActivityLogStore {
       try handle.write(contentsOf: line)
     } catch {
       Log.store.error("activity log: write failed: \(error.localizedDescription, privacy: .public)")
+      // Part of the line may be in the file (a full disk): cut it off, so the next entry starts on
+      // a line of its own and the index's offsets still match the file.
+      do {
+        try handle.truncate(atOffset: fileSize)
+        try handle.seek(toOffset: fileSize)
+      } catch {
+        // Can't repair it now: reopen before the next write, which finds the true end of the file.
+        try? handle.close()  // The handle is discarded either way.
+        self.handle = nil
+      }
       return
     }
     let offset = fileSize
@@ -367,6 +377,7 @@ actor ActivityLogStore {
       guard rename(temp.path, fileURL.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
       Self.excludeFromBackup(fileURL)
     } catch {
+      // Cleanup of the temporary file after the failure that is already being handled.
       try? FileManager.default.removeItem(at: temp)
       Log.store.error("activity log: rewrite failed: \(error.localizedDescription, privacy: .public)")
       openForAppend()

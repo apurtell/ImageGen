@@ -32,6 +32,10 @@ final class ModelAvailabilityService {
   private let log: ActivityLog
   private let registry: SecretRegistry
   private let clock: @Sendable () -> Date
+  /// Each run that may store a model list takes the next number; a run stores only if no later
+  /// run has stored meanwhile, so a slow check can't overwrite newer results.
+  private var runsStarted = 0
+  private var newestStored = 0
 
   init(
     client: ModelsClient, keyStore: any APIKeyStore, settings: AppSettings, log: ActivityLog, registry: SecretRegistry,
@@ -62,9 +66,10 @@ final class ModelAvailabilityService {
       log.result(action, .failed, "no API key")
       return .noKey
     }
+    let run = startRun()
     do {
       let (models, pages) = try await client.listAll(apiKey: key)
-      let changes = store(models)
+      let changes = store(models, run: run, key: key) ?? "superseded by a newer check · not stored"
       let flash = ModelsClient.flashListed(models)
       log.result(
         action, .success,
@@ -86,9 +91,12 @@ final class ModelAvailabilityService {
     let message: ActivityMessage = "\(Self.listPath) · ephemeral session · 20 s timeout"
     let action =
       parent.map { log.begin("Validate key", parent: $0, message) } ?? log.begin("Validate key", origin: .user, message)
+    let run = startRun()
     do {
       let (models, _) = try await client.listAll(apiKey: key)
-      _ = store(models)
+      // Stored only for the saved key: a typed key isn't saved yet (and may never be); saving it
+      // runs its own refresh.
+      _ = store(models, run: run, key: key)
       let flash = ModelsClient.flashListed(models)
       log.result(
         action, .success,
@@ -108,8 +116,16 @@ final class ModelAvailabilityService {
     }
   }
 
-  /// Caches availability and describes what changed for the catalog models.
-  private func store(_ models: [ModelInfo]) -> String {
+  private func startRun() -> Int {
+    runsStarted += 1
+    return runsStarted
+  }
+
+  /// Caches availability and describes what changed for the catalog models; nil when not stored
+  /// (a later run stored first, or `key` is no longer the saved key).
+  private func store(_ models: [ModelInfo], run: Int, key: String) -> String? {
+    guard run > newestStored, (try? keyStore.read()).flatMap({ $0 }) == key else { return nil }
+    newestStored = run
     let now = Dictionary(models.map { ($0.id, $0.supportsGenerateContent) }, uniquingKeysWith: { a, b in a || b })
     let before = settings.modelAvailabilityCache?.models
     settings.modelAvailabilityCache = ModelAvailabilityCache(models: now, checkedAt: clock())

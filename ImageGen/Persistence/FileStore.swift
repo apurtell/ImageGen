@@ -18,6 +18,8 @@ struct FileStore: Sendable {
   var imagesDir: URL { root.appendingPathComponent("Images", isDirectory: true) }
   var requestsDir: URL { root.appendingPathComponent("Requests", isDirectory: true) }
   var stagingDir: URL { root.appendingPathComponent("Staging", isDirectory: true) }
+  /// Earlier launches' `Staging/` folders, each renamed here at launch for the Janitor to remove.
+  var retiredStagingDir: URL { root.appendingPathComponent("StagingRetired", isDirectory: true) }
   var logsDir: URL { root.appendingPathComponent("Logs", isDirectory: true) }
 
   func conversationDir(_ conv: UUID) -> URL {
@@ -90,11 +92,32 @@ struct FileStore: Sendable {
       at: url, withIntermediateDirectories: true, attributes: [.protectionKey: protection])
   }
 
-  /// Moves a staged file into place (a rename on the same volume).
+  /// Moves a staged file into place (a rename on the same volume) and marks it modified now: a
+  /// rename or clone keeps the source's date, and the Janitor spares only recently modified files
+  /// that no record references yet.
   func moveStaged(_ from: URL, to: URL) throws {
-    try Self.createDirectory(to.deletingLastPathComponent())
+    let dir = to.deletingLastPathComponent()
+    try Self.createDirectory(dir)
     if FileManager.default.fileExists(atPath: to.path) { try FileManager.default.removeItem(at: to) }
-    try FileManager.default.moveItem(at: from, to: to)
+    do {
+      try FileManager.default.moveItem(at: from, to: to)
+    } catch {
+      // The Janitor removed the (empty) folder between the two steps: make it again, once.
+      guard FileManager.default.fileExists(atPath: from.path), !FileManager.default.fileExists(atPath: dir.path) else { throw error }
+      try Self.createDirectory(dir)
+      try FileManager.default.moveItem(at: from, to: to)
+    }
+    try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: to.path)  // Only the Janitor's freshness test reads it.
+  }
+
+  /// Renames this launch's `Staging/` (anything in it belongs to an earlier process: trays aren't
+  /// kept across launches) into `StagingRetired/`, before any screen can stage a file. The Janitor
+  /// later removes only retired folders, so it can never take a file this launch staged.
+  func retireStaging() {
+    guard FileManager.default.fileExists(atPath: stagingDir.path) else { return }
+    // On failure the files stay in Staging/; the next launch retires them.
+    try? Self.createDirectory(retiredStagingDir)
+    try? FileManager.default.moveItem(at: stagingDir, to: retiredStagingDir.appendingPathComponent(UUID().uuidString))
   }
 
   /// Copies a file; on APFS this is a clone, so it costs no space until one side changes.
@@ -121,6 +144,8 @@ struct FileStore: Sendable {
       try FileManager.default.removeItem(at: url)
       result.filesRemoved += count
       result.bytesFreed += bytes
+    } catch CocoaError.fileNoSuchFile {
+      // Removed by someone else meanwhile (the Janitor and a delete overlapping): the goal is met.
     } catch {
       result.failures += 1
       if result.firstError == nil { result.firstError = "\(url.lastPathComponent): \(error.localizedDescription)" }

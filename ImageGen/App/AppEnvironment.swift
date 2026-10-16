@@ -94,6 +94,8 @@ final class AppEnvironment {
 
     // 2. Storage, key, settings.
     files = FileStore(root: config.root, cachesRoot: config.cachesRoot)
+    // Before any screen can stage a file: the Janitor removes only what earlier launches staged.
+    files.retireStaging()
     do {
       container = try StoreFactory.makeContainer(root: config.root, inMemory: config.inMemoryStore)
     } catch {
@@ -280,6 +282,7 @@ final class AppEnvironment {
   /// Everything under `Application Support/ImageGen/` (store, images, requests, staging, `Logs/`)
   /// and the thumbnails.
   nonisolated static func deleteAllData(root: URL, cachesRoot: URL) {
+    // A folder that doesn't exist yet is already reset.
     try? FileManager.default.removeItem(at: root)
     try? FileManager.default.removeItem(at: cachesRoot.appendingPathComponent("Thumbnails"))
   }

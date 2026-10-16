@@ -38,6 +38,40 @@ struct BackgroundEventsRelayTests {
     #expect(linesAtHandler == 4)
   }
 
+  @Test func eventsFinishedBeforeHandlerStillCallIt() async throws {
+    let probe = ActivityLogProbe()
+    let relay = BackgroundEventsRelay(log: probe.log)
+    await relay.callAndClear(identifier: "bg", completionsHandled: 3)
+    var called = false
+    relay.store(identifier: "bg") { called = true }
+    for _ in 0..<200 where !called { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(called)
+    #expect(!relay.hasPending)
+    let tree = await probe.action(named: "Background events")
+    #expect(tree.last?.outcome == .success)
+    #expect(tree.last?.message.contains("3 completions handled before the system handler (events finished before the handler arrived)") == true)
+    await probe.assertPaired()
+  }
+
+  @Test func staleEarlyFinishDoesNotEndALaterWake() async throws {
+    let probe = ActivityLogProbe()
+    var clock = ContinuousClock.now
+    let relay = BackgroundEventsRelay(log: probe.log, now: { clock })
+    // Queued events delivered when the user opened the app: no handler follows.
+    await relay.callAndClear(identifier: "bg", completionsHandled: 1)
+    clock += .seconds(60)
+    // A later background wake in the same process.
+    var called = false
+    relay.store(identifier: "bg") { called = true }
+    try await Task.sleep(for: .milliseconds(200))
+    #expect(!called)
+    #expect(relay.hasPending)
+    // Its own events end: now the handler runs.
+    await relay.callAndClear(identifier: "bg", completionsHandled: 2)
+    #expect(called)
+    #expect(await probe.action(named: "Background events").last?.message.contains("2 completions handled") == true)
+  }
+
   @Test func unknownIdentifierIsIgnored() async {
     let probe = ActivityLogProbe()
     let relay = BackgroundEventsRelay(log: probe.log)

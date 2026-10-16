@@ -20,6 +20,9 @@ final class APIKeySectionModel {
   private(set) var validation = ValidationState.idle
   /// The inline Replace Key form, while it's open.
   private(set) var replace: OnboardingModel?
+  /// Bumped by each Validate Now, Replace Key and Remove Key: a validation's result is shown only
+  /// if nothing newer happened while it ran (it would describe a key that's no longer saved).
+  @ObservationIgnored private var validationRun = 0
 
   init(keyStore: any APIKeyStore, log: ActivityLog, availability: ModelAvailabilityService? = nil, registry: SecretRegistry? = nil) {
     self.keyStore = keyStore
@@ -42,12 +45,16 @@ final class APIKeySectionModel {
 
   func beginReplace() {
     guard let availability, let registry else { return }
+    validationRun += 1
     validation = .idle
     replace = OnboardingModel(
       keyStore: keyStore, availability: availability, registry: registry, log: log, source: "Settings › Replace Key")
   }
 
-  func cancelReplace() { replace = nil }
+  func cancelReplace() {
+    replace?.cancel()
+    replace = nil
+  }
 
   /// After the inline form saves.
   func replaceFinished() {
@@ -59,8 +66,12 @@ final class APIKeySectionModel {
 
   func validateNow() async {
     guard let availability, let key = (try? keyStore.read()).flatMap({ $0 }), !key.isEmpty else { return }
+    validationRun += 1
+    let run = validationRun
     validation = .validating
-    switch await availability.validateKey(key) {
+    let result = await availability.validateKey(key)
+    guard run == validationRun, (try? keyStore.read()).flatMap({ $0 }) == key else { return }
+    switch result {
     case .valid(let count, let flashListed):
       validation = .valid(
         flashListed
@@ -83,6 +94,8 @@ final class APIKeySectionModel {
       try keyStore.delete()
       log.result(action, .success, "Keychain status ok · key removed")
       lastFour = nil
+      validationRun += 1
+      validation = .idle
       return true
     } catch {
       log.result(action, .failed, "Keychain: \(error.localizedDescription)")

@@ -16,6 +16,9 @@ protocol BackgroundTaskProviding: Sendable {
 /// logged its result.
 final class UIApplicationBackgroundTaskProvider: BackgroundTaskProviding {
   private let log: ActivityLog
+  /// Assertions already ended: the expiry handler ends its own, and the owner's later `end` then
+  /// does nothing (UIKit warns about ending one twice).
+  private let ended = Locked<Set<Int>>([])
 
   init(log: ActivityLog) {
     self.log = log
@@ -28,6 +31,7 @@ final class UIApplicationBackgroundTaskProvider: BackgroundTaskProviding {
 
   func begin(name: String, onExpire: @escaping @Sendable () -> Void) async -> BackgroundTaskToken {
     let log = self.log
+    let ended = self.ended
     let raw: Int = await MainActor.run {
       let box = Box()
       box.identifier = UIApplication.shared.beginBackgroundTask(withName: name) {
@@ -35,7 +39,7 @@ final class UIApplicationBackgroundTaskProvider: BackgroundTaskProviding {
         let id = box.identifier
         Task { @MainActor in
           await log.flush(timeout: .milliseconds(500))
-          UIApplication.shared.endBackgroundTask(id)
+          Self.endOnce(id.rawValue, ended)
         }
       }
       return box.identifier.rawValue
@@ -44,10 +48,16 @@ final class UIApplicationBackgroundTaskProvider: BackgroundTaskProviding {
   }
 
   func end(_ token: BackgroundTaskToken) async {
+    guard !ended.value.contains(token.id) else { return }
     await log.flush(timeout: .seconds(1))
-    await MainActor.run {
-      UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: token.id))
-    }
+    let ended = self.ended
+    await MainActor.run { Self.endOnce(token.id, ended) }
+  }
+
+  @MainActor
+  private static func endOnce(_ id: Int, _ ended: Locked<Set<Int>>) {
+    guard ended.withLock({ $0.insert(id).inserted }) else { return }
+    UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: id))
   }
 
   /// Flushes the log under a short assertion of its own, when the scene goes to the background.

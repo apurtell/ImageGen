@@ -467,7 +467,8 @@ struct GenerationServiceTests {
     let replaced = try await h.snapshot(id)
     #expect(!replaced.nextAttemptCreatedInBackground)
     #expect(replaced.taskIdentifier != oldTask)
-    #expect(replaced.attempt == 2)
+    // A new attempt number, so the replaced task's events can't touch it.
+    #expect(replaced.attempt == 3)
     try await h.until { h.sleeper!.waitingCount == 2 }
     h.sleeper!.advance()
     let snap = try await h.wait(id)
@@ -887,6 +888,54 @@ struct GenerationServiceTests {
     #expect(tree.entries.last?.outcome == .success)
     #expect(tree.entries.last?.name == "Send")
     #expect(!entries.contains { $0.outcome == .interrupted })
+    await h2.probe.assertPaired()
+  }
+
+  @Test func adoptedRetryRecreationFailureClosesAction() async throws {
+    let h = try H(scripted: true)
+    let conv = try await h.s.store.createConversation()
+    let id = try await h.service.send(h.draft(conv, "x"))
+    try await h.wait(id, for: [.inFlight])
+    h.scripted!.complete(id, attempt: 1, status: 503, body: try FixtureLoader.data("Errors/err_503.json"))
+    let scheduled = try await h.wait(id, for: [.retryScheduled])
+    #expect(scheduled.nextAttemptCreatedInBackground)
+    let sendID = try #require(scheduled.activityActionID)
+    _ = await h.probe.lines()
+    h.service.stop()
+
+    let h2 = try H(scripted: true, active: true, reuse: h)
+    // The background-created task is still waiting in the session.
+    let old = try #require(scheduled.taskIdentifier)
+    h2.scripted!.live.withLock { $0 = [LiveTask(requestID: id, attempt: 2, taskIdentifier: old, countOfBytesSent: 0)] }
+    h2.scripted!.failStarts.withLock { $0 = true }
+    await h2.service.appBecameActive()
+    #expect(try await h2.wait(id).state == .failed)
+    let tree = ActivityLogQuery.tree(sendID, in: await h2.probe.entries())
+    let last = try #require(tree.entries.last)
+    #expect(last.actionID == sendID && last.kind == .result && last.outcome == .failed)
+    #expect(!tree.entries.contains { $0.message.contains("parent finished first") })
+    await h2.probe.assertPaired()
+  }
+
+  @Test func deletingAdoptedRequestClosesItsActions() async throws {
+    let h = try H(scripted: true)
+    let conv = try await h.s.store.createConversation()
+    let id = try await h.service.send(h.draft(conv, "x"))
+    try await h.wait(id, for: [.inFlight])
+    let sendID = try #require(try await h.snapshot(id).activityActionID)
+    _ = await h.probe.lines()
+    h.service.stop()
+
+    let h2 = try H(scripted: true, reuse: h)
+    await h2.service.cancel(requestID: id)
+    _ = try await h2.s.store.deleteConversation(conv)
+    h2.scripted!.complete(id, attempt: 1, error: .cancelled)
+    try await h2.until { await h2.probe.entries().contains { $0.actionID == sendID && $0.kind == .result } }
+    let tree = ActivityLogQuery.tree(sendID, in: await h2.probe.entries())
+    #expect(tree.entries.last?.outcome == .cancelled)
+    let attempt = try #require(tree.entries.first { $0.name == "Attempt 1" && $0.kind == .result })
+    #expect(attempt.outcome == .cancelled)
+    #expect(attempt.message == "the request was deleted")
     await h2.probe.assertPaired()
   }
 

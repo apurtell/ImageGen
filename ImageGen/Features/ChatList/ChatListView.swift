@@ -8,6 +8,8 @@ struct ChatListView: View {
   /// The chat whose title is being edited in place, and the text so far.
   @State private var editingID: UUID?
   @State private var titleDraft = ""
+  /// The title when editing began (an untouched draft changes nothing, even after an auto-title).
+  @State private var titleAtEditStart = ""
   @State private var deleting: Conversation?
 
   var body: some View {
@@ -48,21 +50,22 @@ struct ChatListView: View {
             .swipeActions(edge: .leading) {
               Button("Rename") { beginTitle(conversation) }.tint(.indigo)
             }
-            // On the row, so the popover points at the chat being deleted.
-            .confirmationDialog(
-              Self.deleteTitle(conversation),
-              isPresented: Binding(
-                get: { deleting?.id == conversation.id }, set: { if !$0 { deleting = nil } }),
-              titleVisibility: .visible
-            ) {
-              Button("Delete", role: .destructive) {
-                let id = conversation.id
-                Task { await env.chatActions.deleteChat(id) }
-              }
-            }
           }
         }
         .listStyle(.plain)
+        // An alert, not a row-anchored confirmation dialog: a dialog attached to a row never
+        // presented after the row's swipe action (iOS 26.5).
+        .alert(
+          deleting.map(Self.deleteTitle) ?? "",
+          isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
+        ) {
+          Button("Delete", role: .destructive) {
+            if let id = deleting?.id { Task { await env.chatActions.deleteChat(id) } }
+          }
+          Button("Cancel", role: .cancel) {}
+        } message: {
+          Text("This can't be undone.")
+        }
       }
     }
     .sensoryFeedback(.selection, trigger: editingID) { _, id in id != nil }
@@ -84,13 +87,14 @@ struct ChatListView: View {
 
   private func beginTitle(_ conversation: Conversation) {
     titleDraft = conversation.title
+    titleAtEditStart = conversation.title
     editingID = conversation.id
   }
 
   private func saveTitle(_ conversation: Conversation) {
     guard editingID == conversation.id else { return }
     editingID = nil
-    guard let name = TitleEdit.change(draft: titleDraft, current: conversation.title) else { return }
+    guard let name = TitleEdit.change(draft: titleDraft, current: titleAtEditStart) else { return }
     let id = conversation.id
     Task { await env.chatActions.rename(id, to: name) }
   }

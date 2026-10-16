@@ -32,6 +32,8 @@ final class MockGeminiURLProtocol: URLProtocol, @unchecked Sendable {
       ? Self.generate(body: body, scenario: scenario, count: count) : Self.models(path: path, scenario: scenario)
     let url = request.url!
     let deliver: @Sendable () -> Void = { [self] in
+      // Checked before every call: a Stop can land between chunks, and nothing may reach the
+      // client after `stopLoading`.
       guard !stopped.value else { return }
       let http = HTTPURLResponse(url: url, statusCode: response.status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
       client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
@@ -39,9 +41,11 @@ final class MockGeminiURLProtocol: URLProtocol, @unchecked Sendable {
       let chunk = max(1, response.body.count / 4)
       var offset = 0
       while offset < response.body.count {
+        guard !stopped.value else { return }
         client?.urlProtocol(self, didLoad: response.body.subdata(in: offset..<min(offset + chunk, response.body.count)))
         offset += chunk
       }
+      guard !stopped.value else { return }
       client?.urlProtocolDidFinishLoading(self)
     }
     let delay = path.hasSuffix(":generateContent") ? latency : min(latency, 0.5)

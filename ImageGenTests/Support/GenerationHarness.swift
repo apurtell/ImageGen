@@ -14,6 +14,10 @@ final class ScriptedTransport: GenerationTransport {
   let cancelledTasks = Locked<[Int]>([])
   let live = Locked<[LiveTask]>([])
   private let nextID = Locked(100)
+  /// When set, `start` throws, as if the session couldn't make the task.
+  let failStarts = Locked(false)
+
+  struct StartFailed: Error {}
 
   init(files: FileStore) {
     self.files = files
@@ -21,12 +25,15 @@ final class ScriptedTransport: GenerationTransport {
   }
 
   func start(_ job: TransportJob, apiKey: String) throws -> Int {
+    if failStarts.value { throw StartFailed() }
     try ResponseAccumulator(files: files).prepareNewAttempt(requestID: job.requestID, attempt: job.attempt)
     jobs.withLock { $0.append(job) }
-    return nextID.withLock { n in
+    let id = nextID.withLock { n in
       n += 1
       return n
     }
+    live.withLock { $0.append(LiveTask(requestID: job.requestID, attempt: job.attempt, taskIdentifier: id, countOfBytesSent: 0)) }
+    return id
   }
 
   func cancel(requestID: UUID) async { cancelledRequests.withLock { $0.append(requestID) } }
@@ -40,6 +47,7 @@ final class ScriptedTransport: GenerationTransport {
   ) {
     // As if the transport had made the task (which creates the request's folder).
     try? FileStore.createDirectory(files.requestDir(requestID))
+    live.withLock { $0.removeAll { $0.requestID == requestID && $0.attempt == attempt } }
     let acc = ResponseAccumulator(files: files)
     if !body.isEmpty { acc.append(body, requestID: requestID, attempt: attempt, taskIdentifier: taskIdentifier) }
     let (url, bytes) = acc.complete(requestID: requestID, attempt: attempt, taskIdentifier: taskIdentifier, httpStatus: error == nil ? status : nil)
@@ -151,6 +159,8 @@ final class GenerationHarness: Sendable {
   let edge = Locked(2048)
   let omitCivic = Locked(false)
   let civicCalls = Locked(0)
+  /// Awaited inside the CIVIC fallback, before the body is rebuilt, so a test can act in that gap.
+  let civicGate = Locked<(@Sendable () async -> Void)?>(nil)
   let finishedCalls = Locked<[(id: String, handled: Int, statesAtCall: [RequestState])]>([])
   let jobs = Locked<[TransportJob]>([])
   let sleeper: ManualSleeper?
@@ -202,6 +212,7 @@ final class GenerationHarness: Sendable {
     let edge = self.edge
     let omitCivic = self.omitCivic
     let civicCalls = self.civicCalls
+    let civicGate = self.civicGate
     let notifications = self.notifications
     let notifyEnabled = self.notifyEnabled
     let finishedCalls = self.finishedCalls
@@ -219,6 +230,7 @@ final class GenerationHarness: Sendable {
     let setOmitCivic: @Sendable () async -> Void = {
       civicCalls.withLock { $0 += 1 }
       omitCivic.withLock { $0 = true }
+      if let gate = civicGate.value { await gate() }
     }
     let finished: @Sendable (String, Int) async -> Void = { id, handled in
       let states = ((try? await store.nonTerminalRequests()) ?? []).map(\.state)

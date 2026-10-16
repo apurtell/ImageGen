@@ -29,15 +29,45 @@ struct JanitorTests {
     }
 
     func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
+
+    /// What a new process does before any screen appears.
+    func relaunch() { s.files.retireStaging() }
   }
 
-  @Test func emptiesStaging() async throws {
+  @Test func emptiesStagingLeftByEarlierLaunches() async throws {
     let f = try Fixture()
     try f.write(f.s.files.stagingURL(UUID(), ext: "jpg"), age: 0)
     try f.write(f.s.files.stagingDir.appendingPathComponent("prepared/x-2048.jpg"), age: 0)
+    f.relaunch()
     let report = await f.janitor.run()
     #expect(report.staging == 2)
-    #expect((try? FileManager.default.contentsOfDirectory(atPath: f.s.files.stagingDir.path))?.isEmpty ?? true)
+    #expect((try? FileManager.default.contentsOfDirectory(atPath: f.s.files.retiredStagingDir.path))?.isEmpty ?? true)
+  }
+
+  @Test func keepsWhatThisLaunchStaged() async throws {
+    let f = try Fixture()
+    try f.write(f.s.files.stagingURL(UUID(), ext: "jpg"), age: 0)
+    f.relaunch()
+    // The user attached a photo before the Janitor ran (it waits for the Reconciler's grace).
+    let tray = f.s.files.stagingURL(UUID(), ext: "jpg")
+    let prepared = f.s.files.stagingDir.appendingPathComponent("prepared/y-2048.jpg")
+    try f.write(tray, age: 7200)
+    try f.write(prepared, age: 0)
+    let report = await f.janitor.run()
+    #expect(report.staging == 1)
+    #expect(f.exists(tray))
+    #expect(f.exists(prepared))
+  }
+
+  @Test func movedFilesLookNewToTheFreshnessTest() async throws {
+    let f = try Fixture()
+    // A month-old file (Edit & Resend clones keep the original's date) moved in by a send.
+    let staged = f.s.files.stagingURL(UUID(), ext: "jpg")
+    try f.write(staged, age: 30 * 86400)
+    let placed = f.s.files.imageURL(conv: UUID(), image: UUID(), ext: "jpg")
+    try f.s.files.moveStaged(staged, to: placed)
+    let modified = try #require(try placed.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+    #expect(Date().timeIntervalSince(modified) < 60)
   }
 
   @Test func removesTerminalRequestDirsOlderThan1h() async throws {
@@ -92,6 +122,24 @@ struct JanitorTests {
     #expect(!f.exists(orphanPrepared))
     #expect(report.images == 2)
     #expect(report.bytesFreed == 3072)
+  }
+
+  @Test func removesStaleEmptyChatFolders() async throws {
+    let f = try Fixture()
+    let images = f.s.files.imagesDir
+    let deletedChat = images.appendingPathComponent(UUID().uuidString)
+    try f.write(deletedChat.appendingPathComponent("\(UUID().uuidString).jpg"), age: 7200)
+    let staleEmpty = images.appendingPathComponent(UUID().uuidString)
+    let freshEmpty = images.appendingPathComponent(UUID().uuidString)
+    for dir in [staleEmpty, freshEmpty] { try FileStore.createDirectory(dir) }
+    for (dir, age) in [(deletedChat, 7200.0), (staleEmpty, 7200), (freshEmpty, 60)] {
+      try FileManager.default.setAttributes([.modificationDate: f.s.clock.now.addingTimeInterval(-age)], ofItemAtPath: dir.path)
+    }
+    let report = await f.janitor.run()
+    #expect(report.images == 1)
+    #expect(!f.exists(deletedChat))
+    #expect(!f.exists(staleEmpty))
+    #expect(f.exists(freshEmpty))
   }
 
   @Test func keepsPreparedFilesReferencedByAssets() async throws {
@@ -167,6 +215,7 @@ struct JanitorTests {
     let f = try Fixture()
     try f.write(f.s.files.stagingURL(UUID(), ext: "jpg"), bytes: 1_048_576, age: 0)
     try f.write(f.s.files.imageURL(conv: UUID(), image: UUID(), ext: "png"), bytes: 524_288, age: 3600)
+    f.relaunch()
     _ = await f.janitor.run()
     let tree = await f.probe.action(named: "Janitor")
     #expect(tree.count == 2)
@@ -182,8 +231,10 @@ struct JanitorTests {
 
   @Test func failedRemovalEndsFailed() async throws {
     let f = try Fixture()
-    let locked = f.s.files.stagingDir.appendingPathComponent("locked")
-    try f.write(locked.appendingPathComponent("inner.jpg"), age: 0)
+    try f.write(f.s.files.stagingDir.appendingPathComponent("locked/inner.jpg"), age: 0)
+    f.relaunch()
+    let retired = try #require(try FileManager.default.contentsOfDirectory(at: f.s.files.retiredStagingDir, includingPropertiesForKeys: nil).first)
+    let locked = retired.appendingPathComponent("locked")
     // A read-only folder can't have its contents removed.
     try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
     defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }

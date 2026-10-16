@@ -165,6 +165,7 @@ struct RequestPreparer: Sendable {
           if out.url.deletingLastPathComponent().standardizedFileURL != preparedDir.standardizedFileURL {
             let dest = preparedDir.appendingPathComponent(out.url.lastPathComponent)
             try FileStore.createDirectory(preparedDir)
+            // Best effort: a stale file left here makes the move below throw, and that is reported.
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: out.url, to: dest)
             out = PreparedImage(
@@ -180,6 +181,7 @@ struct RequestPreparer: Sendable {
       // Body.
       try Task.checkCancellation()
       let bodyURL = files.bodyURL(snap.id)
+      // A body from an earlier attempt; the write below replaces it anyway.
       try? FileManager.default.removeItem(at: bodyURL)
       let spec = RequestBodySpec(
         images: fitted.images.map { BodyImage(fileURL: $0.url, mimeType: $0.mimeType, byteCount: $0.byteCount) },
@@ -190,11 +192,13 @@ struct RequestPreparer: Sendable {
       } catch RequestBodyError.emptyParts {
         throw PrepareError.emptyParts
       } catch {
+        // Cleanup after a failed write; the Janitor removes anything left (D§4.4).
         try? FileManager.default.removeItem(at: bodyURL)
         if Self.isDiskFull(error) { throw PrepareError.diskFull }
         throw error
       }
       if Task.isCancelled {
+        // Cleanup on cancellation; the Janitor removes anything left (D§4.4).
         try? FileManager.default.removeItem(at: bodyURL)
         throw CancellationError()
       }
@@ -219,6 +223,7 @@ struct RequestPreparer: Sendable {
     } catch is CancellationError {
       outcome = .interrupted
       summary = "preparation cancelled"
+      // Cleanup on cancellation; the Janitor removes anything left (D§4.4).
       try? FileManager.default.removeItem(at: files.bodyURL(snap.id))
       throw CancellationError()
     } catch {

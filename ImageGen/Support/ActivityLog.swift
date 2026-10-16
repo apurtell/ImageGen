@@ -77,6 +77,22 @@ enum ActivityLogEvent: Sendable {
   case status(CheckedContinuation<ActivityLogStatus, Never>)
   case clear(id: ActionID, timestamp: Date, CheckedContinuation<Void, Never>)
   case subscribe(AsyncStream<ActivityLogStatus>.Continuation)
+
+  /// Answers a control message the store will never see (the stream has ended): every caller
+  /// waiting on one is resumed at once, with an empty answer, instead of waiting forever.
+  func answerUndelivered() {
+    switch self {
+    case .entry, .resultOfOpenChild: break
+    case .flush(let c): c.resume()
+    case .entriesTree(_, let c): c.resume(returning: [])
+    case .entriesAfter(_, let c): c.resume(returning: [])
+    case .openActionsAtLaunch(let c): c.resume(returning: [])
+    case .actionRecords(let c): c.resume(returning: [])
+    case .status(let c): c.resume(returning: ActivityLogStatus(lastSequence: 0, lastActionID: nil, lastErrorID: nil))
+    case .clear(_, _, let c): c.resume()
+    case .subscribe(let c): c.finish()
+    }
+  }
 }
 
 /// The activity log's facade (D§4.13): synchronous, callable from any isolation, never awaits.
@@ -190,8 +206,7 @@ final class ActivityLog: Sendable {
   ) -> ActionID {
     let rendered = render(m)
     return state.withLock { s in
-      let id = Self.actionID(counter: s.nextCounter)
-      s.nextCounter &+= 1
+      let id = Self.takeID(&s)
       let entry = ActivityEntry(
         timestamp: clock(), actionID: id, parentID: parent, name: name, kind: .begin, origin: origin,
         relatedID: relatedID, message: rendered.fileText)
@@ -216,13 +231,23 @@ final class ActivityLog: Sendable {
     await withCheckedContinuation { c in send(.flush(c)) }
   }
 
-  /// Flushes, giving up after `timeout` so a stuck write can't hold up the caller.
+  /// Flushes, giving up after `timeout` so a stuck write can't hold up the caller (an expiring
+  /// background task must end on time). The flush and a timer race to resume one waiter; the
+  /// loser finds it already resumed. (A task group can't do this: it waits for every child before
+  /// it returns, and a waiting flush can't be cancelled.)
   func flush(timeout: Duration) async {
-    await withTaskGroup(of: Void.self) { group in
-      group.addTask { await self.flush() }
-      group.addTask { try? await Task.sleep(for: timeout) }
-      await group.next()
-      group.cancelAll()
+    let waiter = Locked<CheckedContinuation<Void, Never>?>(nil)
+    let resumeOnce: @Sendable () -> Void = {
+      let c = waiter.withLock { c in
+        defer { c = nil }
+        return c
+      }
+      c?.resume()
+    }
+    await withCheckedContinuation { c in
+      waiter.withLock { $0 = c }
+      Task { await self.flush(); resumeOnce() }
+      Task { try? await Task.sleep(for: timeout); resumeOnce() }
     }
   }
 
@@ -253,11 +278,11 @@ final class ActivityLog: Sendable {
   /// Keeps the begins of open actions, then writes the Log cleared action.
   func clear() async {
     await withCheckedContinuation { c in
-      state.withLock { s in
-        let id = Self.actionID(counter: s.nextCounter)
-        s.nextCounter &+= 1
-        continuation.yield(.clear(id: id, timestamp: clock(), c))
+      let event = state.withLock { s in
+        let event = ActivityLogEvent.clear(id: Self.takeID(&s), timestamp: clock(), c)
+        return Self.isTerminated(continuation.yield(event)) ? event : nil
       }
+      event?.answerUndelivered()
     }
   }
 
@@ -269,7 +294,21 @@ final class ActivityLog: Sendable {
   }
 
   private func send(_ event: ActivityLogEvent) {
-    state.withLock { _ in _ = continuation.yield(event) }
+    let undelivered = state.withLock { _ in Self.isTerminated(continuation.yield(event)) }
+    if undelivered { event.answerUndelivered() }
+  }
+
+  private static func isTerminated(_ result: AsyncStream<ActivityLogEvent>.Continuation.YieldResult) -> Bool {
+    if case .terminated = result { return true }
+    return false
+  }
+
+  /// The next action ID. Counter 0 is skipped: its ID, `0000`, is the placeholder for "no action".
+  private static func takeID(_ s: inout State) -> ActionID {
+    if s.nextCounter == 0 { s.nextCounter = 1 }
+    let id = actionID(counter: s.nextCounter)
+    s.nextCounter &+= 1
+    return id
   }
 
   // MARK: Startup
