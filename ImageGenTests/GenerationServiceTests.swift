@@ -179,6 +179,31 @@ struct GenerationServiceTests {
     }
   }
 
+  @Test func heicUploadSentAsJpeg() async throws {
+    let h = try H()
+    try h.respond("Responses/resp_text_image.json")
+    let conv = try await h.s.store.createConversation()
+    let id = UUID()
+    let heic = ImageFactory.heic(width: 64, height: 48)
+    let original = h.s.files.stagingURL(id, ext: "heic")
+    try FileStore.createDirectory(h.s.files.stagingDir)
+    try heic.write(to: original)
+    let preparedDir = h.s.files.stagingDir.appendingPathComponent("prepared")
+    try FileStore.createDirectory(preparedDir)
+    let prepared = try await ImagePreprocessor.prepare(source: original, maxLongEdge: 2048, destinationDir: preparedDir, id: id)
+    let staged = StagedAttachment(
+      id: id, origin: .photos, originalURL: original, originalMimeType: "image/heic", originalByteCount: heic.count,
+      pixelWidth: 64, pixelHeight: 48, originalFilename: "IMG_0001.HEIC", prepared: prepared)
+    _ = try await h.sendAndWait(h.draft(conv, "edit this", attachments: [staged]))
+    let sent = try #require(H.images(in: h.sentBodies[0]).first)
+    #expect(sent.mime == "image/jpeg")
+    #expect(sent.data == (try Data(contentsOf: h.s.files.url(relative: try #require(try await h.s.store.inputSnapshots([id]).first?.prepared).preparedRelativePath))))
+    let kept = try #require(try await h.s.store.inputSnapshots([id]).first)
+    #expect(kept.originalMimeType == "image/heic")
+    #expect(kept.originalRelativePath.hasSuffix(".heic"))
+    #expect(try Data(contentsOf: h.s.files.url(relative: kept.originalRelativePath)) == heic)
+  }
+
   @Test func modelImagesOrdinalFollowsPartsOrder() async throws {
     let h = try H()
     h.respond(status: 200, body: try Self.textImageTextImage())

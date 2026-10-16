@@ -170,6 +170,7 @@ struct ChatView: View {
       retry: { id in Task { await model.retry(requestID: id) } },
       cancel: { _ in Task { await model.stop() } },
       editRefused: { id in Task { await model.editRefused(requestID: id) } },
+      editAndResend: { id in Task { await model.editAndResend(userMessageID: id) } },
       newChat: { Task { await model.newChat() } },
       openSettings: { model.services.navigator.showSettings = true },
       showInfo: { infoRequest = $0 },

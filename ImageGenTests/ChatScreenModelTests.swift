@@ -48,18 +48,21 @@ struct ChatScreenModelTests {
     let conv: UUID
     let model: ChatScreenModel
 
-    init() async throws {
+    init(
+      prepareUpload: (@Sendable (URL, Int, URL, UUID) async throws -> PreparedImage)? = nil
+    ) async throws {
       s = try InMemoryStore()
       probe = ActivityLogProbe(root: s.root)
       let ud = UserDefaults(suiteName: suite)!
       settings = AppSettings(defaults: ud)
       conv = try await s.store.createConversation()
       navigator.path = [conv]
-      let services = ChatServices(
+      var services = ChatServices(
         store: s.store, files: s.files, generation: generation, settings: settings, log: probe.log, connectivity: connectivity,
         activity: activity, notifications: NotificationPermission(authorizer: authorizer, defaults: ud, log: probe.log),
         navigator: navigator, thumbnails: ThumbnailService(directory: s.files.thumbnailsDir),
         copyToPasteboard: { _ in }, draftDebounce: .milliseconds(100))
+      if let prepareUpload { services.prepareUpload = prepareUpload }
       model = ChatScreenModel(conversationID: conv, services: services)
       await model.load()
     }
@@ -91,12 +94,12 @@ struct ChatScreenModelTests {
     #expect(!r.model.canSend)
     r.model.composerText = "a red fox"
     #expect(r.model.canSend)
-    r.model.trayCounts = TrayCounts(ready: 1, pending: 1, failed: 0)
+    r.model.tray = [.fake(.ready), .fake(.preparing)]
     #expect(!r.model.canSend)
-    r.model.trayCounts = TrayCounts(ready: 1, pending: 0, failed: 0)
+    r.model.tray = [.fake(.ready)]
     r.model.composerText = ""
     #expect(r.model.canSend)
-    r.model.trayCounts = TrayCounts(ready: 0, pending: 0, failed: 0)
+    r.model.tray = []
     r.model.composerText = "x"
     let record = try await r.s.send(r.conv, prompt: "running")
     try await r.s.store.updateRequest(record.requestID) { $0.state = .inFlight }
@@ -200,7 +203,7 @@ struct ChatScreenModelTests {
     #expect(r.model.showsPinChip)
     #expect(!r.model.pinChipDimmed)
     #expect(!r.model.showsImplicitChip)
-    r.model.trayCounts = TrayCounts(ready: 1, pending: 0, failed: 0)
+    r.model.tray = [.fake(.ready)]
     #expect(r.model.pinChipDimmed)
     await r.model.unpin()
     #expect(!r.model.showsPinChip)

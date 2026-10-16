@@ -15,8 +15,10 @@ struct ContextChips: View {
     if model.showsPinChip {
       HStack(spacing: 8) {
         SquareThumbnail(asset: asset(model.pinnedImageID), size: 28, corner: 6)
+          .opacity(model.pinChipDimmed ? 0.4 : 1)
         Text(model.pinChipDimmed ? "Pinned image replaced by attachments" : "Editing from pinned image")
           .font(.footnote)
+          .foregroundStyle(model.pinChipDimmed ? .secondary : .primary)
         Button {
           Task { await model.unpin() }
         } label: {
@@ -25,8 +27,8 @@ struct ContextChips: View {
         .accessibilityLabel("Unpin")
       }
       .padding(.horizontal, 10).padding(.vertical, 6)
+      // Dimmed through its content: opacity on a glass view inside a GlassEffectContainer has no effect.
       .glassEffect()
-      .opacity(model.pinChipDimmed ? 0.5 : 1)
     } else if model.showsImplicitChip {
       HStack(spacing: 8) {
         SquareThumbnail(asset: asset(model.implicitBaseID), size: 28, corner: 6)

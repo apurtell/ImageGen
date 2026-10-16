@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A message's long-press menu (D§3.6). M6 adds Edit & Resend in its marked section.
+/// A message's long-press menu (D§3.6).
 struct MessageActionsMenu: View {
   let message: Message
   let request: GenerationRequest?
@@ -8,6 +8,7 @@ struct MessageActionsMenu: View {
   let onCopy: (String, ChatScreenModel.CopyKind) -> Void
   let onRegenerate: () -> Void
   let onInfo: () -> Void
+  let onEditAndResend: () -> Void
   let onDelete: () -> Void
 
   var body: some View {
@@ -16,6 +17,7 @@ struct MessageActionsMenu: View {
         Button("Copy Prompt", systemImage: "doc.on.doc") { onCopy(message.text, .prompt) }
       }
       // MARK: M6 items
+      Button("Edit & Resend", systemImage: "pencil", action: onEditAndResend)
       Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
     } else {
       if !message.text.isEmpty {

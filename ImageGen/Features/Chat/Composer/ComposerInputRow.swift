@@ -1,20 +1,33 @@
 import SwiftUI
 
-/// + (attachments arrive in M6), the text field, and Send or Stop (D§3.5).
+/// The + menu, the PasteButton, the text field, and Send or Stop (D§3.5).
 struct ComposerInputRow: View {
   @Bindable var model: ChatScreenModel
   @FocusState private var focused: Bool
+  @State private var showPhotos = false
+  @State private var showFiles = false
+  @State private var pasteboardHasImages = false
 
   var body: some View {
     HStack(alignment: .bottom, spacing: 8) {
       Menu {
-        Button("Photo Library", systemImage: "photo.on.rectangle") {}.disabled(true)
-        Button("Files", systemImage: "folder") {}.disabled(true)
+        Button("Photo Library", systemImage: "photo.on.rectangle") { showPhotos = true }
+          .disabled(!model.canAddAttachments)
+        Button("Files", systemImage: "folder") { showFiles = true }
+          .disabled(!model.canAddAttachments)
+        if !model.canAddAttachments {
+          Text(ChatScreenModel.fullTrayHint)
+        }
       } label: {
         Image(systemName: "plus").font(.title3).frame(width: 36, height: 36)
       }
       .glassEffect(.regular.interactive(), in: .circle)
+      .menuOrder(.fixed)
       .accessibilityLabel("Add images")
+
+      if pasteboardHasImages && model.canAddAttachments {
+        ComposerPasteButton(model: model)
+      }
 
       TextField("Describe an image or an edit", text: $model.composerText, axis: .vertical)
         .lineLimit(1...6)
@@ -43,6 +56,8 @@ struct ComposerInputRow: View {
         .accessibilityLabel("Send")
       }
     }
+    .modifier(PasteboardImageWatcher(hasImages: $pasteboardHasImages))
+    .modifier(AttachmentImporters(model: model, showPhotos: $showPhotos, showFiles: $showFiles))
     .onChange(of: model.isTextFieldFocused) { _, v in focused = v }
     .onChange(of: focused) { _, v in model.isTextFieldFocused = v }
   }

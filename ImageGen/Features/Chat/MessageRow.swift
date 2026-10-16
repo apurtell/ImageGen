@@ -9,6 +9,7 @@ struct MessageRowActions {
   var retry: (UUID) -> Void
   var cancel: (UUID) -> Void
   var editRefused: (UUID) -> Void
+  var editAndResend: (UUID) -> Void
   var newChat: () -> Void
   var openSettings: () -> Void
   var showInfo: (GenerationRequest) -> Void
@@ -41,7 +42,8 @@ struct MessageRow: View {
         message: message, request: request,
         regenerateUnavailableReason: request.flatMap(actions.regenerateUnavailableReason),
         onCopy: actions.copy, onRegenerate: { if let r = request { actions.regenerate(r.id) } },
-        onInfo: { if let r = request { actions.showInfo(r) } }, onDelete: { actions.deleteMessage(message) })
+        onInfo: { if let r = request { actions.showInfo(r) } }, onEditAndResend: { actions.editAndResend(message.id) },
+        onDelete: { actions.deleteMessage(message) })
     }
   }
 }

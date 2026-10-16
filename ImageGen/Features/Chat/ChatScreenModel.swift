@@ -16,6 +16,10 @@ struct ChatServices {
   var thumbnails: ThumbnailService
   var copyToPasteboard: @MainActor (String) -> Void
   var draftDebounce: Duration = .milliseconds(500)
+  /// Prepares an upload (D§4.8 step 3); tests substitute a gated or failing one.
+  var prepareUpload: @Sendable (_ source: URL, _ maxLongEdge: Int, _ destinationDir: URL, _ id: UUID) async throws -> PreparedImage = {
+    try await ImagePreprocessor.prepare(source: $0, maxLongEdge: $1, destinationDir: $2, id: $3)
+  }
 
   var actions: ChatActions { ChatActions(store: store, generation: generation, log: log, navigator: navigator) }
 }
@@ -54,13 +58,17 @@ final class ChatScreenModel {
   /// Bumped on each send (haptic impact) and on each reply completed while visible (haptic success).
   private(set) var sendCount = 0
   private(set) var completedWhileVisible = 0
-  /// Attachments in the tray (M6 fills this; zero until then).
-  var trayCounts = TrayCounts(ready: 0, pending: 0, failed: 0)
+  /// The attachment tray, in send order (D§3.5); its files live in `Staging/`.
+  var tray: [TrayItem] = []
+  /// A transient message over the composer, such as "Up to 14 images per message".
+  private(set) var toast: String?
 
   @ObservationIgnored private var loadingDraft = false
   @ObservationIgnored private var draftTask: Task<Void, Never>?
   @ObservationIgnored private var connectivityTask: Task<Void, Never>?
   @ObservationIgnored private var lastLiveID: UUID?
+  @ObservationIgnored var trayTasks: [UUID: Task<TrayItemOutcome, Never>] = [:]
+  @ObservationIgnored private var toastTask: Task<Void, Never>?
 
   init(conversationID: UUID, services: ChatServices) {
     self.conversationID = conversationID
@@ -258,16 +266,19 @@ final class ChatScreenModel {
 
   func send() async {
     guard canSend else { return }
-    let draft = SendDraft(conversationID: conversationID, promptText: trimmedText, attachments: [], settings: effective)
+    let draft = SendDraft(
+      conversationID: conversationID, promptText: trimmedText, attachments: tray.compactMap(\.staged), settings: effective)
     sendCount += 1
     composerText = ""
     await flushDraft()
     do {
       _ = try await services.generation.send(draft)
+      tray = []
     } catch GenerationError.chatBusy {
       alertMessage = "A request is already running in this chat."
     } catch {
-      // Preparation failures are shown on the reply card.
+      // The staged files now belong to the request; preparation failures are shown on the reply card.
+      tray = []
     }
     await reload()
     await services.notifications.requestOnFirstSend()
@@ -356,31 +367,6 @@ final class ChatScreenModel {
     services.log.result(action, .success, "pasteboard written (1 item, plain text)")
   }
 
-  /// Edit & Resend (D§3.6): loads the message text into the composer, restores the pin when the
-  /// request used `.pinned` or `.latest`, and focuses the text field. A non-empty draft asks first.
-  /// M6 adds cloning the attachments.
-  func editAndResend(userMessageID: UUID, requestID: UUID? = nil, confirmed: Bool = false) async {
-    if !confirmed && !trimmedText.isEmpty {
-      pendingEdit = (userMessageID, requestID)
-      return
-    }
-    pendingEdit = nil
-    guard let info = try? await services.store.messageInfo(userMessageID), info.role == .user else { return }
-    let request = try? await services.store.requestSnapshot(requestID ?? info.requestID ?? UUID())
-    let restore: UUID? =
-      if let request, request.selectionReason == .pinned || request.selectionReason == .latest { request.inputs.first?.imageID }
-      else { nil }
-    let restorable: UUID? = if let restore, (try? await services.store.imageFile(restore)) != nil { restore } else { nil }
-    let action = services.log.begin(
-      "Edit & Resend", origin: .user,
-      "message \(Format.short(userMessageID)) · text \(info.text.count) characters · attachments to clone 0 · pin to restore \(restorable.map { "img \(Format.short($0))" } ?? "none")")
-    composerText = info.text
-    if let restorable { try? await services.store.setPin(conversationID, imageID: restorable) }
-    isTextFieldFocused = true
-    services.log.result(action, .success, "clones made 0 · clones re-prepared 0 · pin \(restorable == nil ? "not restored" : "restored")")
-    await reload()
-  }
-
   /// A refused card's Edit: the user message of the request (of the source request, for a regenerated reply).
   func editRefused(requestID: UUID) async {
     guard let origin = try? await services.store.originatingUserMessage(requestID: requestID) else { return }
@@ -404,6 +390,18 @@ final class ChatScreenModel {
     await services.actions.deleteChat(conversationID)
   }
 
+  // MARK: Toast
+
+  func showToast(_ text: String) {
+    toast = text
+    toastTask?.cancel()
+    toastTask = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(2.5))
+      guard !Task.isCancelled else { return }
+      self?.toast = nil
+    }
+  }
+
   // MARK: Draft
 
   private func scheduleDraftSave() {
@@ -419,7 +417,7 @@ final class ChatScreenModel {
     }
   }
 
-  private func flushDraft() async {
+  func flushDraft() async {
     draftTask?.cancel()
     draftTask = nil
     try? await services.store.setDraft(conversationID, text: composerText)

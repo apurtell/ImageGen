@@ -1,5 +1,6 @@
 #if DEBUG
-import Foundation
+import UIKit
+import UniformTypeIdentifiers
 
 /// The single entry point from non-DEBUG code into DebugSupport/ (plan §2.6). The Release branch
 /// below has no-op stubs with the same signatures.
@@ -31,6 +32,11 @@ enum DebugHooks {
     var keys: [String: UUID] = DemoSeeder.storedKeys()
     if options.seedDemoData {
       keys = await DemoSeeder.seedIfEmpty(store: env.store, files: env.files)
+    }
+    if options.seedPasteboardImage {
+      // Writing the pasteboard never prompts; the PasteButton then appears.
+      let jpeg = MockImageRenderer.jpeg(width: 1024, height: 768, prompt: "Pasted image", caption: "from the pasteboard")
+      UIPasteboard.general.setData(jpeg, forPasteboardType: UTType.jpeg.identifier)
     }
     guard let scene = options.scene.flatMap(SceneRoute.init(rawValue:)) else { return nil }
     return scene.launchRoute(keys: keys)

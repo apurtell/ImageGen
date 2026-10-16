@@ -8,6 +8,15 @@ enum DataStoreError: Error, Equatable {
 }
 
 /// What the Janitor needs from the store (D§4.4).
+/// An upload of a user message, as Edit & Resend clones it (M6).
+struct UploadSource: Sendable, Equatable {
+  let snapshot: InputSnapshot
+  let byteCount: Int
+  let pixelWidth: Int
+  let pixelHeight: Int
+  let originalFilename: String?
+}
+
 struct JanitorSnapshot: Sendable {
   struct RequestInfo: Sendable {
     let isTerminal: Bool
@@ -310,6 +319,17 @@ actor DataStore: ModelActor {
     guard let message = try fetchMessage(messageID) else { throw DataStoreError.messageNotFound(messageID) }
     let conv = message.conversation?.id ?? UUID()
     return message.orderedImages.map { Self.inputSnapshot($0, conversationID: conv) }
+  }
+
+  /// A user message's uploads in ordinal order, with what a tray item needs (Edit & Resend, M6).
+  func uploadSources(messageID: UUID) throws -> [UploadSource] {
+    guard let message = try fetchMessage(messageID) else { throw DataStoreError.messageNotFound(messageID) }
+    let conv = message.conversation?.id ?? UUID()
+    return message.orderedImages.filter { $0.imageOrigin != .model }.map {
+      UploadSource(
+        snapshot: Self.inputSnapshot($0, conversationID: conv), byteCount: $0.byteCount, pixelWidth: $0.pixelWidth,
+        pixelHeight: $0.pixelHeight, originalFilename: $0.originalFilename)
+    }
   }
 
   /// Snapshots of the given images, in the given order; missing ones are skipped.
