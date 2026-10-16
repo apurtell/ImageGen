@@ -68,11 +68,12 @@ struct InMemoryKeyStoreTests {
     #expect(registry.all.isEmpty)
     _ = try preloaded.read()
     #expect(registry.all == ["preloaded"])
-    try preloaded.save("saved")
-    #expect(Set(registry.all) == ["preloaded", "saved"])
+    try preloaded.save("saved-key-value")
+    #expect(Set(registry.all) == ["preloaded", "saved-key-value"])
     try preloaded.delete()
-    #expect(Set(registry.all) == ["preloaded", "saved"])
+    #expect(Set(registry.all) == ["preloaded", "saved-key-value"])
     registry.register("")
+    registry.register("short")
     #expect(registry.all.count == 2)
   }
 }

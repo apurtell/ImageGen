@@ -34,6 +34,7 @@ These were declined or deferred:
 - Streaming (`streamGenerateContent`) and the Interactions API.
 - The Files API. Everything goes inline, within the 20 MB budget.
 - Batch generation, and asking for more than one output image.
+- Editing a sent message in place (in its bubble). Edit & Resend and a refused reply's Edit load the text into the composer and send a new turn (section 3.6). In-place editing is a possible future enhancement.
 
 ### 1.4 Platform and constraints
 - iOS 26.0 minimum, iPhone only, portrait plus landscape (not upside-down). Built against the iOS 26+ SDK with Xcode 26.x or later.
@@ -275,7 +276,7 @@ This screen appears when the Keychain has no key, at first launch or after the k
   - a subtitle with the last prompt snippet (one line, secondary);
   - a relative timestamp;
   - an activity indicator when the chat has a request in flight, and a red dot when its latest request is `failed` or `refused` (both need the user's attention; `cancelled`, `interrupted`, `empty` and succeeded requests get no dot).
-- **Swipe actions:** trailing **Delete** (destructive, with a confirmation dialog: "Delete chat and its N images?") and leading **Rename**.
+- **Swipe actions:** trailing **Delete** (destructive, with a confirmation dialog anchored to the row: "Delete chat and its N images?", or "Delete this chat?" when it has none) and leading **Rename**.
 - **Context menu:** Rename and Delete.
 - **Rename** uses an alert with a `TextField`. An empty name reverts to the automatic title (`titleIsUserSet = false`).
 - **Automatic title:** the first 48 characters of the first prompt, trimmed at a word boundary. "New Chat" until the first send.
@@ -983,6 +984,7 @@ Examples (as the viewer shows them):
 | Copy | user | — | what (image, prompt, reply text); MIME type and bytes, or characters | pasteboard written (item count, type) |
 | Pin, Unpin | user | — | the chat; the image | done |
 | New chat, Rename chat, Delete chat, Delete message | user | — | the chat or message; the old and new title (private); image count; live requests to cancel | done; files removed (count, MB); `failed` if any file couldn't be removed, with the counts |
+| Delete empty chat | system | — | the chat, left with no messages (logged only when it's deleted, D§3.3) | done; or kept if a message arrived meanwhile |
 | Chat setting change | user | — | the chat; the setting (model, aspect ratio or resolution); old value → new value, or `Default` when the override is cleared; where (pill or Chat settings…) | saved; the effective value now, with any coercion |
 | Settings change | user | — | the setting; old value → new value | saved |
 | Delete all chats, Clear thumbnail cache | user | — | counts and sizes | removed counts; MB freed; `failed` if any removal failed, with the counts |
@@ -1410,3 +1412,4 @@ A test injects a sentinel key and asserts that it never appears in the log file 
     - section 4.13 table and examples: Launch's Begin holds only what's known at `AppEnvironment` creation, with the application state as a step and the result at the end of `didFinishLaunching`; new Tray change, Chat setting change and Notification permission actions (the permission is logged by the chat screen, which asks); Share is begun on tap and ended from the share sheet's completion handler; model-output inputs are described as "sent as original"; the task-identifier step is under Attempt; the retry example honors RetryInfo with no jitter (section 6); new empty-reply and partial-Attach examples; a Late completion is shown with its original action, and a successful one takes that action out of Last Error;
     - sections 3.6 and 4.9: Share presents `UIActivityViewController` (`ActivityShareSheet`) from a button instead of `ShareLink`, which has no tap or completion callback; section 3.10: the viewer uses a read-only `UITextView` (`LogTextView`) so ranges and multiple lines can be selected, stays on the action it opened with, and the Last Action rule was marked pending the user's confirmation (new section 11 Q5; since resolved by the user as the newest user-started action);
     - sections 4.1, 4.2, 5, 7, 8 and 9: `DeveloperMenuModel`, `LogTextView`, `ActivityShareSheet`, `Export/ExportLog`, `Security/SecretRegistry`; the cost and contention statement; suites 14–16 cover control-message ordering, rotation and clear with open actions, ID reseeding, truncation recovery, backup exclusion after rotation and clear, and the extended sentinel routes.
+- 2026-10-16 (M5 executed, with IMPLEMENTATION_PLAN.md change log entry for M5). Fixed in place: section 1.3 lists in-place editing of a sent message (in its bubble) as a possible future enhancement (user note); Edit & Resend keeps loading the composer. Section 3.3: the chat-list delete confirmation is anchored to its row and reads "Delete this chat?" for a chat with no images. Section 4.13: the automatic deletion of an empty chat is logged as a system "Delete empty chat" action, only when there is one to delete.

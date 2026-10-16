@@ -21,6 +21,20 @@ enum DebugHooks {
       keyStore: InMemoryKeyStore(key: "mock-key", registry: SecretRegistry()),
       description: "on (\(options.mockScenario.rawValue), \(options.mockLatency) s)")
   }
+
+  /// `-SkipNotificationPrompt 1`: unattended runs aren't blocked by the system alert.
+  static var skipNotificationPrompt: Bool { LaunchOptions.read().skipNotificationPrompt }
+
+  /// After launch: seeds demo data (`-SeedDemoData 1`), then returns where `-Scene` asks to go.
+  static func prepareLaunch(_ env: AppEnvironment) async -> LaunchRoute? {
+    let options = LaunchOptions.read()
+    var keys: [String: UUID] = DemoSeeder.storedKeys()
+    if options.seedDemoData {
+      keys = await DemoSeeder.seedIfEmpty(store: env.store, files: env.files)
+    }
+    guard let scene = options.scene.flatMap(SceneRoute.init(rawValue:)) else { return nil }
+    return scene.launchRoute(keys: keys)
+  }
 }
 #else
 import Foundation
@@ -28,5 +42,7 @@ import Foundation
 enum DebugHooks {
   static func resetBeforeLaunchIfRequested(root: URL, cachesRoot: URL) {}
   static func mockEnvironment() -> MockEnvironment? { nil }
+  static var skipNotificationPrompt: Bool { false }
+  static func prepareLaunch(_ env: AppEnvironment) async -> LaunchRoute? { nil }
 }
 #endif

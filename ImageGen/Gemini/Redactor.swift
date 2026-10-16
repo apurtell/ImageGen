@@ -64,7 +64,7 @@ enum Redactor {
   static func forLog(secrets: @escaping @Sendable () -> [String]) -> @Sendable (String) -> String {
     { text in
       var s = text
-      for secret in secrets() where !secret.isEmpty {
+      for secret in secrets() where secret.count >= 8 {
         s = s.replacingOccurrences(of: secret, with: keyRemoved)
       }
       s = replace(Patterns.keyShaped, in: s) { _ in keyRemoved }

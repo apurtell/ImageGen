@@ -8,8 +8,12 @@ final class SecretRegistry: Sendable {
 
   init() {}
 
+  /// Shorter strings aren't keys (a Gemini key is 39 characters), and removing them from every
+  /// log line would mangle ordinary words.
+  static let minimumLength = 8
+
   func register(_ secret: String) {
-    guard !secret.isEmpty else { return }
+    guard secret.count >= Self.minimumLength else { return }
     _ = secrets.withLock { $0.insert(secret) }
   }
 

@@ -18,7 +18,8 @@ final class ModelAvailabilityService {
 
   enum KeyValidation: Sendable, Equatable {
     case valid(modelCount: Int, flashListed: Bool)
-    case rejected(String)
+    /// The API message, and the `ErrorInfo` reason when there is one (`API_KEY_INVALID`).
+    case rejected(String, reason: String?)
     case unreachable(String)
   }
 
@@ -94,12 +95,12 @@ final class ModelAvailabilityService {
         "in \(Format.seconds(ContinuousClock.now - started)) · HTTP 200 · \(models.count) models · Flash \(flash ? "listed" : "not listed")"
       )
       return .valid(modelCount: models.count, flashListed: flash)
-    } catch ModelsClientError.keyRejected(let status, let apiStatus, let text) {
+    } catch ModelsClientError.keyRejected(let status, let apiStatus, let reason, let text) {
       log.result(
         action, .failed,
-        "in \(Format.seconds(ContinuousClock.now - started)) · key rejected · HTTP \(status)\(apiStatus.map { " \($0)" } ?? ""): \(private: Redactor.errorBodyForLog(text))"
+        "in \(Format.seconds(ContinuousClock.now - started)) · key rejected · HTTP \(status)\(apiStatus.map { " \($0)" } ?? "")\(reason.map { " \($0)" } ?? ""): \(private: Redactor.errorBodyForLog(text))"
       )
-      return .rejected(text)
+      return .rejected(text, reason: reason)
     } catch {
       let text = Self.describe(error)
       log.result(action, .failed, "in \(Format.seconds(ContinuousClock.now - started)) · unreachable: \(private: text)")
@@ -124,7 +125,7 @@ final class ModelAvailabilityService {
   static func describe(_ error: any Error) -> String {
     switch error {
     case ModelsClientError.unreachable(let why): "couldn't reach Google (\(why))"
-    case ModelsClientError.keyRejected(let status, _, let message): "key rejected (HTTP \(status)): \(message)"
+    case ModelsClientError.keyRejected(let status, _, _, let message): "key rejected (HTTP \(status)): \(message)"
     case ModelsClientError.notFound(let message): "not found: \(message)"
     case ModelsClientError.http(let status, let message): "HTTP \(status): \(message)"
     case ModelsClientError.malformed: "unexpected response"

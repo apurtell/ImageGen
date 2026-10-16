@@ -12,7 +12,7 @@ struct ModelInfo: Sendable, Equatable, Decodable {
 
 enum ModelsClientError: Error, Equatable {
   /// 400 `API_KEY_INVALID`, 401 or 403.
-  case keyRejected(status: Int, apiStatus: String?, message: String)
+  case keyRejected(status: Int, apiStatus: String?, reason: String?, message: String)
   /// A network error or a 5xx.
   case unreachable(String)
   case notFound(String)
@@ -83,7 +83,7 @@ struct ModelsClient: Sendable {
     let message = body?.message ?? Redactor.utf8Prefix(String(decoding: data.prefix(4096), as: UTF8.self), maxBytes: 2048)
     switch status {
     case 400 where body?.reason == "API_KEY_INVALID", 401, 403:
-      throw ModelsClientError.keyRejected(status: status, apiStatus: body?.status, message: message)
+      throw ModelsClientError.keyRejected(status: status, apiStatus: body?.status, reason: body?.reason, message: message)
     case 404:
       throw ModelsClientError.notFound(message)
     case 500...599:

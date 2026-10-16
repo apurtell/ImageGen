@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 @main
@@ -16,11 +17,11 @@ struct ImageGenApp: App {
         // Unit tests are hosted by the app; the host stays inert (plan §2.2).
         Color.clear
       } else {
-        NavigationStack {
-          Text("Chats")
-            .navigationTitle("Chats")
-        }
-        .onAppear { AppEnvironment.shared.firstFrameAppeared() }
+        RootView()
+          .environment(AppEnvironment.shared)
+          .environment(AppEnvironment.shared.navigator)
+          .environment(AppEnvironment.shared.developerMenu)
+          .modelContainer(AppEnvironment.shared.container)
       }
     }
     .onChange(of: scenePhase) { _, phase in

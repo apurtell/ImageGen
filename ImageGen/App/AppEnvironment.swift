@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftData
 import UIKit
 
@@ -15,7 +16,7 @@ struct MockEnvironment: Sendable {
 /// and `didFinishLaunching` runs first, so it also exists on a background relaunch. The activity
 /// log comes first and the Launch action begins before anything else is built; the transport
 /// creates its event stream before its session; the Reconciler starts in `didFinishLaunching`.
-@MainActor
+@Observable @MainActor
 final class AppEnvironment {
   struct Configuration {
     var root: URL
@@ -35,6 +36,8 @@ final class AppEnvironment {
     var connectivity: any ConnectivityMonitoring = NWPathConnectivityMonitor()
     var reconcilerSleeper: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     var transportSleeper: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+    var notificationAuthorizer: any NotificationAuthorizing = UserNotificationAuthorizer()
+    var skipNotificationPrompt = false
   }
 
   static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -61,12 +64,15 @@ final class AppEnvironment {
   let modelsClient: ModelsClient
   let availability: ModelAvailabilityService
   let connectivity: any ConnectivityMonitoring
+  let navigator: Navigator
+  let developerMenu: DeveloperMenuModel
+  let notificationPermission: NotificationPermission
 
-  private let launchStarted = ContinuousClock.now
-  private var reconcilerTask: Task<Void, Never>?
-  private var reconcilerFinished = false
-  private var firstFrameSeen = false
-  private(set) var janitorTask: Task<Janitor.Report, Never>?
+  @ObservationIgnored private let launchStarted = ContinuousClock.now
+  @ObservationIgnored private var reconcilerTask: Task<Void, Never>?
+  @ObservationIgnored private var reconcilerFinished = false
+  @ObservationIgnored private var firstFrameSeen = false
+  @ObservationIgnored private(set) var janitorTask: Task<Janitor.Report, Never>?
 
   init(_ config: Configuration) {
     if config.resetBeforeLaunch {
@@ -132,6 +138,23 @@ final class AppEnvironment {
     availability = ModelAvailabilityService(
       client: modelsClient, keyStore: keyStore, settings: settings, log: log, registry: registry)
     connectivity = config.connectivity
+    navigator = Navigator()
+    developerMenu = DeveloperMenuModel(log: log)
+    notificationPermission = NotificationPermission(
+      authorizer: config.notificationAuthorizer, defaults: config.defaults, log: log, skip: config.skipNotificationPrompt)
+    navigator.needsOnboarding = ((try? keyStore.read()) ?? nil)?.isEmpty ?? true
+  }
+
+  /// What a chat screen needs.
+  func chatServices() -> ChatServices {
+    ChatServices(
+      store: store, files: files, generation: service, settings: settings, log: log, connectivity: connectivity,
+      activity: activity, notifications: notificationPermission, navigator: navigator, thumbnails: thumbnails,
+      copyToPasteboard: { UIPasteboard.general.string = $0 })
+  }
+
+  var chatActions: ChatActions {
+    ChatActions(store: store, generation: service, log: log, navigator: navigator)
   }
 
   // MARK: Lifecycle
@@ -223,6 +246,7 @@ final class AppEnvironment {
       transportConfiguration: URLSessionTransport.backgroundConfiguration(bundleID: bundleID),
       sessionDescription: "background session", makeKeyStore: { KeychainStore(registry: $0) }, defaults: .standard,
       defaultsSuite: nil)
+    config.skipNotificationPrompt = DebugHooks.skipNotificationPrompt
     if let mock = DebugHooks.mockEnvironment() {
       config.transportConfiguration = mock.transportConfiguration
       config.sessionDescription = "ephemeral session (mock)"

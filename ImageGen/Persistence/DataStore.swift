@@ -88,6 +88,10 @@ actor DataStore: ModelActor {
     return result
   }
 
+  func messageCount(conv id: UUID) throws -> Int {
+    try fetchConversation(id).messages.count
+  }
+
   /// Deletes a chat with no messages; returns whether it did.
   @discardableResult
   func deleteIfEmpty(_ id: UUID) throws -> Bool {
@@ -349,6 +353,41 @@ actor DataStore: ModelActor {
   /// A message's parts (to check a reply).
   func messageParts(_ id: UUID) throws -> [MessagePart]? {
     try fetchMessage(id)?.parts
+  }
+
+  /// The chat's request that isn't terminal, if any.
+  func liveRequest(conv id: UUID) throws -> RequestSnapshot? {
+    guard let r = try fetchConversation(id).requests.first(where: { $0.requestState.isLive }) else { return nil }
+    return try snapshot(r)
+  }
+
+  /// The user message a request came from, following regenerate lineage; nil if it was deleted.
+  func originatingUserMessage(requestID: UUID) throws -> (id: UUID, text: String)? {
+    guard let request = try fetchRequest(requestID) else { return nil }
+    let userID = try originalUserMessageID(of: request)
+    guard let message = try fetchMessage(userID), message.messageRole == .user else { return nil }
+    return (message.id, message.text)
+  }
+
+  func draftText(conv id: UUID) throws -> String {
+    try fetchConversation(id).draftText
+  }
+
+  /// A message's text and the request it belongs to.
+  func messageInfo(_ id: UUID) throws -> (text: String, role: Role, requestID: UUID?)? {
+    guard let m = try fetchMessage(id) else { return nil }
+    return (m.text, m.messageRole, m.requestID)
+  }
+
+  /// The original file of an image, and its conversation.
+  func imageFile(_ id: UUID) throws -> (relativePath: String, mimeType: String, width: Int, height: Int)? {
+    guard let a = try fetchAsset(id) else { return nil }
+    return (a.relativePath, a.mimeType, a.pixelWidth, a.pixelHeight)
+  }
+
+  /// Number of images in a chat (for the delete confirmation).
+  func imageCount(conv id: UUID) throws -> Int {
+    try fetchConversation(id).messages.reduce(0) { $0 + $1.images.count }
   }
 
   // MARK: Deletion

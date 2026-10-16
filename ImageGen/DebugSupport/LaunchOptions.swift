@@ -35,4 +35,37 @@ struct LaunchOptions: Sendable, Equatable {
     return o
   }
 }
+
+/// `-Scene <name>` (plan §2.6).
+enum SceneRoute: Equatable {
+  case chatList
+  case chat(String)
+  case settings
+  case settingsModels
+  case viewer(String)
+  case onboarding
+
+  init?(rawValue: String) {
+    switch rawValue {
+    case "chatList": self = .chatList
+    case "settings": self = .settings
+    case "settings:models": self = .settingsModels
+    case "onboarding": self = .onboarding
+    case _ where rawValue.hasPrefix("chat:"): self = .chat(String(rawValue.dropFirst(5)))
+    case _ where rawValue.hasPrefix("viewer:"): self = .viewer(String(rawValue.dropFirst(7)))
+    default: return nil
+    }
+  }
+
+  func launchRoute(keys: [String: UUID]) -> LaunchRoute? {
+    switch self {
+    case .chatList: .chatList
+    case .chat(let key): keys[key].map { .chat($0) }
+    case .settings: .settings
+    case .settingsModels: .settingsModels
+    case .viewer(let key): keys[key].map { .viewer($0) }
+    case .onboarding: .onboarding
+    }
+  }
+}
 #endif

@@ -36,7 +36,8 @@ actor ThumbnailService {
     if let hit = cache.object(forKey: key) { return hit.image }
 
     let file = fileURL(id: id, px: px)
-    if let source = CGImageSourceCreateWithURL(file as CFURL, ImageInspector.noCache),
+    if FileManager.default.fileExists(atPath: file.path),
+      let source = CGImageSourceCreateWithURL(file as CFURL, ImageInspector.noCache),
       let image = decodeTimer.measure("thumbnail \(px)", { CGImageSourceCreateImageAtIndex(source, 0, nil) })
     {
       // Marks it recently used for the Janitor's LRU trim.

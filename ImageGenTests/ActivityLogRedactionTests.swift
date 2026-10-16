@@ -62,7 +62,7 @@ struct ActivityLogRedactionTests {
         client: rig.client, keyStore: h.keyStore, settings: AppSettings(defaults: UserDefaults(suiteName: suite)!),
         log: h.probe.log, registry: h.registry)
     }
-    #expect(await validation.validateKey(sentinel) == .rejected("API key not valid. Please pass a valid API key."))
+    #expect(await validation.validateKey(sentinel) == .rejected("API key not valid. Please pass a valid API key.", reason: "API_KEY_INVALID"))
 
     await h.probe.log.flush()
     let file = try String(contentsOf: h.probe.fileURL, encoding: .utf8)

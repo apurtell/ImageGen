@@ -48,7 +48,7 @@ struct ModelsClientTests {
   @Test func keyRejected400ApiKeyInvalid() async throws {
     let rig = Rig()
     try rig.respond(Self.list, "Errors/err_400_api_key_invalid.json", status: 400)
-    await #expect(throws: ModelsClientError.keyRejected(status: 400, apiStatus: "INVALID_ARGUMENT", message: "API key not valid. Please pass a valid API key.")) {
+    await #expect(throws: ModelsClientError.keyRejected(status: 400, apiStatus: "INVALID_ARGUMENT", reason: "API_KEY_INVALID", message: "API key not valid. Please pass a valid API key.")) {
       _ = try await rig.client.listAll(apiKey: "k")
     }
   }
@@ -59,7 +59,7 @@ struct ModelsClientTests {
     do {
       _ = try await rig.client.listAll(apiKey: "k")
       Issue.record("expected a rejection")
-    } catch ModelsClientError.keyRejected(let status, let apiStatus, _) {
+    } catch ModelsClientError.keyRejected(let status, let apiStatus, _, _) {
       #expect(status == 403)
       #expect(apiStatus == "PERMISSION_DENIED")
     }
@@ -157,7 +157,7 @@ struct ModelAvailabilityServiceTests {
     let rig = Rig(key: nil, sanitize: true)
     let typed = "AIzaSyTYPED-KEY-0123456789abcdefghijkl"
     try rig.models.respond(ModelsClientTests.list, "Errors/err_400_api_key_invalid.json", status: 400)
-    #expect(await rig.service.validateKey(typed) == .rejected("API key not valid. Please pass a valid API key."))
+    #expect(await rig.service.validateKey(typed) == .rejected("API key not valid. Please pass a valid API key.", reason: "API_KEY_INVALID"))
     #expect(rig.registry.all.contains(typed))
     let tree = await rig.probe.action(named: "Validate key")
     #expect(tree.first?.message == "GET /v1beta/models?pageSize=1000 · ephemeral session · 20 s timeout")
