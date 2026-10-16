@@ -108,6 +108,10 @@ final class AppSettings {
       maxUploadLongEdge: validLongEdge(edge ?? 2048))
   }
 
+  nonisolated static func readNotifyOnBackgroundCompletion(_ ud: UserDefaults) -> Bool {
+    ud.object(forKey: Key.notifyOnBackgroundCompletion) as? Bool ?? true
+  }
+
   nonisolated static func validLongEdge(_ edge: Int) -> Int {
     allowedLongEdges.contains(edge) ? edge : 2048
   }

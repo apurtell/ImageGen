@@ -324,13 +324,17 @@ final class ActivityLog: Sendable {
 
   // MARK: OSLog mirror
 
+  /// Lines like the viewer's (`[Send a1b2] Result: success in 14.2 s · …`); private segments read
+  /// `<private>` in the public text and follow, marked private, after it.
   static let osLogMirror: @Sendable (ActivityEntry, String, String) -> Void = { entry, publicText, privateText in
     let logger = category(for: entry.name)
-    let head = "[\(entry.name) \(entry.actionID)] \(entry.kind.rawValue)\(entry.outcome.map { " \($0.rawValue)" } ?? "")"
+    var publicEntry = entry
+    publicEntry.message = publicText
+    let line = "[\(entry.name) \(entry.actionID)] \(ActivityLogFormatter.body(publicEntry))"
     if privateText.isEmpty {
-      logger.log("\(head, privacy: .public): \(publicText, privacy: .public)")
+      logger.log("\(line, privacy: .public)")
     } else {
-      logger.log("\(head, privacy: .public): \(publicText, privacy: .public) · \(privateText, privacy: .private)")
+      logger.log("\(line, privacy: .public) · \(privateText, privacy: .private)")
     }
   }
 

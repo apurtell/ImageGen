@@ -212,6 +212,10 @@ struct RequestPatch: Sendable {
   var outputHeight: Int?
   /// A manual Retry points the request at its Retry action.
   var activityActionID: ActionID?
+  /// Added in M4: clears the previous outcome's fields (HTTP status, error status and message,
+  /// details, notices, finish and refusal reasons, output size, completion time) before the other
+  /// fields are applied, as a Retry requires (D§6).
+  var clearOutcome = false
 }
 
 // MARK: - Added in M2
@@ -235,4 +239,21 @@ struct DeletionResult: Sendable, Equatable {
   var bytesFreed: Int64 = 0
   var failures = 0
   var firstError: String?
+}
+
+// MARK: - Added in M4
+
+/// `GenerationRequest.errorStatus` values for failures that aren't API errors (API errors store the
+/// API's own status, such as `RESOURCE_EXHAUSTED`). The reply card (M5) maps these to D§3.4 rows.
+enum LocalErrorStatus: String, Sendable, CaseIterable {
+  /// No content returned (D§2.7 rules 4 and 7); `finishReason` holds the reason.
+  case empty = "EMPTY"
+  case malformed = "MALFORMED"
+  case noAPIKey = "NO_API_KEY"
+  case tooLarge = "TOO_LARGE"
+  case inputMissing = "INPUT_MISSING"
+  case diskFull = "DISK_FULL"
+  case timedOut = "TIMED_OUT"
+  case network = "NETWORK"
+  case emptyParts = "EMPTY_PARTS"
 }

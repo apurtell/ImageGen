@@ -308,6 +308,49 @@ actor DataStore: ModelActor {
     return message.orderedImages.map { Self.inputSnapshot($0, conversationID: conv) }
   }
 
+  /// Snapshots of the given images, in the given order; missing ones are skipped.
+  func inputSnapshots(_ imageIDs: [UUID]) throws -> [InputSnapshot] {
+    try imageIDs.compactMap { id in
+      try fetchAsset(id).map { Self.inputSnapshot($0, conversationID: $0.message?.conversation?.id ?? UUID()) }
+    }
+  }
+
+  /// The chat's title, for notifications.
+  func conversationTitle(_ id: UUID) throws -> String {
+    try fetchConversation(id).title
+  }
+
+  /// Whether the chat has a request that isn't terminal (one in flight per chat, D§4.6).
+  func hasLiveRequest(conv id: UUID) throws -> Bool {
+    try fetchConversation(id).requests.contains { $0.requestState.isLive }
+  }
+
+  /// The stored outcome fields of a request (for the service's logging and the tests).
+  struct OutcomeFields: Sendable, Equatable {
+    var httpStatus: Int?
+    var errorStatus: String?
+    var errorMessage: String?
+    var details: String?
+    var notices: [String]
+    var finishReason: String?
+    var refusalReason: String?
+    var outputWidth: Int?
+    var outputHeight: Int?
+  }
+
+  func outcomeFields(_ id: UUID) throws -> OutcomeFields? {
+    guard let r = try fetchRequest(id) else { return nil }
+    return OutcomeFields(
+      httpStatus: r.httpStatus, errorStatus: r.errorStatus, errorMessage: r.errorMessage, details: r.details,
+      notices: r.notices, finishReason: r.finishReason, refusalReason: r.refusalReason, outputWidth: r.outputWidth,
+      outputHeight: r.outputHeight)
+  }
+
+  /// A message's parts (to check a reply).
+  func messageParts(_ id: UUID) throws -> [MessagePart]? {
+    try fetchMessage(id)?.parts
+  }
+
   // MARK: Deletion
 
   /// Deletes one message and its image files. Deleting a user message keeps its replies; deleting
@@ -436,6 +479,20 @@ actor DataStore: ModelActor {
   }
 
   private func apply(_ p: RequestPatch, to r: GenerationRequest) {
+    if p.clearOutcome {
+      r.httpStatus = nil
+      r.errorStatus = nil
+      r.errorMessage = nil
+      r.details = nil
+      r.notices = []
+      r.finishReason = nil
+      r.refusalReason = nil
+      r.modelVersion = nil
+      r.responseID = nil
+      r.outputWidth = nil
+      r.outputHeight = nil
+      r.completedAt = nil
+    }
     if let v = p.state { r.requestState = v }
     if let v = p.attempt { r.attempt = v }
     if let v = p.autoRetriesUsed { r.autoRetriesUsed = v }

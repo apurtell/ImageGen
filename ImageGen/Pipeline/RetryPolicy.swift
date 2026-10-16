@@ -78,6 +78,11 @@ struct RetryPolicy: Sendable {
     return .retry(after: min(backoff, cap))
   }
 
+  /// Whether a transport error can be retried at all (a timeout only below the resource timeout).
+  static func isRetryable(_ code: URLError.Code) -> Bool {
+    code == .timedOut || retryableURLErrors.contains(code)
+  }
+
   /// `Retry-After` in delta-seconds, matched case-insensitively.
   static func retryAfter(_ headers: [String: String]) -> Duration? {
     guard let value = headers.first(where: { $0.key.caseInsensitiveCompare("Retry-After") == .orderedSame })?.value,

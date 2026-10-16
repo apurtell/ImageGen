@@ -674,7 +674,7 @@ Application Support/ImageGen/
   Images/<conversationID>/prepared/<imageID>-<edge>.<jpg|png>   API-ready versions (uploads, or shrunk outputs)
   Requests/<requestID>/body.json        streamed request body (kept until terminal, for retries)
   Requests/<requestID>/response-<attempt>.part     accumulated response body
-  Requests/<requestID>/response-<attempt>.complete empty marker: delegate completion received (section 4.7)
+  Requests/<requestID>/response-<attempt>.complete marker: delegate completion received; holds the HTTP status (section 4.7)
   Requests/<requestID>/out-<attempt>/<uuid>.<ext>  parser output, moved into Images/<conv>/ before the save
   Staging/<uuid>.<ext>                  composer attachments not yet sent (+ prepared/)
   Logs/activity.jsonl                   activity log, JSON Lines (section 4.13); excluded from backup
