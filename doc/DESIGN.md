@@ -1054,7 +1054,7 @@ A test injects a sentinel key and asserts that it never appears in the log file 
 |---|---|---|
 | Views, `ChatScreenModel`, `AppSettings`, `ModelAvailability`, `LogViewerModel`, `DeveloperMenuModel`, `BackgroundEventsRelay`, `NotificationRouter` | `@MainActor` | `@Observable` classes |
 | `@Model` classes | nonisolated, non-Sendable | used only inside the `ModelContext` that fetched them |
-| `DataStore` | `@ModelActor actor` | all background writes; API takes and returns `UUID`s and Sendable snapshots (`RequestSnapshot`, `InputSnapshot`) |
+| `DataStore` | `ModelActor` actor (conformed by hand, so its initializer can also take the `FileStore`) | all background writes; API takes and returns `UUID`s and Sendable snapshots (`RequestSnapshot`, `InputSnapshot`) |
 | `GenerationService` | `actor` | single writer of request state; consumes the transport's event stream in one task, one event at a time, so `.finishedEvents` is handled only after every earlier completion |
 | `URLSessionTransport`, `ResponseAccumulator` | `final class: Sendable` with `Mutex` | delegate callbacks on a private serial queue; synchronous file appends; events yielded synchronously into one ordered `AsyncStream` (no per-callback `Task`, so there's no ordering race) |
 | `ConnectivityMonitor`, `BackgroundTaskProvider` | `Sendable` classes; UI-facing state published on `@MainActor` | `UIApplication` calls hop to the main actor |

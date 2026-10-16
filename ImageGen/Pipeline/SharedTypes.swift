@@ -213,3 +213,26 @@ struct RequestPatch: Sendable {
   /// A manual Retry points the request at its Retry action.
   var activityActionID: ActionID?
 }
+
+// MARK: - Added in M2
+
+/// A reply image whose file `GenerationService` has already moved into `Images/<conv>/`.
+/// `completeReply` gives each one `ordinal` = its index (D§4.3).
+struct ReplyImage: Sendable, Equatable {
+  let id: UUID
+  let relativePath: String
+  let mimeType: String
+  let byteCount: Int
+  let pixelWidth: Int
+  let pixelHeight: Int
+}
+
+/// What a delete removed, for the Delete chat / Delete message / Delete all chats results (D§4.13).
+struct DeletionResult: Sendable, Equatable {
+  /// Non-terminal requests whose records were deleted; the caller cancels their tasks.
+  var liveRequestIDs: [UUID] = []
+  var filesRemoved = 0
+  var bytesFreed: Int64 = 0
+  var failures = 0
+  var firstError: String?
+}
