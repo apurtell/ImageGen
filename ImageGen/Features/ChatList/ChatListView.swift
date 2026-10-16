@@ -5,7 +5,9 @@ import SwiftUI
 struct ChatListView: View {
   @Environment(AppEnvironment.self) private var env
   @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
-  @State private var renaming: Conversation?
+  /// The chat whose title is being edited in place, and the text so far.
+  @State private var editingID: UUID?
+  @State private var titleDraft = ""
   @State private var deleting: Conversation?
 
   var body: some View {
@@ -22,17 +24,27 @@ struct ChatListView: View {
       } else {
         List {
           ForEach(conversations) { conversation in
-            NavigationLink(value: conversation.id) {
-              ChatRow(conversation: conversation)
+            Group {
+              if editingID == conversation.id {
+                // No link while editing, so taps on the field and its buttons don't open the chat.
+                ChatRow(
+                  conversation: conversation,
+                  titleEditing: ChatRow.TitleEditing(
+                    text: $titleDraft, onSave: { saveTitle(conversation) }, onCancel: cancelTitle))
+              } else {
+                NavigationLink(value: conversation.id) {
+                  ChatRow(conversation: conversation)
+                }
+              }
             }
             .swipeActions(edge: .trailing) {
               Button("Delete", role: .destructive) { deleting = conversation }
             }
             .swipeActions(edge: .leading) {
-              Button("Rename") { renaming = conversation }.tint(.indigo)
+              Button("Rename") { beginTitle(conversation) }.tint(.indigo)
             }
             .contextMenu {
-              Button("Rename", systemImage: "pencil") { renaming = conversation }
+              Button("Rename", systemImage: "pencil") { beginTitle(conversation) }
               Button("Delete", systemImage: "trash", role: .destructive) { deleting = conversation }
             }
             // On the row, so the popover points at the chat being deleted.
@@ -64,12 +76,25 @@ struct ChatListView: View {
           .accessibilityLabel("New Chat")
       }
     }
-    .renameAlert(
-      isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
-      currentTitle: renaming?.title ?? ""
-    ) { name in
-      if let id = renaming?.id { Task { await env.chatActions.rename(id, to: name) } }
-    }
+  }
+
+  // MARK: In-place rename
+
+  private func beginTitle(_ conversation: Conversation) {
+    titleDraft = conversation.title
+    editingID = conversation.id
+  }
+
+  private func saveTitle(_ conversation: Conversation) {
+    guard editingID == conversation.id else { return }
+    editingID = nil
+    guard let name = TitleEdit.change(draft: titleDraft, current: conversation.title) else { return }
+    let id = conversation.id
+    Task { await env.chatActions.rename(id, to: name) }
+  }
+
+  private func cancelTitle() {
+    editingID = nil
   }
 
   static func deleteTitle(_ conversation: Conversation) -> String {

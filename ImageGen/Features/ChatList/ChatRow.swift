@@ -2,7 +2,15 @@ import SwiftUI
 
 /// One chat in the list (D§3.3): thumbnail, title, last prompt, time, and status.
 struct ChatRow: View {
+  /// The title edited in place, replacing the title and time while it's set.
+  struct TitleEditing {
+    var text: Binding<String>
+    var onSave: () -> Void
+    var onCancel: () -> Void
+  }
+
   let conversation: Conversation
+  var titleEditing: TitleEditing?
 
   private var messages: [Message] { conversation.messages.sorted { $0.sequence < $1.sequence } }
 
@@ -27,10 +35,14 @@ struct ChatRow: View {
       SquareThumbnail(asset: latestImage, size: 44)
       VStack(alignment: .leading, spacing: 2) {
         HStack {
-          Text(conversation.title).font(.headline).lineLimit(1)
-          Spacer(minLength: 4)
-          Text(conversation.updatedAt, format: .relative(presentation: .named))
-            .font(.caption).foregroundStyle(.secondary)
+          if let editing = titleEditing {
+            InlineTitleField(text: editing.text, onSave: editing.onSave, onCancel: editing.onCancel)
+          } else {
+            Text(conversation.title).font(.headline).lineLimit(1)
+            Spacer(minLength: 4)
+            Text(conversation.updatedAt, format: .relative(presentation: .named))
+              .font(.caption).foregroundStyle(.secondary)
+          }
         }
         HStack {
           Text(snippet.isEmpty ? " " : snippet)

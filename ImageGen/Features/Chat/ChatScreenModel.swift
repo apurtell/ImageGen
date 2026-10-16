@@ -386,6 +386,28 @@ final class ChatScreenModel {
     await reload()
   }
 
+  // MARK: In-place title edit
+
+  /// The title being edited in place (long-press on the navigation title), or nil.
+  var titleDraft: String?
+  var isEditingTitle: Bool { titleDraft != nil }
+
+  func beginTitleEdit() {
+    titleDraft = title
+  }
+
+  /// Renames when the text changed; an empty name reverts to the automatic title, as in the alert.
+  func commitTitleEdit() async {
+    guard let draft = titleDraft else { return }
+    titleDraft = nil
+    guard let name = TitleEdit.change(draft: draft, current: title) else { return }
+    await rename(to: name)
+  }
+
+  func cancelTitleEdit() {
+    titleDraft = nil
+  }
+
   func deleteChat() async {
     await services.actions.deleteChat(conversationID)
   }

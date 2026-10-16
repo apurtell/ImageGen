@@ -352,6 +352,58 @@ struct ChatScreenModelTests {
     #expect(!(await r.probe.entries().contains { $0.name == "Delete empty chat" }))
   }
 
+  @Test func inlineTitleEditCommitsRename() async throws {
+    let r = try await Rig()
+    try await r.s.store.rename(r.conv, to: "Lighthouse")
+    await r.model.reload()
+    r.model.beginTitleEdit()
+    #expect(r.model.isEditingTitle)
+    #expect(r.model.titleDraft == "Lighthouse")
+    r.model.titleDraft = "  Harbor at night  "
+    await r.model.commitTitleEdit()
+    #expect(!r.model.isEditingTitle)
+    #expect(r.model.title == "Harbor at night")
+    #expect(try await r.s.store.conversationTitle(r.conv) == "Harbor at night")
+    let rename = await r.probe.action(named: "Rename chat")
+    #expect(rename.first?.message == "chat \(Format.short(r.conv)) · \"Lighthouse\" → \"Harbor at night\"")
+    #expect(rename.last?.outcome == .success)
+  }
+
+  @Test func inlineTitleEditCancelKeepsTitle() async throws {
+    let r = try await Rig()
+    try await r.s.store.rename(r.conv, to: "Lighthouse")
+    await r.model.reload()
+    r.model.beginTitleEdit()
+    r.model.titleDraft = "Something else"
+    r.model.cancelTitleEdit()
+    #expect(!r.model.isEditingTitle)
+    await r.model.commitTitleEdit()
+    #expect(try await r.s.store.conversationTitle(r.conv) == "Lighthouse")
+    #expect(await r.probe.action(named: "Rename chat").isEmpty)
+  }
+
+  @Test func inlineTitleEditUnchangedIsNotLogged() async throws {
+    let r = try await Rig()
+    try await r.s.store.rename(r.conv, to: "Lighthouse")
+    await r.model.reload()
+    r.model.beginTitleEdit()
+    r.model.titleDraft = "Lighthouse "
+    await r.model.commitTitleEdit()
+    #expect(!r.model.isEditingTitle)
+    #expect(await r.probe.action(named: "Rename chat").isEmpty)
+  }
+
+  @Test func inlineTitleEditEmptyRevertsToAutomaticTitle() async throws {
+    let r = try await Rig()
+    try await r.s.send(r.conv, prompt: "a red fox in the snow")
+    try await r.s.store.rename(r.conv, to: "Fox")
+    await r.model.reload()
+    r.model.beginTitleEdit()
+    r.model.titleDraft = "   "
+    await r.model.commitTitleEdit()
+    #expect(r.model.title == "a red fox in the snow")
+  }
+
   @Test func chatSettingChangesLogged() async throws {
     let r = try await Rig()
     await r.model.setAspect(.r1x1, from: .pill)
@@ -385,5 +437,14 @@ struct ChatScreenModelTests {
     #expect(actions.last?.message == "granted · authorization authorized")
     #expect(r.authorizer.calls.value == 1)
     #expect(ActivityLogQuery.lastAction(await r.probe.records()) == send)
+  }
+}
+
+@Suite(.tags(.pure))
+struct TitleEditTests {
+  @Test func changeRule() {
+    #expect(TitleEdit.change(draft: "  Harbor  ", current: "Lighthouse") == "Harbor")
+    #expect(TitleEdit.change(draft: "Lighthouse ", current: "Lighthouse") == nil)
+    #expect(TitleEdit.change(draft: "   ", current: "Lighthouse") == "")
   }
 }

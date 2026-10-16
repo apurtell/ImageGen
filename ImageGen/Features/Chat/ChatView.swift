@@ -45,11 +45,24 @@ struct ChatView: View {
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .principal) {
-        Button { renaming = true } label: {
+        if model.isEditingTitle {
+          InlineTitleField(
+            text: Binding(get: { model.titleDraft ?? "" }, set: { model.titleDraft = $0 }),
+            onSave: { Task { await model.commitTitleEdit() } }, onCancel: { model.cancelTitleEdit() }
+          )
+          .frame(width: 210)
+          .padding(.horizontal, 12).padding(.vertical, 6)
+          .glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+          // Tap opens the Rename alert; long-press edits the title in place.
           Text(model.title).font(.headline).lineLimit(1)
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 0.4) { model.beginTitleEdit() }
+            .onTapGesture { renaming = true }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel("Rename \(model.title)")
+            .accessibilityAction(named: "Edit title in place") { model.beginTitleEdit() }
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Rename \(model.title)")
       }
       ToolbarItemGroup(placement: .topBarTrailing) {
         DeveloperMenu()
@@ -98,6 +111,7 @@ struct ChatView: View {
     .sheet(item: $infoRequest) { ReplyInfoSheet(request: $0) }
     .sheet(item: $details) { DetailsSheet(text: $0.text) }
     .sensoryFeedback(.impact, trigger: model.sendCount)
+    .sensoryFeedback(.selection, trigger: model.isEditingTitle) { _, editing in editing }
     .sensoryFeedback(.success, trigger: model.completedWhileVisible)
     .task { await model.onAppear() }
     .onDisappear { Task { await model.onDisappear() } }
