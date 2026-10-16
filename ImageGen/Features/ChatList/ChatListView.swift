@@ -35,6 +35,11 @@ struct ChatListView: View {
                 NavigationLink(value: conversation.id) {
                   ChatRow(conversation: conversation)
                 }
+                // Long-press edits the title in place. Simultaneous, so a tap still opens the chat
+                // (an exclusive long-press on the label swallowed the link's tap).
+                .simultaneousGesture(
+                  LongPressGesture(minimumDuration: 0.5).onEnded { _ in beginTitle(conversation) })
+                .accessibilityAction(named: "Rename") { beginTitle(conversation) }
               }
             }
             .swipeActions(edge: .trailing) {
@@ -42,10 +47,6 @@ struct ChatListView: View {
             }
             .swipeActions(edge: .leading) {
               Button("Rename") { beginTitle(conversation) }.tint(.indigo)
-            }
-            .contextMenu {
-              Button("Rename", systemImage: "pencil") { beginTitle(conversation) }
-              Button("Delete", systemImage: "trash", role: .destructive) { deleting = conversation }
             }
             // On the row, so the popover points at the chat being deleted.
             .confirmationDialog(
@@ -64,6 +65,7 @@ struct ChatListView: View {
         .listStyle(.plain)
       }
     }
+    .sensoryFeedback(.selection, trigger: editingID) { _, id in id != nil }
     .navigationTitle("Chats")
     .toolbar {
       ToolbarItem(placement: .topBarLeading) {

@@ -277,7 +277,7 @@ This screen appears when the Keychain has no key, at first launch or after the k
   - a relative timestamp;
   - an activity indicator when the chat has a request in flight, and a red dot when its latest request is `failed` or `refused` (both need the user's attention; `cancelled`, `interrupted`, `empty` and succeeded requests get no dot).
 - **Swipe actions:** trailing **Delete** (destructive, with a confirmation dialog anchored to the row: "Delete chat and its N images?", or "Delete this chat?" when it has none) and leading **Rename**, which edits the title in place in the row.
-- **Context menu** (long-press a row): Rename (edits the title in place in the row) and Delete.
+- **Long-press a row** to edit its title in place (no context menu; a tap still opens the chat). Delete is on the trailing swipe only.
 - **Rename in place:** the row's title becomes a focused text field with its text selected, plus ✕ and ✓. Return or ✓ saves; ✕ or moving focus away cancels; an unchanged name does nothing. An empty name reverts to the automatic title (`titleIsUserSet = false`), as it does in the Rename alert (section 3.4).
 - **Automatic title:** the first 48 characters of the first prompt, trimmed at a word boundary. "New Chat" until the first send.
 - **Empty state:** a `ContentUnavailableView` reading "No chats yet", with a New Chat button.
@@ -1415,3 +1415,4 @@ A test injects a sentinel key and asserts that it never appears in the log file 
 - 2026-10-16 (M5 executed, with IMPLEMENTATION_PLAN.md change log entry for M5). Fixed in place: section 1.3 lists in-place editing of a sent message (in its bubble) as a possible future enhancement (user note); Edit & Resend keeps loading the composer. Section 3.3: the chat-list delete confirmation is anchored to its row and reads "Delete this chat?" for a chat with no images. Section 4.13: the automatic deletion of an empty chat is logged as a system "Delete empty chat" action, only when there is one to delete.
 - 2026-10-16 (M7 executed). Section 4.9: Save to Files exports an `ImageFileDocument` (the original file in a `FileWrapper`, named with the suggested name) instead of the `ImageFile` Transferable item, which crashed inside SwiftUI on iOS 26.5; the bytes are unchanged.
 - 2026-10-16 (user request). Sections 3.3 and 3.4: chats can be renamed in place. In the chat list, Rename (context menu or swipe) edits the row's title in place; on the chat screen, long-pressing the title edits it in place in the navigation bar, and tapping it still opens the Rename alert.
+- 2026-10-16 (user request). Section 3.3: long-pressing a chat-list row edits its title in place directly; the row's context menu is removed, so Delete is on the trailing swipe only.
