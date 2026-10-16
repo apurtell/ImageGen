@@ -38,6 +38,12 @@ enum DebugHooks {
       let jpeg = MockImageRenderer.jpeg(width: 1024, height: 768, prompt: "Pasted image", caption: "from the pasteboard")
       UIPasteboard.general.setData(jpeg, forPasteboardType: UTType.jpeg.identifier)
     }
+    if options.orientation == "landscape" {
+      await MainActor.run {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?
+          .requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
+      }
+    }
     guard let scene = options.scene.flatMap(SceneRoute.init(rawValue:)) else { return nil }
     return scene.launchRoute(keys: keys)
   }

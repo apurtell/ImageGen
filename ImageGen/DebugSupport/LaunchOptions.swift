@@ -19,6 +19,8 @@ struct LaunchOptions: Sendable, Equatable {
   var forceNotificationState: String?
   var skipNotificationPrompt = false
   var seedLargeChat = false
+  /// `-Orientation landscape`: rotates the scene at launch (screenshots; the simulator tool can't rotate).
+  var orientation: String?
 
   static func read(_ ud: UserDefaults = .standard) -> LaunchOptions {
     var o = LaunchOptions()
@@ -32,6 +34,7 @@ struct LaunchOptions: Sendable, Equatable {
     o.forceNotificationState = ud.string(forKey: "ForceNotificationState")
     o.skipNotificationPrompt = ud.bool(forKey: "SkipNotificationPrompt")
     o.seedLargeChat = ud.bool(forKey: "SeedLargeChat")
+    o.orientation = ud.string(forKey: "Orientation")
     return o
   }
 }

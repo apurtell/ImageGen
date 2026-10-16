@@ -13,7 +13,8 @@ struct ChatView: View {
   @State private var infoRequest: GenerationRequest?
   @State private var details: DetailsText?
   @State private var deletingMessage: Message?
-  @State private var viewerPlaceholder = false
+  @State private var viewer: ViewerRequest?
+  @State private var exporter: ImageExportModel
   @State private var awayFromBottom = false
   @State private var settledLastID: UUID?
 
@@ -25,6 +26,7 @@ struct ChatView: View {
   init(conversationID: UUID, services: ChatServices) {
     self.conversationID = conversationID
     _model = State(initialValue: ChatScreenModel(conversationID: conversationID, services: services))
+    _exporter = State(initialValue: ImageExportModel(log: services.log))
     _messages = Query(filter: #Predicate<Message> { $0.conversation?.id == conversationID }, sort: \Message.sequence)
     _requests = Query(filter: #Predicate<GenerationRequest> { $0.conversation?.id == conversationID }, sort: \GenerationRequest.createdAt)
   }
@@ -86,7 +88,12 @@ struct ChatView: View {
     } message: {
       Text(model.alertMessage ?? "")
     }
-    .alert("The image viewer arrives in a later version.", isPresented: $viewerPlaceholder) { Button("OK", role: .cancel) {} }
+    .modifier(ImageExportPresenter(model: exporter, toastOffset: 8))
+    .fullScreenCover(item: $viewer) { request in
+      ImageViewer(request: request, thumbnails: model.services.thumbnails, log: model.services.log) { id in
+        Task { await model.pin(id) }
+      }
+    }
     .sheet(isPresented: $showChatSettings) { ChatSettingsSheet(model: model) }
     .sheet(item: $infoRequest) { ReplyInfoSheet(request: $0) }
     .sheet(item: $details) { DetailsSheet(text: $0.text) }
@@ -149,6 +156,23 @@ struct ChatView: View {
     }
   }
 
+  private func exportItem(_ asset: ImageAsset, files: FileStore) -> ExportItem {
+    ExportItem(
+      id: asset.id, url: files.url(relative: asset.relativePath), mimeType: asset.mimeType, byteCount: asset.byteCount,
+      pixelWidth: asset.pixelWidth, pixelHeight: asset.pixelHeight, createdAt: asset.createdAt)
+  }
+
+  /// The images of the message holding `id`, in order, with their request's settings.
+  private func viewerRequest(startingAt id: UUID) -> ViewerRequest? {
+    guard let message = messages.first(where: { $0.images.contains { $0.id == id } }) else { return nil }
+    let files = model.services.files
+    let settings = message.requestID.flatMap { requestsByID[$0] }?.recordedSettings
+    let images = message.orderedImages.map {
+      ViewerImage(item: exportItem($0, files: files), origin: $0.imageOrigin, settings: settings)
+    }
+    return ViewerRequest(images: images, startID: id)
+  }
+
   private func userMessageExists(for request: GenerationRequest?) -> Bool {
     guard let request else { return true }
     var current: GenerationRequest? = request
@@ -177,7 +201,8 @@ struct ChatView: View {
       showDetails: { details = DetailsText(text: $0) },
       deleteMessage: { deletingMessage = $0 },
       pin: { id in Task { await model.pin(id) } },
-      view: { _ in viewerPlaceholder = true },
+      view: { id in viewer = viewerRequest(startingAt: id) },
+      export: { asset, action in exporter.perform(action, exportItem(asset, files: files)) },
       regenerateUnavailableReason: { request in
         request.inputs.allSatisfy { files.exists(relative: $0.preparedRelativePath) } ? nil : "An input image was deleted"
       })

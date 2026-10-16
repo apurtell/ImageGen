@@ -15,17 +15,6 @@ struct ComposerView: View {
       .padding(.horizontal, 12)
       .padding(.vertical, 8)
     }
-    .overlay(alignment: .top) {
-      if let toast = model.toast {
-        Text(toast)
-          .font(.footnote)
-          .padding(.horizontal, 14).padding(.vertical, 8)
-          .glassEffect()
-          .offset(y: -44)
-          .transition(.opacity)
-          .accessibilityAddTraits(.isStaticText)
-      }
-    }
-    .animation(.default, value: model.toast)
+    .toast(model.toast, offset: -44)
   }
 }

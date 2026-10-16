@@ -17,6 +17,7 @@ struct MessageRowActions {
   var deleteMessage: (Message) -> Void
   var pin: (UUID) -> Void
   var view: (UUID) -> Void
+  var export: (ImageAsset, ImageExportAction) -> Void
   var regenerateUnavailableReason: (GenerationRequest) -> String?
 }
 
@@ -82,7 +83,9 @@ struct UserBubble: View {
               ImageThumbnailView(asset: asset, px: ThumbnailService.listSize, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .contextMenu {
-                  ImageContextMenu(onEditFromHere: { actions.pin(asset.id) }, onView: { actions.view(asset.id) })
+                  ImageContextMenu(
+                onEditFromHere: { actions.pin(asset.id) }, onExport: { actions.export(asset, $0) },
+                onView: { actions.view(asset.id) })
                 }
             }
           }
@@ -185,7 +188,9 @@ struct ModelReplyView: View {
           ImageThumbnailView(asset: asset)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .contextMenu {
-              ImageContextMenu(onEditFromHere: { actions.pin(asset.id) }, onView: { actions.view(asset.id) })
+              ImageContextMenu(
+                onEditFromHere: { actions.pin(asset.id) }, onExport: { actions.export(asset, $0) },
+                onView: { actions.view(asset.id) })
             } preview: {
               ImageThumbnailView(asset: asset)
             }
