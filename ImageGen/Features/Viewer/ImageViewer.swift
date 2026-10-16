@@ -50,20 +50,14 @@ struct ImageViewer: View {
   private var position: Int { (request.images.firstIndex { $0.id == current } ?? 0) + 1 }
 
   var body: some View {
-    TabView(selection: $current) {
-      ForEach(request.images) { image in
-        ZoomableImageView(
-          image: image, thumbnails: thumbnails, isCurrent: image.id == current,
-          onSingleTap: { withAnimation(.easeInOut(duration: 0.2)) { showsChrome.toggle() } },
-          onDismiss: { dismiss() }
-        )
-        .ignoresSafeArea()
-        .tag(image.id)
-      }
+    GeometryReader { geo in
+      pager
+        // A page TabView keeps a stale container frame after a live rotation (a 10 pt strip on
+        // iOS 26.5), so it's rebuilt for each size; the selection is kept in `current`.
+        .id("\(Int(geo.size.width))x\(Int(geo.size.height))")
     }
-    .tabViewStyle(.page(indexDisplayMode: .never))
-    .background(Color.black.ignoresSafeArea())
     .ignoresSafeArea()
+    .background(Color.black.ignoresSafeArea())
     .overlay(alignment: .top) {
       if showsChrome { topBar.transition(.opacity) }
     }
@@ -85,6 +79,21 @@ struct ImageViewer: View {
     .modifier(ImageExportPresenter(model: exporter, toastOffset: 64))
     .sheet(item: $info) { ViewerInfoSheet(image: $0) }
     .preferredColorScheme(.dark)
+  }
+
+  private var pager: some View {
+    TabView(selection: $current) {
+      ForEach(request.images) { image in
+        ZoomableImageView(
+          image: image, thumbnails: thumbnails, isCurrent: image.id == current,
+          onSingleTap: { withAnimation(.easeInOut(duration: 0.2)) { showsChrome.toggle() } },
+          onDismiss: { dismiss() }
+        )
+        .ignoresSafeArea()
+        .tag(image.id)
+      }
+    }
+    .tabViewStyle(.page(indexDisplayMode: .never))
   }
 
   private var topBar: some View {

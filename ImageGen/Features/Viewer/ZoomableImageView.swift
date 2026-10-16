@@ -143,6 +143,8 @@ final class ZoomingScrollView: UIScrollView, UIScrollViewDelegate, UIGestureReco
     maximumZoomScale = ZoomMath.maxScale(fit: fitScale, screenScale: window?.screen.scale ?? traitCollection.displayScale)
     if wasAtMinimum || zoomScale < minimumZoomScale { zoomScale = minimumZoomScale }
     center()
+    // After a rotation the old offset would leave the fitted image off-center.
+    if wasAtMinimum { contentOffset = CGPoint(x: -contentInset.left, y: -contentInset.top) }
   }
 
   func resetZoom() {
