@@ -142,3 +142,7 @@ Version 1 is complete. It passes 473 automated tests and a 30-step test script o
 Some things are not in version 1 on purpose: camera capture, a share extension, iPad, sync between devices, and streaming replies. Each request carries only the chosen image and the newest instruction, not the earlier conversation. `doc/DESIGN.md` (section 1.3) lists all of them.
 
 Claude Code agents wrote the app from the design and the plan. The owner reviewed each milestone.
+
+## License
+
+ImageGen is licensed under the [Apache License, Version 2.0](LICENSE).
