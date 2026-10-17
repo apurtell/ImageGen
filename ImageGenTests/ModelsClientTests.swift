@@ -153,6 +153,16 @@ struct ModelAvailabilityServiceTests {
     #expect(await rig.probe.entries().filter { $0.name == "Models refresh" && $0.kind == .begin }.count == 2)
   }
 
+  @Test func refreshIfStaleSkipsWithoutKey() async throws {
+    // Before onboarding saves a key, a foreground check logs nothing (no failed "no API key").
+    let rig = Rig(key: nil)
+    await rig.service.refreshIfStale()
+    #expect(await rig.probe.entries().isEmpty)
+    // A manual check still says why it can't run.
+    #expect(await rig.service.refresh(reason: .manual) == .noKey)
+    #expect(await rig.probe.action(named: "Models refresh").last?.message == "no API key")
+  }
+
   @Test func validateKeyLoggedWithoutKey() async throws {
     let rig = Rig(key: nil, sanitize: true)
     let typed = "AIzaSyTYPED-KEY-0123456789abcdefghijkl"

@@ -61,7 +61,11 @@ final class ModelAvailabilityService {
   }
 
   /// Refreshes on foreground only when the last check is more than 24 h old (or there's none).
+  /// With no saved key (before onboarding finishes) it does nothing and logs nothing: the check
+  /// can't run, and a failed "no API key" on every foreground would show as Last Error.
   func refreshIfStale() async {
+    // A Keychain read error counts as no key here too, as in `refresh`.
+    guard let key = try? keyStore.read(), !key.isEmpty else { return }
     if let checked = settings.modelAvailabilityCache?.checkedAt, clock().timeIntervalSince(checked) < Self.staleAfter {
       return
     }

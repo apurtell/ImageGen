@@ -110,6 +110,23 @@ struct ReconcilerTests {
     let attempt = tree.entries.filter { $0.name == "Attempt 1" && $0.kind == .result }
     #expect(attempt.map(\.outcome) == [.success])
     #expect(!tree.entries.contains { $0.message == "parent finished first" || $0.message == Reconciler.closedReason })
+    let reconcile = await h2.probe.action(named: "Reconcile")
+    #expect(reconcile.contains { $0.kind == .step && $0.message.hasSuffix("re-parsed, the response was saved") })
+    #expect(reconcile.last?.message.contains("re-parsed 1 · already handled 0 · interrupted 0") == true)
+  }
+
+  @Test func transportErrorMarkerCountedAsInterrupted() async throws {
+    let h = try H(scripted: true)
+    let (id, _) = try await leftOver(h, state: .inFlight)
+    try FileStore.createDirectory(h.s.files.requestDir(id))
+    // A marker with no HTTP status: the connection ended without a response.
+    _ = ResponseAccumulator(files: h.s.files).complete(requestID: id, attempt: 1, taskIdentifier: 9, httpStatus: nil)
+    let (h2, r) = try relaunch(h)
+    await r.run()
+    #expect(try await h2.snapshot(id).state == .interrupted)
+    let reconcile = await h2.probe.action(named: "Reconcile")
+    #expect(reconcile.contains { $0.kind == .step && $0.message.hasSuffix("interrupted, the connection ended without a response") })
+    #expect(reconcile.last?.message.contains("re-parsed 0 · already handled 0 · interrupted 1") == true)
   }
 
   @Test func storedParsingStateReparsed() async throws {

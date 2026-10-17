@@ -38,7 +38,7 @@ struct Reconciler: Sendable {
       "\(pending.count) non-terminal request\(pending.count == 1 ? "" : "s") · \(live.count) live task\(live.count == 1 ? "" : "s") · \(openActions.count) open log action\(openActions.count == 1 ? "" : "s")"
     )
     // A tuple with named fields, for the summary.
-    var counts = (kept: 0, began: 0, reparsed: 0, interrupted: 0, grace: 0)
+    var counts = (kept: 0, began: 0, reparsed: 0, handled: 0, interrupted: 0, grace: 0)
     var graced: [RequestSnapshot] = []
     // Actions that `markInterrupted` already closed; the log pass below must not close them again.
     var closedByService: Set<ActionID> = []
@@ -66,9 +66,19 @@ struct Reconciler: Sendable {
       }
       // No task, but the response is complete on disk (the process died before or during the parse).
       if FileManager.default.fileExists(atPath: files.completeMarkerURL(snap.id, attempt: snap.attempt).path) {
-        log.step(action, "\(req): re-parse, the response was saved")
-        await service.reparse(snap.id, attempt: snap.attempt)
-        counts.reparsed += 1
+        // The step is written after the service's answer, so it says what really happened. The
+        // transport's completion may have ended the request since this pass listed it.
+        switch await service.reparse(snap.id, attempt: snap.attempt) {
+        case .reparsed:
+          log.step(action, "\(req): re-parsed, the response was saved")
+          counts.reparsed += 1
+        case .interrupted:
+          log.step(action, "\(req): interrupted, the connection ended without a response")
+          counts.interrupted += 1
+        case .alreadyHandled:
+          log.step(action, "\(req): already handled, nothing to re-parse")
+          counts.handled += 1
+        }
         continue
       }
       log.step(action, "\(req): no live task; waiting \(Format.seconds(grace)) for a late completion")
@@ -138,7 +148,7 @@ struct Reconciler: Sendable {
 
     log.result(
       action, .success,
-      "in \(Format.seconds(ContinuousClock.now - started)) · kept \(counts.kept) · began \(counts.began) · re-parsed \(counts.reparsed) · interrupted \(counts.interrupted) · grace \(counts.grace) · log actions closed \(closed)"
+      "in \(Format.seconds(ContinuousClock.now - started)) · kept \(counts.kept) · began \(counts.began) · re-parsed \(counts.reparsed) · already handled \(counts.handled) · interrupted \(counts.interrupted) · grace \(counts.grace) · log actions closed \(closed)"
     )
   }
 }

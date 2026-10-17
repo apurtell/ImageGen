@@ -176,7 +176,9 @@ actor GenerationService: GenerationServicing {
   /// requestID → its preparation, while `prepareWithAssertion` runs for it. Its presence also tells
   /// `markInterrupted` that this process is preparing the request, so the request isn't an orphan.
   private var preparations: [UUID: Preparation] = [:]
-  /// Completions handled since the last `.finishedEvents`; reported with that event for the log.
+  /// Completions handled while the app was not active, since the last `.finishedEvents` or the last
+  /// time the app became active; reported with that event for the log. Completions handled in the
+  /// foreground are not part of any background wake, so they are not counted.
   private var completionsSinceFinished = 0
   /// One handler at a time per request (see `exclusive`): requestID → callers waiting their turn.
   /// A key that is present means a handler has the turn; its array holds the callers that wait.
@@ -373,6 +375,9 @@ actor GenerationService: GenerationServicing {
   /// (Control Center, a system alert); each pass waits for the one before it, so a request is
   /// never replaced twice.
   func appBecameActive() async {
+    // A wake's count starts after the app was last in the foreground: completions from an earlier
+    // background period that had no wake of their own must not be added to a later wake.
+    completionsSinceFinished = 0
     // No `await` between reading and writing `reactivation`, so two quick calls can't both chain on
     // the same earlier pass. A `Task {}` made inside the actor runs on the actor too.
     let previous = reactivation
@@ -485,15 +490,21 @@ actor GenerationService: GenerationServicing {
   /// attempt the Reconciler checked, and only while it is still that request's live attempt. The
   /// transport may be delivering the same completion right now; the request's turn makes the
   /// second of the two find it finished.
-  func reparse(_ requestID: UUID, attempt: Int) async {
+  ///
+  /// Returns what it did, so the Reconciler's log says what really happened. `alreadyHandled` means
+  /// that something else (usually the transport's own completion) ended the attempt first.
+  @discardableResult
+  func reparse(_ requestID: UUID, attempt: Int) async -> ReparseOutcome {
     await exclusive(requestID) {
-      guard let snap = try? await d.store.requestSnapshot(requestID), snap.attempt == attempt, snap.state.isLive else { return }
+      guard let snap = try? await d.store.requestSnapshot(requestID), snap.attempt == attempt, snap.state.isLive else {
+        return .alreadyHandled
+      }
       let marker = d.files.completeMarkerURL(requestID, attempt: attempt)
-      guard FileManager.default.fileExists(atPath: marker.path) else { return }
+      guard FileManager.default.fileExists(atPath: marker.path) else { return .alreadyHandled }
       guard let status = ResponseAccumulator.markerStatus(marker) else {
         // A transport error ended the attempt (no HTTP status): there is nothing to parse.
         _ = await interrupt(snap, reason: "\(Reconciler.closedReason) (the connection ended without a response)")
-        return
+        return .interrupted
       }
       // A completion built from the saved files. No task exists in this process, so the task
       // identifier is -1 and the elapsed time is zero.
@@ -502,7 +513,18 @@ actor GenerationService: GenerationServicing {
         requestID: requestID, attempt: attempt, taskIdentifier: -1, httpStatus: status, headers: [:], partURL: part,
         bytesReceived: Self.fileSize(part), error: nil, cancelReason: nil, elapsed: .zero)
       await handleCompleted(completion, reparse: true)
+      return .reparsed
     }
+  }
+
+  /// What `reparse` did with a saved response.
+  enum ReparseOutcome: Sendable, Equatable {
+    /// The saved response was parsed and its request ended.
+    case reparsed
+    /// The attempt ended with a transport error and no response, so the request was interrupted.
+    case interrupted
+    /// Nothing to do: the request had already ended, moved to another attempt, or lost its marker.
+    case alreadyHandled
   }
 
   // MARK: One handler at a time per request
@@ -752,7 +774,7 @@ actor GenerationService: GenerationServicing {
       }
     case .completed(let completion):
       // Parse and save inside the request's turn; the consumer takes the next event only after this.
-      completionsSinceFinished += 1
+      if !d.activity.isActive { completionsSinceFinished += 1 }
       await exclusive(completion.requestID) { await handleCompleted(completion, reparse: false) }
     case .finishedEvents(let id):
       // Every earlier completion is saved by now, because the consumer awaited each one. So the

@@ -46,6 +46,18 @@ struct PipelineRaceTests {
     await h2.probe.assertPaired()
   }
 
+  @Test func reparseAfterTheCompletionReportsAlreadyHandled() async throws {
+    let (h2, id, conv, send) = try await relaunchedInFlight()
+    // The transport's completion ends the request first; the Reconciler's re-parse comes after.
+    h2.scripted!.complete(id, attempt: 1, status: 200, body: try FixtureLoader.data("Responses/resp_text_image.json"))
+    #expect(try await h2.wait(id).state == .succeeded)
+    try await settled(h2, send)
+    #expect(await h2.service.reparse(id, attempt: 1) == .alreadyHandled)
+    #expect(try await h2.s.store.imageCount(conv: conv) == 1)
+    let parses = ActivityLogQuery.tree(send, in: await h2.probe.entries()).entries.filter { $0.name == "Parse" && $0.kind == .begin }
+    #expect(parses.count == 1)
+  }
+
   @Test func reparseSkipsAnAttemptThatMovedOn() async throws {
     let (h2, id, _, _) = try await relaunchedInFlight()
     try await h2.s.store.updateRequest(id) { p in
@@ -53,7 +65,7 @@ struct PipelineRaceTests {
       p.state = .retryScheduled
     }
     // The Reconciler checked attempt 1; by now attempt 2 is scheduled and has no response yet.
-    await h2.service.reparse(id, attempt: 1)
+    #expect(await h2.service.reparse(id, attempt: 1) == .alreadyHandled)
     let snap = try await h2.snapshot(id)
     #expect(snap.state == .retryScheduled)
     #expect(snap.attempt == 2)

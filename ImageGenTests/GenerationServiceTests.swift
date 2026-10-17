@@ -758,6 +758,33 @@ struct GenerationServiceTests {
     #expect(try await h.snapshot(id).state == .succeeded)
   }
 
+  @Test func finishedEventsCountsOnlyThisWake() async throws {
+    let h = try H(scripted: true, active: true)
+    let conv = try await h.s.store.createConversation()
+    let body = try FixtureLoader.data("Responses/resp_text_image.json")
+    // In the foreground: not part of any wake.
+    let a = try await h.service.send(h.draft(conv, "a"))
+    try await h.wait(a, for: [.inFlight])
+    h.scripted!.complete(a, attempt: 1, status: 200, body: body)
+    try await h.wait(a, for: [.succeeded])
+    // In the background with no wake of its own; the app then comes back to the foreground.
+    h.activity.setActive(false)
+    let b = try await h.service.send(h.draft(conv, "b"))
+    try await h.wait(b, for: [.inFlight])
+    h.scripted!.complete(b, attempt: 1, status: 200, body: body)
+    try await h.wait(b, for: [.succeeded])
+    h.activity.setActive(true)
+    await h.service.appBecameActive()
+    // This wake's completion.
+    let c = try await h.service.send(h.draft(conv, "c"))
+    try await h.wait(c, for: [.inFlight])
+    h.activity.setActive(false)
+    h.scripted!.complete(c, attempt: 1, status: 200, body: body)
+    h.scripted!.yield(.finishedEvents(sessionIdentifier: "bg"))
+    try await h.until { !h.finishedCalls.value.isEmpty }
+    #expect(h.finishedCalls.value.first?.handled == 1)
+  }
+
   // MARK: Log assertions
 
   @Test func logsSendBeginParametersAndResult() async throws {

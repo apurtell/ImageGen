@@ -41,6 +41,9 @@ struct ChatListView: View {
         }
       } else {
         List {
+          // The first row is not a chat: it does what the toolbar's New Chat button does (D§3.3).
+          // It is outside the `ForEach` below, so it gets no swipe actions and no long-press rename.
+          NewChatRow { Task { await newChat() } }
           ForEach(conversations) { conversation in
             Group {
               if editingID == conversation.id {
@@ -145,5 +148,28 @@ struct ChatListView: View {
   /// chat (it logs the failure); then the list stays as it is.
   private func newChat() async {
     if let id = await env.chatActions.newChat() { env.navigator.open(id) }
+  }
+}
+
+/// The chat list's first row (D§3.3): a button, laid out like a chat row, that starts a new chat.
+/// The tinted square stands where a chat's thumbnail would be, so the titles line up.
+private struct NewChatRow: View {
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 12) {
+        RoundedRectangle(cornerRadius: 8)
+          .fill(.tint.opacity(0.15))
+          .frame(width: 44, height: 44)
+          .overlay(Image(systemName: "square.and.pencil").font(.title3).foregroundStyle(.tint))
+          // The button's text says it all; VoiceOver doesn't need the icon too.
+          .accessibilityHidden(true)
+        Text("New Chat").font(.headline).foregroundStyle(.tint)
+        Spacer(minLength: 0)
+      }
+      // The whole row takes the tap, not only the icon and the text.
+      .contentShape(Rectangle())
+    }
   }
 }
