@@ -1,18 +1,18 @@
 import Foundation
 import UserNotifications
 
-/// The content of one local notification for a finished request.
+/// Value payload for local reply notifications.
 struct ReplyNotification: Sendable, Equatable {
   let conversationID: UUID
   let title: String
   let body: String
 }
 
-/// What `post` did, so `GenerationService` can log it as a step.
+/// Terminal delivery outcome captured for diagnostic activity logs.
 enum NotificationOutcome: Sendable, Equatable {
   case posted(body: String)
   case suppressed(reason: String)
-  /// The notification system refused the request (the reply is saved either way).
+  /// System notification dispatch error (conversation persistence proceeds unhindered).
   case failed(reason: String)
 
   var logText: String {
@@ -24,18 +24,18 @@ enum NotificationOutcome: Sendable, Equatable {
   }
 }
 
-/// The seam between `GenerationService` and the notification system, so tests can record posts.
+/// Interface for dispatching completion notifications, facilitating automated test inspection.
 protocol NotificationPosting: Sendable {
   func post(_ notification: ReplyNotification) async -> NotificationOutcome
 }
 
-/// Posts a local notification for a finished request, unless the app is active with that chat on
-/// screen, or the Settings toggle is off (D§4.11).
+/// Dispatches local completion alerts according to user configuration and foreground presentation context.
 ///
-/// `GenerationService` (an actor) calls `post` when a request reaches a terminal state. So the poster
-/// must not depend on the main actor: it reads `AppActivity` (a locked value) and reads the Settings
-/// toggle straight from `UserDefaults` through `isEnabled`. The struct holds only `Sendable` values and
-/// `@Sendable` closures, so it is `Sendable` itself.
+/// Invoked by `GenerationService` upon request completion. Evaluates suppression rules:
+/// 1. Disables dispatch when user notification preferences are toggled off.
+/// 2. Suppresses alerts when the target conversation is actively visible in the foreground.
+/// Concurrency: completely non-isolated and thread-safe, reading settings directly from `UserDefaults`
+/// and visible state from `AppActivity` without hopping to `@MainActor`.
 struct NotificationPoster: NotificationPosting {
   let activity: AppActivity
   let isEnabled: @Sendable () -> Bool
@@ -49,17 +49,15 @@ struct NotificationPoster: NotificationPosting {
     do {
       try await deliver(n)
     } catch {
-      // Logged as not posted, so the log never claims a banner that didn't appear.
       return .failed(reason: error.localizedDescription)
     }
     return .posted(body: n.body)
   }
 
-  /// The production poster: `UNUserNotificationCenter`, grouped by chat.
+  /// Production factory utilizing `UNUserNotificationCenter`, grouping notification threads by conversation.
   static func userNotifications(activity: AppActivity, settingsSuite: String?) -> NotificationPoster {
     NotificationPoster(
       activity: activity,
-      // A new `UserDefaults` for each call: the closure keeps only the suite name, which is `Sendable`.
       isEnabled: {
         let ud = settingsSuite.flatMap(UserDefaults.init(suiteName:)) ?? .standard
         return AppSettings.readNotifyOnBackgroundCompletion(ud)
@@ -69,18 +67,14 @@ struct NotificationPoster: NotificationPosting {
         content.title = n.title
         content.body = n.body
         content.sound = .default
-        // `threadIdentifier` groups notifications by chat; `userInfo` carries the chat for a tap
-        // (`AppDelegate` reads it).
         content.threadIdentifier = n.conversationID.uuidString
         content.userInfo = ["conversationID": n.conversationID.uuidString]
-        // `trigger: nil` delivers it now.
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        // A failure reaches `post`, which logs it; the reply is saved either way.
         try await UNUserNotificationCenter.current().add(request)
       })
   }
 
-  /// The body for a finished request (D§4.11).
+  /// Formats notification body text based on terminal request state and multimodal content.
   static func body(state: RequestState, imageCount: Int, text: String?, refusalReason: String?, failure: String?) -> String {
     switch state {
     case .succeeded:

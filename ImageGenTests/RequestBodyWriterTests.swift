@@ -17,7 +17,7 @@ struct RequestBodyWriterTests {
   }
 
   static let goldenCases: [GoldenCase] = [
-    // Pipe parity: includeTextModality set explicitly, so the R3 flip in M9 doesn't change it.
+    // Sets includeTextModality explicitly to preserve deterministic request payloads.
     GoldenCase(golden: "flash_text_only_16x9_2k", images: [], prompt: F.lighthouse, settings: F.settings(includeText: true)),
     GoldenCase(
       golden: "flash_three_images", images: ["tiny_square.jpg", "tiny_16x9.png", "rotated_exif6.jpg"],
@@ -129,7 +129,7 @@ struct RequestBodyWriterTests {
     let onDisk = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int
     #expect(predicted == written)
     #expect(onDisk == written)
-    // The streamed base64 decodes back to the input bytes.
+    // Verifies that stream-encoded base64 payloads reconstruct exact source image bytes.
     let body = try #require(try F.json(Data(contentsOf: url)) as? [String: Any])
     let parts = try #require(((body["contents"] as? [[String: Any]])?.first?["parts"]) as? [[String: Any]])
     for (i, image) in images.enumerated() {

@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// An image's long-press menu (D§3.6): Edit from here, the exports (original bytes, D§4.9), View.
-/// The menu only reports the choice; the caller's closures do the work.
+/// Contextual action menu presenting operations for a selected image entity, including pinning, exporting, and viewing.
 struct ImageContextMenu: View {
   let onEditFromHere: () -> Void
   let onExport: (ImageExportAction) -> Void
@@ -9,7 +8,6 @@ struct ImageContextMenu: View {
 
   var body: some View {
     Button("Edit from here", systemImage: "pin", action: onEditFromHere)
-    // MARK: M7 items
     Button("Save to Photos", systemImage: "square.and.arrow.down") { onExport(.photos) }
     Button("Save to Files…", systemImage: "folder") { onExport(.files) }
     Button("Share…", systemImage: "square.and.arrow.up") { onExport(.share) }

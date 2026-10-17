@@ -1,14 +1,14 @@
 import Foundation
 import Observation
 
-/// Where a tapped notification should take the user (D§4.11). M5's navigation observes it.
+/// Coordinates deep link routing triggered by notification activations.
 ///
-/// `AppDelegate` writes the chat ID when the user taps a notification. `RootView` observes the property
-/// and opens the chat. The value waits here when the tap launches the app, until `RootView` exists.
-/// `@Observable @MainActor`: SwiftUI sees each change, and all access is on the main thread.
+/// Buffers pending conversation target identifiers received from `AppDelegate` until the presentation
+/// hierarchy (`RootView`) is mounted and ready to process navigation stack mutations.
 @Observable @MainActor
 final class NotificationRouter {
-  /// The chat to open. `RootView` clears it as soon as it reads it, then opens the chat.
+  /// Buffered conversation identifier targeted for presentation.
+  /// Consumed and cleared upon receipt by `RootView`.
   var pendingConversationID: UUID?
 
   func open(_ conversationID: UUID) {

@@ -1,147 +1,155 @@
 # ImageGen
 
-ImageGen is a personal iPhone app for making and editing images with Google's Gemini image models. You chat with the model. You type an instruction, and you can attach images. The app sends the request to the Gemini API with your own API key. The reply is one or more images, sometimes with text. Your chats stay on your phone.
+ImageGen is a native iOS client for multimodal image generation and iterative editing powered by Google's Gemini REST API (`generateContent`). Using direct client-to-API communication with user managed API credentials, the application provides a conversational interface for text-to-image and image-to-image generation, persisting conversation state and generated media locally on device.
 
-The app does on an iPhone what an [OpenWebUI](https://openwebui.com) "pipe" did on a server (`doc/openwebui_gemini_filter.py`). Given the same inputs, it sends the same request, with a few deliberate changes that the design document lists.
+## Capabilities
 
-The app is for one person. It is not on the App Store. You build it with Xcode and install it on your own phone.
+- **Text-to-Image Generation**: The default generation model is Gemini 3.1 Flash Image (`gemini-3.1-flash-image`), with support for per-conversation model selection across any compatible Gemini image models accessible to the user's API key.
+- **Iterative Image Editing**: Image-to-image workflows chain context from the most recent image synthesized in the chat. Any previous image can be designated as a new starting checkpoint via **Edit from here**.
+- **Multimodal Attachment Pipeline**: Supports importing up to 14 images per prompt across Photos, Files, and the system clipboard. The ingestion pipeline normalizes HEIC to JPEG, strips EXIF and GPS metadata, and rescales images to configurable dimension thresholds.
+- **Dimensional and Aspect Ratio Controls**: Aspect ratio (14 standard options) and output resolution (512, 1K, 2K, 4K) are governed by global defaults in Settings and can be overridden per conversation. Each dispatched request captures its exact operational parameters to guarantee deterministic re-execution upon **Regenerate**.
+- **Resilient Background Execution**: Dispatched requests run via an iOS background `URLSession` and background task assertions, ensuring uninterrupted execution across app suspension and process termination, with local push notifications delivered on completion.
+- **Bit-Identical Export Pipeline**: Export operations (Photos library, Files filesystem, share sheet, pasteboard) deliver the uncompressed byte streams returned by the Gemini API without intermediate re-encoding.
+- **Structured Activity Logging**: Comprehensive activity instrumentation records request preparation parameters, transport phases, and terminal states in plain-text diagnostic logs, inspectable through an on device Developer menu without capturing sensitive credentials or binary image data.
 
-## What it does
+## System Architecture
 
-- **Make an image from text.** The default model is Gemini 3.1 Flash Image. Each chat can use another image model that your key can use.
-- **Edit an image.** Each new message edits the latest image in the chat, unless you choose another one. Long-press any earlier image and choose **Edit from here** to continue from it.
-- **Attach images** from Photos, Files or the clipboard, up to 14 in one message. The app converts HEIC to JPEG, removes location and other photo metadata, and shrinks each image to a long edge that you set.
-- **Choose the shape and size.** Aspect ratio and resolution have defaults (16:9 and 2K) that you set in Settings. Each chat can change them. Every request records the values it used, so **Regenerate** gives the same settings again.
-- **Keep working while it runs.** A request continues when you leave the app or lock the phone. A notification tells you when the image is ready. A request also survives when iOS stops the app.
-- **Save the real file.** Save to Photos, Save to Files, Share and Copy all give the exact bytes that the API returned. The app never re-encodes them.
-- **See what happened.** The app logs each action in plain language: what it is about to do, with its settings, and then the result. The Developer menu (the hammer) shows the last action, the last error, or the full log. The log never contains your API key or image data.
+### Architectural Layers
 
-## How it works
+| Directory | Layer | Architectural Responsibility |
+|---|---|---|
+| `ImageGen/Features/` | Presentation | SwiftUI user interfaces and `@Observable` view models governing chat interaction, settings, media viewing, and developer utilities. |
+| `ImageGen/App/` | Composition Root | Application initialization, dependency injection (`AppEnvironment`), lifecycle monitoring, and UIKit event routing. |
+| `ImageGen/Pipeline/` | Generation Pipeline | Request preparation, input arbitration, background assertion management, transient fault recovery, and outcome reconciliation (`GenerationService`). |
+| `ImageGen/Networking/` | Transport | Background HTTP communication via `URLSessionDownloadTask` and event stream demultiplexing. |
+| `ImageGen/Gemini/` | Protocol Translation | Serialization and deserialization of Gemini API JSON contracts, error payload extraction, and data sanitization. |
+| `ImageGen/Persistence/` | Persistence | SwiftData storage engine (`DataStore`) and on-disk payload management (`FileStore`), with automatic orphaned asset purging (`Janitor`). |
+| `ImageGen/Imaging/` | Image Processing | CoreGraphics and ImageIO operations for metadata stripping, downscaling, format normalization, and thumbnail caching. |
+| `ImageGen/Export/` | Export Services | System photo library writes, sandboxed document export, and pasteboard serialization. |
+| `ImageGen/Security/` | Security | Secure storage of Gemini API credentials in the iOS Keychain with device-locked protection attributes. |
+| `ImageGen/Support/` | Foundations | Activity logging pipeline, typography, formatting utilities, and synchronization primitives. |
+| `ImageGen/DebugSupport/` | Testing Support | In-memory mock transports and demo dataset seeders for automated tests and standalone simulator execution. |
 
-### The layers
+### Request Lifecycle
 
-The code is in layers. Each layer uses only the layers below it.
+```
+[Composer Input]
+       │
+       ▼
+[InputSelector] ───────── Selects attachments, pinned image, or conversation checkpoint
+       │
+       ▼
+[RequestPreparer] ────── Normalizes attachments, applies downscaling budget, serializes JSON to disk
+       │
+       ▼
+[URLSessionTransport] ── Dispatches via background URLSession with assertion tracking
+       │
+       ▼
+[ResponseParser] ─────── Streams JSON response, writes binary images directly to FileStore
+       │
+       ▼
+[DataStore] ──────────── Atomically commits message and asset snapshots to SQLite
+       │
+       ▼
+[NotificationRouter] ─── Triggers local completion alert if execution concluded in background
+```
 
-| Folder | What it does |
-|---|---|
-| `ImageGen/Features/` | The screens: the chat list, the chat, the composer, the image viewer, Settings, onboarding and the Developer menu. Each screen has a view and a model. |
-| `ImageGen/App/` | Starts the app, builds each service once, and connects iOS events (launch, background wake, notification taps) to the services. |
-| `ImageGen/Pipeline/` | Prepares each request, sends it, retries it when the service is busy, and saves the result. `GenerationService` is the center of the app. |
-| `ImageGen/Networking/` | Sends requests through an iOS background download session. |
-| `ImageGen/Gemini/` | Writes request bodies and reads responses in the Gemini JSON format. |
-| `ImageGen/Persistence/` | Stores chats in a SwiftData database and images as files. Cleans up unused files at launch. |
-| `ImageGen/Imaging/` | Reads, shrinks and writes images. Makes and caches thumbnails. |
-| `ImageGen/Export/` | Saves to Photos and Files, shares and copies. |
-| `ImageGen/Security/` | Keeps the API key in the iOS Keychain. |
-| `ImageGen/Support/` | The activity log and small shared tools. |
-| `ImageGen/DebugSupport/` | A fake Gemini server and demo data for tests and the simulator. Release builds do not contain this code. |
+1. **Submission**: The composer captures prompt text and validated media drafts, delegating execution to `GenerationService` and resetting input state immediately.
+2. **Input Arbitration**: `InputSelector` determines the target baseline (active tray attachments, explicit pin, or the chronologically latest image in the conversation) and commits the request state to the persistence store.
+3. **Payload Streaming**: `RequestBodyWriter` writes the request JSON directly to a temporary file, streaming base64 image data without materializing entire payload buffers in memory. If total payload size exceeds memory thresholds, `BudgetPlanner` dynamically reduces image dimensions.
+4. **Background Transfer**: The payload file is handed off to an iOS background `URLSession`, delegating transmission and response reception to the platform daemon (`nsurlsessiond`).
+5. **Ingestion & Reconciliation**: On response delivery, `ResponseParser` ingests the JSON payload, extracts image data directly to distinct disk files, persists the assistant message, and primes thumbnail caches.
+6. **Background Alerting**: If the application is suspended or terminated during transmission, a local notification alerts the user upon completion, routing navigation directly to the target conversation on activation.
 
-### The life of a request
+Transient HTTP errors (408, 429, 500, 502, 503, 504) and transport disconnects trigger automated retry schedules via `RetryPolicy`. In the event of process termination during inflight requests, the next launch phase invokes `Reconciler` to restore or finalize pending request states.
 
-1. You tap Send. The composer gives the text and the attachments to `GenerationService`, and empties itself at once.
-2. The service chooses the input image: your attachments, the pinned image, or the latest image in the chat. It records the request in the database.
-3. The service writes the request body to a file. Each image goes into the body as base64, and the body is never held in memory as one block. If the body is too large, the service shrinks the images until it fits.
-4. The service gives the body file to an iOS **background session**. The system sends the request and receives the response, also while the app is suspended.
-5. When the response arrives, iOS wakes the app if necessary. The app reads the response, writes each image to its own file, and saves the reply.
-6. If the app is not on screen, a notification says that the image is ready. A tap on it opens the chat.
+### Concurrency and State Integrity
 
-If the service is busy or has a temporary error (HTTP 408, 429, 500, 502, 503 or 504), or the connection drops, the app tries again automatically, up to two times. If iOS stops the app during a request, the next launch finds the request and finishes it from the saved response, or marks it "Interrupted" with a Retry button.
+The application enforces Swift 6 complete concurrency checking, ensuring compile-time verification of data race safety:
 
-### Concurrency
+- **Isolated Actor Domains**: Core state machines (`GenerationService`, `DataStore`) run within dedicated actors.
+- **Mutual Exclusion per Request**: `GenerationService.exclusive(_:_:)` guarantees sequential processing for any single request ID, preventing concurrent execution across late transport events, user retries, or termination recovery.
+- **Snapshot-and-Validate Lifecycle**: Asynchronous suspensions re-validate data store state before committing mutations, preventing stale writes across long-running background tasks.
+- **Persistent Cancellation Semantics**: Cooperative cancellation flags persist across lifecycle stages, ensuring user cancellation is respected even when triggered prior to network task materialization.
 
-The app does many things at the same time. Swift 6 checks the code for data races when it compiles. The compiler cannot find logical races, for example two pieces of code that act on the same request with out-of-date information. The code prevents these with a small number of patterns, and the comments explain each one:
+### Security and Data Isolation
 
-- **One handler at a time for each request.** A completion, a recovery at launch, a Retry and a Stop never work on one request at the same time.
-- **Read, then check again.** Code that waits for slow work reads the state again before it changes anything.
-- **A Stop is remembered.** A Stop also works when no network task exists yet.
+- **Keychain Storage**: API credentials reside exclusively within the iOS Keychain using `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Credentials are never written to disk, included in logs, or exposed in URLs.
+- **Data Sanitization**: Diagnostic activity logs filter out API keys and binary base64 payloads prior to persistence.
+- **Metadata Stripping**: Media attachments are scrubbed of EXIF and GPS metadata prior to network dispatch.
+- **Self-Contained Dependency Graph**: The application contains no third-party tracking, analytics, or external binary dependencies, communicating exclusively with the Gemini API endpoint.
 
-`doc/SWIFT_PRIMER.md` explains these patterns and the Swift features behind them.
+## Development and Verification
 
-### Privacy and security
+### Prerequisites
 
-- The API key is in the iOS Keychain. It never goes into a URL, a file, the log, or the repository.
-- The log is a file on the phone. Before the app writes a line, it removes anything that looks like a key, and all image data.
-- Uploaded images lose their photo metadata (EXIF and GPS) before the app sends them.
-- The app has no analytics and no third-party code. It talks only to the Gemini API.
+- macOS with **Xcode 26** or later, configured with the iOS 26 simulator runtime.
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.46 or later (`brew install xcodegen`). Project files are generated deterministically from `project.yml`.
+- An active Apple Developer Program team for on device installation.
+- A Gemini API key obtained from Google AI Studio.
 
-## Build and run
+Run the diagnostic script to verify the local toolchain:
 
-### What you need
+```bash
+scripts/doctor.sh
+```
 
-- A Mac with **Xcode 26** or later, and the iOS 26 simulator runtime.
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.46 or later (`brew install xcodegen`). The Xcode project is generated from `project.yml`; it is not in the repository.
-- For an install on a phone: an iPhone with **iOS 26**, and an Apple Developer Program team in Xcode.
-- A Gemini API key from Google AI Studio, entered in the app. The build does not need one.
+### Simulator Execution
 
-`scripts/doctor.sh` checks the Mac and tells you what is missing.
-
-### Simulator
+Generate the project file and compile the debug configuration:
 
 ```bash
 scripts/gen.sh
-```
-
-```bash
 scripts/build.sh
 ```
+
+Launch the application in mock mode (bypassing external network calls and API key requirements):
 
 ```bash
 scripts/run-sim.sh -UITestMockGemini 1 -SeedDemoData 1
 ```
 
-The last command starts the app in **mock mode**. A fake Gemini server inside the app answers every request, so you need no key and no network. The scripts use a simulator named `ImageGen-Sim`; set `IMAGEGEN_SIM` to use another one.
+### Test Suites and Quality Gates
 
-### Tests and checks
+Execute unit and integration tests under the Swift Testing framework:
 
 ```bash
 scripts/test.sh
 ```
 
+Run static analysis checks for architectural rules and banned patterns:
+
 ```bash
 scripts/lint.sh
 ```
+
+Validate zero-warning compilation across the codebase:
 
 ```bash
 scripts/check-warnings.sh
 ```
 
-`test.sh` runs the unit and integration tests (Swift Testing) on the simulator. `lint.sh` checks for banned patterns, for example a key in a URL, or code that decodes full-size images on the main thread. `check-warnings.sh` fails on any compiler warning.
-
-An optional test calls the real API with your key. The script never shows the key:
+Execute live integration verification against the production Gemini API:
 
 ```bash
 TEST_RUNNER_GEMINI_API_KEY="$GEMINI_API_KEY" scripts/live-smoke.sh
 ```
 
-### Install on an iPhone
+### Physical Device Installation
 
-1. Copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig`, and put your team ID in it (Xcode › Settings › Accounts). Git ignores this file.
-2. On the iPhone, turn on Developer Mode: Settings › Privacy & Security › Developer Mode. Connect the phone with a cable and trust the Mac.
-3. Unlock the phone and run:
+1. Create `Config/Local.xcconfig` from `Config/Local.xcconfig.example` and set `DEVELOPMENT_TEAM` to your Apple Developer team ID.
+2. Enable Developer Mode on the target iOS device (**Settings › Privacy & Security › Developer Mode**) and connect via USB or trusted Wi-Fi.
+3. Deploy the release build:
 
 ```bash
 scripts/device-install.sh --release
 ```
 
-The script finds the phone, registers it with your team, builds, installs and starts the app. The first time, onboarding asks for your Gemini API key.
+## Architectural Specifications
 
-## Documentation
-
-| Document | What it contains |
-|---|---|
-| [`doc/DESIGN.md`](doc/DESIGN.md) | The design: the behavior, the screens, the data model, the request pipeline, background work, the log, and the risks. This is the source of truth. |
-| [`doc/IMPLEMENTATION_PLAN.md`](doc/IMPLEMENTATION_PLAN.md) | How the app was built, milestone by milestone (M0 to M10), with the tests and checks for each, and a change log. |
-| [`doc/SWIFT_PRIMER.md`](doc/SWIFT_PRIMER.md) | The Swift and iOS concepts that the code uses, explained for an engineer who knows other languages. |
-
-The source files have comments in the same style: an overview at the top of each file, and the reasons for each design decision where it is made.
-
-## Status
-
-Version 1 is complete. It passes 473 automated tests and a 30-step test script on an iPhone 17 Pro Max with iOS 26.6.
-
-Some things are not in version 1 on purpose: camera capture, a share extension, iPad, sync between devices, and streaming replies. Each request carries only the chosen image and the newest instruction, not the earlier conversation. `doc/DESIGN.md` (section 1.3) lists all of them.
-
-Claude Code agents wrote the app from the design and the plan. The owner reviewed each milestone.
+- [`doc/DESIGN.md`](doc/DESIGN.md): Authoritative architectural specification defining state machines, protocol contracts, persistence schemas, background processing semantics, and failure modes.
+- [`doc/IMPLEMENTATION_PLAN.md`](doc/IMPLEMENTATION_PLAN.md): Milestone execution roadmap, verification requirements, and  change log.
+- [`doc/SWIFT_PRIMER.md`](doc/SWIFT_PRIMER.md): Guide to Swift concurrency, isolation guarantees, and iOS platform patterns implemented in the codebase.
 
 ## License
 

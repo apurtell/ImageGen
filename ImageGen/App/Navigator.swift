@@ -1,41 +1,38 @@
 import Foundation
 import Observation
 
-/// App navigation (D§3.1): the chat path, the Settings sheet, and onboarding.
+/// Centralized presentation and navigation coordinator.
 ///
-/// `RootView` binds its `NavigationStack` and its Settings sheet to these properties, so a change here
-/// pushes, pops or presents a screen (see the primer, *SwiftUI: the user interface*). Any screen model
-/// can navigate by changing the navigator; it does not need a reference to a view. `@Observable` makes
-/// SwiftUI redraw the views that read a property when it changes. `@MainActor`: all navigation happens
-/// on the main thread.
+/// Encapsulates programmatic routing across `RootView` presentation hierarchies: navigation stack paths,
+/// modal settings sheets, and modal onboarding workflows. View models mutate navigator state on `@MainActor`,
+/// triggering declarative SwiftUI view updates without direct view couplings.
 @Observable @MainActor
 final class Navigator {
-  /// Conversation IDs pushed on the chat list.
+  /// Navigation stack history represented by conversation identifiers.
   var path: [UUID] = []
   var showSettings = false
-  /// Pages pushed inside the Settings sheet when it opens (the 404 card's Open Models).
+  /// Sub-destinations pushed onto the internal settings navigation stack.
   var settingsPath: [SettingsPage] = []
-  /// No key is stored (or `-Scene onboarding`), so onboarding replaces the chat list.
+  /// Flag presenting the onboarding modal when valid API credentials are absent.
   var needsOnboarding = false
 
   func openSettings(_ page: SettingsPage? = nil) {
-    // The page path is set before the sheet opens, so the sheet appears already on that page.
     settingsPath = page.map { [$0] } ?? []
     showSettings = true
   }
 
-  /// Opens one chat directly on top of the chat list, replacing any chat that is open.
+  /// Replaces the active navigation stack with a single conversation destination.
   func open(_ conversationID: UUID) {
     path = [conversationID]
   }
 
-  /// New Chat from a chat screen replaces it, so Back returns to the chat list (D§3.4).
+  /// Replaces the top-most view on the stack, ensuring back-navigation returns directly to the root chat list.
   func replaceTop(with conversationID: UUID) {
     if path.isEmpty { path = [conversationID] } else { path[path.count - 1] = conversationID }
   }
 }
 
-/// A page that can be pushed inside the Settings sheet.
+/// Identifiers for nested navigation pages within the settings hierarchy.
 enum SettingsPage: Hashable {
   case models
 }

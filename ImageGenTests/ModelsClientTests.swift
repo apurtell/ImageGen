@@ -75,7 +75,7 @@ struct ModelsClientTests {
 
   @Test func networkErrorMapsToUnreachable() async throws {
     let rig = Rig()
-    // Nothing registered: the mock fails with URLError.resourceUnavailable.
+    // Simulates unhandled endpoint dispatch where the mock URL protocol yields URLError.resourceUnavailable.
     await #expect(throws: ModelsClientError.unreachable("resourceUnavailable")) { _ = try await rig.client.listAll(apiKey: "k") }
     try rig.respond(Self.list, "Errors/err_503.json", status: 503)
     await #expect(throws: ModelsClientError.unreachable("HTTP 503")) { _ = try await rig.client.listAll(apiKey: "k") }
@@ -154,11 +154,11 @@ struct ModelAvailabilityServiceTests {
   }
 
   @Test func refreshIfStaleSkipsWithoutKey() async throws {
-    // Before onboarding saves a key, a foreground check logs nothing (no failed "no API key").
+    // When no API key is configured, automatic background/foreground freshness checks are suppressed without logging errors.
     let rig = Rig(key: nil)
     await rig.service.refreshIfStale()
     #expect(await rig.probe.entries().isEmpty)
-    // A manual check still says why it can't run.
+    // Manual refresh attempts record an explicit explanation when an API key is missing.
     #expect(await rig.service.refresh(reason: .manual) == .noKey)
     #expect(await rig.probe.action(named: "Models refresh").last?.message == "no API key")
   }

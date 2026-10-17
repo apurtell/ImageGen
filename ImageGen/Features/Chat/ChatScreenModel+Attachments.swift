@@ -2,7 +2,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Where an Attach came from: the log's source and the stored origin.
+/// Provenance classification indicating how an input image was ingested into the composer pipeline.
 enum AttachSource: String, Sendable {
   case photos = "Photos"
   case files = "Files"
@@ -17,34 +17,30 @@ enum AttachSource: String, Sendable {
   }
 }
 
-// The composer tray's data and logic: the value types for tray items, and the `ChatScreenModel`
-// extension that imports, prepares, reorders and removes them, and clones a sent message's uploads
-// for Edit and Resend. The views in `Composer/` read the tray and call these methods.
+// Manages candidate ingestion, asynchronous pre-processing, staging storage lifecycle,
+// and state synchronization for composer attachments.
 //
-// Concurrency: the extension runs on the main actor, like the rest of `ChatScreenModel`. Each tray
-// item gets its own task for import and preparation, so items progress in parallel. The slow file
-// and image work runs off the main actor (`Task.detached`, and the `@concurrent` preprocessor). The
-// tray array is the single source of truth: after each `await`, a task looks its item up again by
-// ID, because the user can remove, reorder or send items meanwhile.
+// Concurrency Model:
+// Executes within the main-actor context of ChatScreenModel. Heavy image decoding,
+// downsampling, and filesystem I/O operations are offloaded to cooperative detached tasks
+// or background worker routines. The in-memory tray collection remains the authoritative state;
+// asynchronous completion routines verify item identity against the active tray to handle
+// concurrent user dismissals, re-ordering, or immediate submission.
 
-/// One image on its way into the tray. `stage` writes its original bytes, unchanged, into the
-/// staging folder under the item's ID and returns the file (D§4.8 step 1).
-///
-/// The three sources (Photos, Files, Paste) differ only in how they get the bytes, so each one
-/// supplies a closure and the import code treats them the same way.
+/// Staging candidate encapsulating raw input payloads awaiting file-backed persistence.
 struct AttachmentCandidate: Sendable {
   var filename: String?
-  /// `@Sendable` because it runs in a detached task, off the main actor.
+  /// Asynchronous staging routine writing raw source bytes into the sandbox staging directory.
   var stage: @Sendable (_ stagingDir: URL, _ id: UUID) async throws -> URL
 
-  /// Bytes from the Photos picker or the pasteboard; the type comes from the bytes.
+  /// Constructs a staging candidate from in-memory byte buffers.
   static func data(_ data: Data, filename: String? = nil, preferredExtension: String? = nil) -> AttachmentCandidate {
     AttachmentCandidate(filename: filename) { dir, id in
       try AttachmentStaging.write(data, into: dir, id: id, preferredExtension: preferredExtension)
     }
   }
 
-  /// A file from the Files importer, copied under its security scope.
+  /// Constructs a staging candidate from a security-scoped filesystem URL.
   static func file(_ url: URL) -> AttachmentCandidate {
     AttachmentCandidate(filename: url.lastPathComponent) { dir, id in
       try FileImport.copySecurityScoped(url, into: dir, id: id)
@@ -52,11 +48,9 @@ struct AttachmentCandidate: Sendable {
   }
 }
 
-/// Writes pasted or picked bytes into `Staging/`. An enum with no cases is a namespace for static
-/// functions.
+/// Staging utility responsible for persisting incoming candidate data into the staging directory.
 enum AttachmentStaging {
-  /// Writes `data` as `<dir>/<id>.<ext>`, the extension from the image type the bytes declare
-  /// (`CGImageSourceGetType`). Bytes that aren't an image are rejected.
+  /// Writes input data to a unique staged file, deriving file format extensions from image headers.
   static func write(_ data: Data, into dir: URL, id: UUID, preferredExtension: String? = nil) throws -> URL {
     guard let source = CGImageSourceCreateWithData(data as CFData, ImageInspector.noCache),
       let type = CGImageSourceGetType(source) as String?
@@ -69,12 +63,9 @@ enum AttachmentStaging {
   }
 }
 
-/// An attachment in the composer tray (D§3.5). A value type: the tasks change an item only through
-/// `update(_:_:)`, which writes into the tray array.
+/// Represents the presentation and processing lifecycle state of an attachment within the composer tray.
 struct TrayItem: Identifiable, Equatable, Sendable {
-  /// The item's progress: `importing` → `preparing` → `ready` or `failed`. The cases carry their
-  /// data (an enum with associated values), so a ready item always has its prepared file and a
-  /// failed one always has its reason.
+  /// Sequential processing states of an attachment item during ingestion.
   enum State: Equatable, Sendable {
     case importing
     case preparing
@@ -85,11 +76,11 @@ struct TrayItem: Identifiable, Equatable, Sendable {
   let id: UUID
   let origin: ImageOrigin
   var state: State
-  /// The staged original; nil until the import finishes.
+  /// File URL of the staged original image once ingestion succeeds.
   var originalURL: URL?
   var originalMimeType = ""
   var originalByteCount = 0
-  /// As displayed (orientation applied).
+  /// Dimensions adjusted for display orientation.
   var pixelWidth = 0
   var pixelHeight = 0
   var originalFilename: String?
@@ -107,7 +98,7 @@ struct TrayItem: Identifiable, Equatable, Sendable {
     }
   }
 
-  /// What the send records (D§4.3). Nil until the item is ready.
+  /// Converts the fully prepared tray item into a staged submission payload.
   var staged: StagedAttachment? {
     guard let prepared, let originalURL else { return nil }
     return StagedAttachment(
@@ -117,8 +108,7 @@ struct TrayItem: Identifiable, Equatable, Sendable {
   }
 }
 
-/// How one tray item's import and preparation ended, for its parent's Result. `removed` means the
-/// user removed the item (or Edit and Resend cleared the tray) before the task ended.
+/// Terminal disposition of an individual tray item processing pipeline.
 enum TrayItemOutcome: Sendable, Equatable {
   case prepared
   case reused
@@ -127,10 +117,9 @@ enum TrayItemOutcome: Sendable, Equatable {
   case removed
 }
 
-/// Attachments (D§3.5, D§4.8) and Edit and Resend (D§3.6): the tray, its imports and preparation,
-/// the budget caption, and cloning a sent message's uploads.
+/// Attachment lifecycle coordination and draft logic for ChatScreenModel.
 extension ChatScreenModel {
-  /// The shared maximum of input images for every model (D§4.8 step 6).
+  /// Global capacity limit for input image attachments per prompt submission.
   static let maxAttachments = 14
   static let fullTrayHint = "Up to 14 images per message"
 
@@ -143,18 +132,18 @@ extension ChatScreenModel {
 
   var canAddAttachments: Bool { tray.count < Self.maxAttachments }
 
-  /// The Photos picker's limit. Never 0, which the picker treats as "no limit".
+  /// Computes the remaining attachment selection allowance for system pickers.
   static func pickerLimit(trayCount: Int) -> Int { max(1, maxAttachments - trayCount) }
   var pickerLimit: Int { Self.pickerLimit(trayCount: tray.count) }
 
-  /// The body the ready items would make with the current text and settings (`predictedSize`).
+  /// Estimated wire transmission payload size computed from active tray attachments and current parameters.
   var projectedBodyBytes: Int {
     let images = tray.compactMap(\.prepared).map { BodyImage(fileURL: $0.url, mimeType: $0.mimeType, byteCount: $0.byteCount) }
     let spec = RequestBodySpec(images: images, promptText: trimmedText, settings: effective)
-    return (try? RequestBodyWriter.predictedSize(spec)) ?? 0  // try?: the caption only; the send checks the real size
+    return (try? RequestBodyWriter.predictedSize(spec)) ?? 0
   }
 
-  /// "3 images · 6.1 MB of 19 MB", or why Send is blocked (D§3.5).
+  /// Contextual status indicator displaying attachment inventory, transmission budget, or blocking conditions.
   var trayCaption: String {
     let counts = trayCounts
     if counts.failed > 0 { return "Remove the image that couldn't be prepared" }
@@ -170,18 +159,12 @@ extension ChatScreenModel {
     return caption
   }
 
-  // MARK: Attach
-
-  /// Imports and prepares the candidates, logged as one Attach action whose Result follows every
-  /// Prepare attachment it started (plan §2.8). Extras over the 14-image cap are dropped with a toast.
-  ///
-  /// The items appear in the tray at once, with a spinner; the composer stays usable while they
-  /// work. Two Attach calls can run at the same time (for example a paste during a Photos import);
-  /// each one waits only for its own items.
+  /// Coordinates asynchronous ingestion and preparation for candidate attachments, logging aggregate results.
+  /// Candidates exceeding the tray capacity ceiling are dropped with user notification.
   func attach(_ candidates: [AttachmentCandidate], from source: AttachSource) async {
     guard !candidates.isEmpty else { return }
     let log = services.log
-    // Read once: every item of this Attach is prepared at the same edge, even if Settings changes.
+    // Capture snapshot edge setting to guarantee uniform scaling across this batch.
     let edge = services.settings.maxUploadLongEdge
     let room = max(0, Self.maxAttachments - tray.count)
     let kept = Array(candidates.prefix(room))
@@ -195,20 +178,16 @@ extension ChatScreenModel {
       log.step(action, "dropped \(dropped) over the 14-image cap")
     }
 
-    // One unstructured task per item, so the items import and prepare in parallel. `Task {}`
-    // inherits the main actor here, so each task's tray updates run on the main thread; its slow
-    // work runs elsewhere (see `importAndPrepare`). The task captures `self` strongly: the model
-    // stays alive until the item's task ends, so the task can clean up its files.
+    // Launch concurrent worker tasks per candidate to parallelize I/O and image transformations.
     var tasks: [(id: UUID, task: Task<TrayItemOutcome, Never>)] = []
     for candidate in kept {
       let id = UUID()
       tray.append(TrayItem(id: id, origin: source.origin, state: .importing, originalFilename: candidate.filename))
       let task = Task { await self.importAndPrepare(id, candidate, parent: action, edge: edge) }
-      // Kept so that `removeTrayItem` can cancel the task.
       trayTasks[id] = task
       tasks.append((id, task))
     }
-    // Waits for every item, in order, so the Result is written after every child's Result.
+    // Await completion across all child tasks to record the consolidated outcome.
     var outcomes: [TrayItemOutcome] = []
     for (id, task) in tasks {
       outcomes.append(await task.value)
@@ -234,20 +213,14 @@ extension ChatScreenModel {
     log.result(action, failures.isEmpty ? .success : .failed, "\(summary)")
   }
 
-  /// Stages one candidate's original, then prepares it. A failed import begins no Prepare attachment.
-  ///
-  /// The user can remove the item during any `await` here. Cancellation doesn't stop the file work:
-  /// a detached task is not a child of this task, so the tray task's `cancel()` doesn't reach it.
-  /// Instead, each step checks with `update(_:_:)` that the item is still in the tray, and a removed
-  /// item's task deletes the files it made and returns `.removed`.
+  /// Manages the multi-stage ingestion pipeline for a candidate: file staging, metadata inspection, and downsampling.
+  /// Re-evaluates presence in the active tray after each suspension point to handle concurrent removals.
   private func importAndPrepare(_ id: UUID, _ candidate: AttachmentCandidate, parent: ActionID, edge: Int) async
     -> TrayItemOutcome
   {
     let dir = services.files.stagingDir
     let staged: URL
     do {
-      // `Task.detached` runs the copy or the photo load off the main actor, so the screen doesn't
-      // stop while large files are written.
       staged = try await Task.detached { try await candidate.stage(dir, id) }.value
     } catch {
       let reason = Self.importFailure(error)
@@ -271,7 +244,7 @@ extension ChatScreenModel {
         })
       return present ? .importFailed(reason) : Self.discard([staged])
     }
-    let bytes = (try? staged.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0  // try?: the size is for display and the log only
+    let bytes = (try? staged.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
     let present = update(
       id,
       { item in
@@ -287,24 +260,18 @@ extension ChatScreenModel {
     return await prepare(id, original: staged, parent: parent, edge: edge, described: described)
   }
 
-  /// Prepares a staged original as a Prepare attachment sub-action (D§4.8 step 3). An item removed
-  /// meanwhile ends it `cancelled`, and its files are deleted.
-  ///
-  /// Both an Attach and an Edit and Resend re-prepare call this. Exactly one Result is written for
-  /// the Begin below, on each path.
+  /// Executes downsampling and EXIF sanitization for a staged original image.
+  /// If the item is cancelled or removed during execution, transient artifacts are deleted.
   private func prepare(_ id: UUID, original: URL, parent: ActionID, edge: Int, described: String) async -> TrayItemOutcome {
     let log = services.log
     guard update(id, { $0.state = .preparing }) else { return Self.discard([original]) }
     let child = log.begin("Prepare attachment", parent: parent, "\(described) · max long edge \(edge)")
     let started = ContinuousClock.now
     let dir = services.files.stagingDir.appendingPathComponent("prepared", isDirectory: true)
-    // A local copy: the call then needs only this `@Sendable` closure, not the main-actor model.
     let prepareUpload = services.prepareUpload
     do {
       try FileStore.createDirectory(dir)
-      // The real preprocessor is `@concurrent`: it decodes and re-encodes off the main actor.
       let p = try await prepareUpload(original, edge, dir, id)
-      // The item can be gone now; its files would then have no owner, so they are deleted here.
       guard update(id, { $0.state = .ready(p) }) else {
         log.result(child, .cancelled, "removed while preparing")
         return Self.discard([original, p.url])
@@ -325,10 +292,7 @@ extension ChatScreenModel {
     }
   }
 
-  /// Applies `change` to the item if it's still in the tray; returns whether it was.
-  ///
-  /// The lookup is by ID, not by index, because the user can reorder or remove items during an
-  /// `await`. `inout` lets the closure change the array's element in place.
+  /// Mutates the targeted tray item in place if it exists in the active collection.
   @discardableResult
   private func update(_ id: UUID, _ change: (inout TrayItem) -> Void) -> Bool {
     guard let i = tray.firstIndex(where: { $0.id == id }) else { return false }
@@ -337,8 +301,7 @@ extension ChatScreenModel {
   }
 
   private static func discard(_ urls: [URL]) -> TrayItemOutcome {
-    // Staged files of a removed item; the Janitor clears Staging/ of anything left (at the next launch).
-    for url in urls { try? FileManager.default.removeItem(at: url) }  // try?: best effort, as above
+    for url in urls { try? FileManager.default.removeItem(at: url) }
     return .removed
   }
 
@@ -347,9 +310,7 @@ extension ChatScreenModel {
     return error.localizedDescription
   }
 
-  // MARK: Tray changes
-
-  /// Moves an item one place left (-1) or right (+1); logged as a Tray change.
+  /// Shifts the ordering of an attachment item within the composer tray.
   func moveTrayItem(_ id: UUID, by offset: Int) {
     guard let from = tray.firstIndex(where: { $0.id == id }) else { return }
     let to = from + offset
@@ -360,65 +321,44 @@ extension ChatScreenModel {
     services.log.result(action, .success, "done")
   }
 
-  /// Removes an item and deletes its staged files; a preparing item's Prepare attachment ends `cancelled`.
-  ///
-  /// Synchronous: the item leaves the tray at once. Its task, if any, keeps running until its next
-  /// check, then finds the item gone, deletes the files it made since, and writes the
-  /// `cancelled` Result (see `prepare`).
+  /// Removes an attachment item from the tray, cancels pending worker tasks, and deletes staged files.
   func removeTrayItem(_ id: UUID) {
     guard let i = tray.firstIndex(where: { $0.id == id }) else { return }
     let item = tray[i]
     let action = services.log.begin(
       "Tray change", origin: .user, "img \(Format.short(id)) · removed (\(item.stateName)) · tray \(tray.count - 1)")
     tray.remove(at: i)
-    // Cancellation only sets a flag; the check by ID in `update` is what stops the task's writes.
     trayTasks[id]?.cancel()
-    // Best effort; the Janitor clears Staging/ of anything left (at the next launch).
-    for url in [item.originalURL, item.prepared?.url].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }  // try?: best effort, as above
+    for url in [item.originalURL, item.prepared?.url].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }
     services.log.result(action, .success, "done")
   }
 
-  /// Empties the tray, deleting its staged files (Edit and Resend replacing the draft).
+  /// Clears the composer tray, terminating pending processing tasks and purging staged artifacts.
   private func clearTray() {
     for item in tray {
       trayTasks[item.id]?.cancel()
-      // Best effort; the Janitor clears Staging/ of anything left (at the next launch).
-      for url in [item.originalURL, item.prepared?.url].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }  // try?: best effort, as above
+      for url in [item.originalURL, item.prepared?.url].compactMap({ $0 }) { try? FileManager.default.removeItem(at: url) }
     }
     tray = []
   }
 
-  // MARK: Edit and Resend
-
-  /// Edit and Resend (D§3.6): loads the message text into the composer, clones its uploads into the
-  /// tray (re-preparing a clone made at another max long edge or missing its prepared file),
-  /// restores the pin when the request used `.pinned` or `.latest`, and focuses the text field.
-  /// A non-empty draft (text or tray) asks first. The Result follows every re-prepare.
-  ///
-  /// The clones are new files with new IDs in `Staging/`, so the new message never shares a file
-  /// with the old one (an APFS clone costs no extra space until one copy changes).
+  /// Populates the composer with prior message text, clones upload attachments, restores pinned state,
+  /// and prepares images matching current dimension constraints. Prompts for user confirmation if existing draft content exists.
   func editAndResend(userMessageID: UUID, requestID: UUID? = nil, confirmed: Bool = false) async {
-    // The confirmation is a second call: `pendingEdit` shows the dialog, and its button calls this
-    // again with `confirmed: true`.
     if !confirmed && (!trimmedText.isEmpty || !tray.isEmpty) {
       pendingEdit = (userMessageID, requestID)
       return
     }
     pendingEdit = nil
-    // The draft as the user agreed to replace it (or found empty). The reads below await, and the
-    // user can type or attach meanwhile; that newer draft is not replaced without asking again.
     let draftAtCheck = (text: trimmedText, items: tray.map(\.id))
-    // These reads are snapshots from `DataStore`, not records: records can't leave the store's actor.
     let store = services.store
-    guard let info = try? await store.messageInfo(userMessageID), info.role == .user else { return }  // try?: a deleted message has nothing to edit
-    let sources = (try? await store.uploadSources(messageID: userMessageID)) ?? []  // try?: no sources, nothing to clone
-    // A new random ID finds no request, which reads as "no pin to restore".
-    let request = try? await store.requestSnapshot(requestID ?? info.requestID ?? UUID())  // try?: no request, no pin to restore
+    guard let info = try? await store.messageInfo(userMessageID), info.role == .user else { return }
+    let sources = (try? await store.uploadSources(messageID: userMessageID)) ?? []
+    let request = try? await store.requestSnapshot(requestID ?? info.requestID ?? UUID())
     let restore: UUID? =
       if let request, request.selectionReason == .pinned || request.selectionReason == .latest { request.inputs.first?.imageID }
       else { nil }
-    // The pin is restored only if its image still exists.
-    let restorable: UUID? = if let restore, (try? await store.imageFile(restore)) != nil { restore } else { nil }  // try?: a missing image is not restorable
+    let restorable: UUID? = if let restore, (try? await store.imageFile(restore)) != nil { restore } else { nil }
     if (trimmedText, tray.map(\.id)) != draftAtCheck, !trimmedText.isEmpty || !tray.isEmpty {
       pendingEdit = (userMessageID, requestID)
       return
@@ -429,17 +369,14 @@ extension ChatScreenModel {
       "Edit and Resend", origin: .user,
       "message \(Format.short(userMessageID)) · text \(info.text.count) characters · attachments to clone \(sources.count) · pin to restore \(restorable.map { "img \(Format.short($0))" } ?? "none")"
     )
-    // The draft is the one the user agreed to replace (checked just above, with no `await` since).
     if !tray.isEmpty {
       log.step(action, "replaced the draft: \(tray.count) tray item\(tray.count == 1 ? "" : "s") removed")
       clearTray()
     }
     composerText = info.text
-    if let restorable { try? await store.setPin(conversationID, imageID: restorable) }  // try?: a failed save keeps the old pin, and the reload below shows it
+    if let restorable { try? await store.setPin(conversationID, imageID: restorable) }
     isTextFieldFocused = true
 
-    // Each clone is made synchronously (an APFS clone is fast). Only a clone that needs a new
-    // prepared file gets a task, the same `prepare` as an Attach; Send waits for it (D§3.6).
     var tasks: [(id: UUID, task: Task<TrayItemOutcome, Never>)] = []
     var failures: [String] = []
     var made = 0
@@ -458,7 +395,6 @@ extension ChatScreenModel {
         tasks.append((clone.id, task))
       }
     }
-    // Waits for every re-prepare, so this action's Result follows each child's Result.
     var reprepared = 0
     for (id, task) in tasks {
       let outcome = await task.value
@@ -478,16 +414,11 @@ extension ChatScreenModel {
   private struct Clone {
     let id: UUID
     let original: URL
-    /// Why it must be re-prepared, or nil when its prepared file was cloned as is.
+    /// Rationale for re-preparation if existing prepared asset cannot be cloned directly.
     let reprepare: String?
   }
 
-  /// Clones an upload's original (and its prepared file, when it was made at the current max long
-  /// edge) into `Staging/` with a new ID, and adds the tray item.
-  ///
-  /// It returns a `Result` (success or failure value) instead of throwing, so the caller logs each
-  /// failed clone and continues with the others. A clone that reuses its prepared file starts
-  /// `ready`; any other starts `preparing`, and `reprepare` says why.
+  /// Clones persisted original and preprocessed images into staging storage under new identifiers.
   private func cloneIntoTray(_ source: UploadSource, edge: Int) -> Result<Clone, CloneError> {
     let files = services.files
     let snap = source.snapshot

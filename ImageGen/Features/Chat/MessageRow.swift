@@ -1,13 +1,7 @@
 import SwiftData
 import SwiftUI
 
-// The transcript's rows: `MessageRow` picks a `UserBubble` or a `ModelReplyView` and adds the
-// message's long-press menu. The rows read SwiftData records (`Message`, `GenerationRequest`)
-// directly, on the main actor, from `ChatView`'s queries; SwiftUI redraws a row when a record it
-// reads changes. The rows don't call the model: every action goes out through `MessageRowActions`.
-
-/// What a message row asks the chat screen to do. A struct of closures, so the rows depend on no
-/// model and previews or tests can pass stubs. `ChatView.rowActions` builds the real one.
+/// Action delegate dispatch table providing decoupled handling for transcript row interactions.
 @MainActor
 struct MessageRowActions {
   var copy: (String, ChatScreenModel.CopyKind) -> Void
@@ -28,8 +22,7 @@ struct MessageRowActions {
   var regenerateUnavailableReason: (GenerationRequest) -> String?
 }
 
-/// One transcript row. `request` is the message's request record: for a user message, the request
-/// it started; for a reply, the request that produced it. Nil when the record is gone.
+/// Transcript row view dispatching presentation to user prompt or assistant reply layouts.
 struct MessageRow: View {
   let message: Message
   let request: GenerationRequest?
@@ -53,9 +46,7 @@ struct MessageRow: View {
   }
 }
 
-/// The message's own actions (D§3.6, "Message section"). The row's long-press menu shows them, and so
-/// does each image's menu, below the image actions: an image's menu replaces the row's (the inner
-/// `contextMenu` wins), so without this an image-only reply would offer no Regenerate, Info or Delete.
+/// Context menu section exposing message-level commands for message rows and nested image attachments.
 struct MessageSection: View {
   let message: Message
   let request: GenerationRequest?
@@ -71,15 +62,13 @@ struct MessageSection: View {
   }
 }
 
-/// A user message (D§3.4): a right-aligned accent bubble, attachments above the text.
+/// Renders a user prompt message bubble with optional attachment thumbnails and provenance annotations.
 struct UserBubble: View {
   let message: Message
   let request: GenerationRequest?
   let actions: MessageRowActions
-  /// The main SwiftData context, which an outer view provides. Used here for one small fetch.
   @Environment(\.modelContext) private var context
 
-  /// The grid's column count from D§3.4: one image full width, two to four in 2 columns, more in 3.
   private var columns: Int {
     switch message.images.count {
     case 0, 1: 1
@@ -88,15 +77,13 @@ struct UserBubble: View {
     }
   }
 
-  /// The image a pinned or latest send used, for the caption under the bubble.
+  /// Evaluates referenced input image provenance for contextual subtitle presentation.
   private var reusedInput: (reason: SelectionReason, asset: ImageAsset?)? {
     guard let request, let reason = SelectionReason(rawValue: request.selectionReason),
       reason == .pinned || reason == .latest
     else { return nil }
     let id = request.inputs.first?.imageID
-    // The reused image belongs to an earlier message, so it is fetched by ID. It can be deleted:
-    // the caption then shows without its thumbnail.
-    let asset = id.flatMap { id in try? context.fetch(FetchDescriptor<ImageAsset>(predicate: #Predicate { $0.id == id })).first }  // try?: a failed fetch shows no thumbnail
+    let asset = id.flatMap { id in try? context.fetch(FetchDescriptor<ImageAsset>(predicate: #Predicate { $0.id == id })).first }
     return (reason, asset)
   }
 
@@ -140,11 +127,7 @@ struct UserBubble: View {
   }
 }
 
-/// A model reply (D§3.4): parts in order, or the pending card, or the status card.
-///
-/// The reply message exists from the moment of the send, empty, with its request. So the same row
-/// shows the pending card, then the card or the parts, as the request's state changes; SwiftUI
-/// redraws it because the row reads `request.requestState`.
+/// Renders model responses across pending generation, terminal error cards, and successful multipart payloads.
 struct ModelReplyView: View {
   let message: Message
   let request: GenerationRequest?
@@ -169,11 +152,8 @@ struct ModelReplyView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  /// `@ViewBuilder` lets this function list views and use `switch` and `if` to choose among them;
-  /// SwiftUI combines the result into one view (a result builder).
   @ViewBuilder
   private func content(_ request: GenerationRequest) -> some View {
-    // All the presentation rules are in `ReplyPresentation`; this view only copies the fields.
     let presentation = ReplyPresentation.make(
       ReplyPresentation.Input(
         state: request.requestState, httpStatus: request.httpStatus, errorStatus: request.errorStatus,
@@ -212,8 +192,7 @@ struct ModelReplyView: View {
     }
   }
 
-  /// The reply's parts in the order returned. Identified by position, because a part has no ID of
-  /// its own and the list doesn't change order.
+  /// Sequence of received content parts rendered in ordinal arrival sequence.
   @ViewBuilder
   private var parts: some View {
     ForEach(Array(message.parts.enumerated()), id: \.offset) { _, part in

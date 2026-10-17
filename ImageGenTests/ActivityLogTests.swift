@@ -6,8 +6,7 @@ import Testing
 
 @Suite(.tags(.io))
 struct ActivityLogTests {
-  /// Strictly increasing timestamps 1/512 s apart (exact in binary, distinct at millisecond precision),
-  /// so file timestamps reveal the order calls took the facade's lock.
+  /// Synthetic clock advancing by powers-of-two fractional seconds to establish strict total ordering.
   final class TickClock: Sendable {
     private let ticks = Mutex(0)
     func next() -> Date {
@@ -20,8 +19,6 @@ struct ActivityLogTests {
   }
 
   static let lighthouse = "a lighthouse at dusk"
-
-  // MARK: Ordering
 
   @Test func orderPreservedUnderConcurrency() async throws {
     let clock = TickClock()
@@ -46,7 +43,7 @@ struct ActivityLogTests {
     }
     let entries = await probe.entries()
     #expect(entries.count == 2000)
-    // File order is lock order: the clock is read under the lock, so timestamps strictly increase.
+    // Ensures persistent sequential ordering mirrors synchronization lock acquisition order.
     for (a, b) in zip(entries, entries.dropFirst()) {
       #expect(a.timestamp < b.timestamp)
     }
@@ -72,7 +69,7 @@ struct ActivityLogTests {
     #expect(!lines.contains { $0.message.hasPrefix("late ") })
     #expect(lines.map(\.name) == ["Send", "Log cleared", "Log cleared"])
 
-    // flush() waits for a slowed-down store.
+    // Confirms that flush operations properly await completion even under simulated store latency.
     let slow = ActivityLogProbe(limits: ActivityLogStore.Limits(rotateAbove: 1 << 30, keepAfterRotation: 1 << 29, writeDelay: .milliseconds(2)))
     let s = slow.log.begin("Slow", origin: .user, "")
     for n in 0..<49 { slow.log.step(s, "n \(n)") }
@@ -80,8 +77,6 @@ struct ActivityLogTests {
     let raw = try String(contentsOf: slow.fileURL, encoding: .utf8)
     #expect(raw.split(separator: "\n").count == 50)
   }
-
-  // MARK: Pairing
 
   @Test func exactlyOneBeginAndResult() async throws {
     let probe = ActivityLogProbe()
@@ -113,8 +108,6 @@ struct ActivityLogTests {
     #expect(mirrored.map(\.entry.name) == ["Parse", "Attempt 1"])
     await probe.assertPaired()
   }
-
-  // MARK: Last Action
 
   @Test func lastActionIsNewestUserTopLevelWithSubActions() async throws {
     let probe = ActivityLogProbe()
@@ -187,8 +180,6 @@ struct ActivityLogTests {
     #expect(text.contains { $0.hasSuffix("(completed later)") })
   }
 
-  // MARK: Last Error
-
   @Test func lastErrorIncludesRefused() async throws {
     let probe = ActivityLogProbe()
     let a = probe.log.begin("Send", origin: .user, "go")
@@ -248,7 +239,7 @@ struct ActivityLogTests {
     log.result(late, .success, "in 3.0 s")
     #expect(ActivityLogQuery.lastError(await probe.records()) == older)
 
-    // A late completion that fails keeps the original in Last Error.
+    // Verifies that a failing late completion preserves the originating action in the error query.
     let b = log.begin("Send", origin: .user, "b")
     log.result(b, .interrupted, "closed")
     let lateB = log.beginLateCompletion(of: b, "req")
@@ -277,14 +268,12 @@ struct ActivityLogTests {
     await probe.assertPaired()
   }
 
-  // MARK: Rotation
-
   @Test func rotationKeepsWholeEntries() async throws {
     let probe = ActivityLogProbe()
     let log = probe.log
     let filler = String(repeating: "x", count: 1000)
     log.result(log.begin("Settings change", origin: .user, "first"), .success, "")
-    // Write in batches until the file shrinks: that's the rotation past 4 MB.
+    // Writes diagnostic records in batches until file truncation signals log rotation past the size threshold.
     var previous = 0
     var n = 0
     rotating: while n < 10_000 {
@@ -302,7 +291,7 @@ struct ActivityLogTests {
 
     let lines = await probe.lines()
     let size = try FileManager.default.attributesOfItem(atPath: probe.fileURL.path)[.size] as? Int ?? 0
-    // At most 2 MB, plus whatever the batch wrote after the rotation.
+    // Bounded by post-rotation retention limit plus pending batch remainder.
     #expect(size <= 2 * 1024 * 1024 + 100_000)
     #expect(size > 1024 * 1024)
     let entries = lines.compactMap { try? JSONDecoder().decode(ActivityEntry.self, from: Data($0.utf8)) }
@@ -310,14 +299,14 @@ struct ActivityLogTests {
     #expect(entries.suffix(2).map(\.message) == ["newest", ""])
     #expect(!entries.contains { $0.message == "first" })
     #expect(!entries.contains { $0.message.hasPrefix("n 0 ") })
-    // The store's own reads agree after rotation, with increasing sequence numbers.
+    // Confirms post-rotation entry continuity and monotonically increasing sequence identifiers.
     let after = await log.entries(after: 0)
     #expect(after.map(\.1) == entries)
     #expect(after.map(\.0) == after.map(\.0).sorted())
     #expect(Set(after.map(\.0)).count == after.count)
     await probe.assertPaired()
 
-    // A closed action whose begin rotated out is flagged.
+    // Flags actions whose opening entry has been pruned during rotation.
     let small = ActivityLogProbe(limits: ActivityLogStore.Limits(rotateAbove: 100_000, keepAfterRotation: 50_000))
     let x = small.log.begin("Copy", origin: .user, "x begins")
     for i in 0..<100 { small.log.result(small.log.begin("Copy", origin: .user, "a\(i) \(filler)"), .success, "") }
@@ -353,8 +342,6 @@ struct ActivityLogTests {
     #expect(await second.records().first { $0.id == send }?.origin == .user)
   }
 
-  // MARK: Clear
-
   @Test func clearDeletesFileAndStartsWithLogCleared() async throws {
     let probe = ActivityLogProbe()
     for n in 0..<10 { probe.log.result(probe.log.begin("Copy", origin: .user, "\(n)"), .success, "") }
@@ -381,7 +368,7 @@ struct ActivityLogTests {
     await log.clear()
     #expect(await probe.entries().map(\.name) == ["Send", "Attempt 1", "Log cleared", "Log cleared"])
 
-    // A reload still reports them open.
+    // Reinitialization reflects open actions preserved across the clear operation.
     let second = ActivityLogProbe(root: probe.root)
     #expect(Set(await second.log.openActionsAtLaunch().map(\.actionID)) == [send, attempt])
 
@@ -394,14 +381,12 @@ struct ActivityLogTests {
     await second.assertPaired()
   }
 
-  // MARK: Across instances
-
   @Test func flushTimeoutReturnsWhileTheStoreIsBusy() async throws {
     let probe = ActivityLogProbe(limits: ActivityLogStore.Limits(rotateAbove: 1 << 30, keepAfterRotation: 1 << 29, writeDelay: .milliseconds(200)))
     for n in 0..<20 { probe.log.begin("Copy", origin: .user, "\(n)") }
     let started = ContinuousClock.now
     await probe.log.flush(timeout: .milliseconds(100))
-    // The writes take about 4 s; the caller waits only the timeout.
+    // Ensures caller unblocks upon timeout expiration regardless of outstanding background writes.
     #expect(ContinuousClock.now - started < .seconds(1))
   }
 
@@ -440,7 +425,7 @@ struct ActivityLogTests {
 
   @Test func idSeededFromFileNotDefaults() async throws {
     let empty = ActivityLogProbe()
-    // Counter 0 is skipped: its ID is the "no action" placeholder.
+    // Counter 0 is reserved as the sentinel null action identifier.
     #expect(empty.log.begin("Copy", origin: .user, "") == ActivityLog.actionID(counter: 1))
     #expect(ActivityLog.actionID(counter: 0) == ActionID(raw: "0000"))
 
@@ -531,8 +516,7 @@ struct ActivityLogTests {
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         let protection = attributes[.protectionKey] as? FileProtectionType
         #if targetEnvironment(simulator)
-          // The simulator doesn't implement Data Protection, so the class reads back nil there;
-          // it's checked on the device (M10).
+          // iOS Simulator does not enforce hardware Data Protection; attributes validate as nil or default class.
           #expect(protection == nil || protection == .completeUntilFirstUserAuthentication, "\(when)")
         #else
           #expect(protection == .completeUntilFirstUserAuthentication, "\(when): \(url.lastPathComponent)")
@@ -578,8 +562,6 @@ struct ActivityLogTests {
     #expect(!line.contains("key=abc"))
     #expect(!probe.osLogStrings.joined().contains("s3cret-value"))
   }
-
-  // MARK: Formatter
 
   @Test func formatterLineFormat() {
     let utc = TimeZone(identifier: "UTC")!

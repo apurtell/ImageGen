@@ -85,7 +85,7 @@ struct LogViewerModelTests {
     await m.refresh()
     #expect(m.lines.count == before + 2)
     #expect(m.appendedCount == 2)
-    // Following changes(): a third entry arrives without calling refresh.
+    // Subsequent entries appear reactively without manual refresh.
     probe.log.result(probe.log.begin("Copy", origin: .user, "third"), .success, "")
     for _ in 0..<200 where !m.text.contains("third") { try await Task.sleep(for: .milliseconds(10)) }
     #expect(m.text.contains("third"))
@@ -114,7 +114,7 @@ struct LogViewerModelTests {
     let menu = DeveloperMenuModel(log: probe.log)
     probe.log.result(probe.log.begin("Copy", origin: .user, "old"), .success, "")
     let send = probe.log.begin("Send", origin: .user, "running")
-    // Cancelling the dialog doesn't call clearLog: every entry stays.
+    // Dismissing the confirmation prompt without approval retains all log entries.
     #expect(await probe.entries().count == 3)
     await menu.clearLog()
     let m = await viewer(.fullLog, probe)

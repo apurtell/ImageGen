@@ -18,7 +18,7 @@ struct ImagePreprocessorTests {
     return url
   }
 
-  /// RGBA of one pixel of an encoded image, decoded in full (test images are small).
+  /// Decodes and returns the RGBA color component values of a target pixel within an encoded image.
   func pixel(_ url: URL, x: Int, y: Int) throws -> [UInt8] {
     let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
     let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
@@ -31,7 +31,7 @@ struct ImagePreprocessorTests {
     return out
   }
 
-  /// A transparent canvas with an opaque red square in the middle.
+  /// Generates a test bitmap consisting of a transparent canvas with a centered opaque red rectangle.
   static func transparentWithSquare(width: Int = 64, height: Int = 48) -> CGImage {
     let ctx = CGContext(
       data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
@@ -62,7 +62,7 @@ struct ImagePreprocessorTests {
     #expect(p.mimeType == "image/jpeg")
     let info = try ImageInspector.inspect(url: p.url)
     #expect(!info.hasAlpha)
-    // The transparent corner is now white.
+    // Verifies that transparent regions are composited over a solid white background during JPEG conversion.
     let corner = try pixel(p.url, x: 1, y: 1)
     #expect(corner[0] > 240 && corner[1] > 240 && corner[2] > 240)
     let center = try pixel(p.url, x: 32, y: 24)
@@ -72,7 +72,6 @@ struct ImagePreprocessorTests {
   @Test(.serialized, arguments: [1536, 2048, 3072, 4096])
   func longEdgeCapped(edge: Int) async throws {
     let root = TestFileRoot()
-    // An 8064×6048 (48 MP) source.
     let source = root.file("48mp.jpg")
     try ImagePreprocessor.write(ImageFactory.cgImage(width: 8064, height: 6048, seed: edge), to: source, type: .jpeg, quality: 0.8)
     let start = ContinuousClock.now
@@ -91,16 +90,16 @@ struct ImagePreprocessorTests {
     let id = UUID()
     let dir = root.directory("prepared")
     let prepared = try await ImagePreprocessor.prepare(source: source, maxLongEdge: 2048, destinationDir: dir, id: id)
-    // The budget step shrinks it to a 1536 px long edge; an older request records that file.
+    // Budgeting downscales the asset to a 1536 px long edge, referenced by a prior request snapshot.
     let shrunk = try await ImagePreprocessor.shrink(prepared, factor: 0.75)
     #expect(max(shrunk.pixelWidth, shrunk.pixelHeight) == 1536)
     #expect(shrunk.url.lastPathComponent == "\(id.uuidString)-s1536.jpg")
     let before = try Data(contentsOf: shrunk.url)
-    // Later the max long edge is set to 1536 and the same upload is prepared again.
+    // Re-preparing the same source at an identical target edge produces an independent artifact without mutating the shrunk file.
     let again = try await ImagePreprocessor.prepare(source: source, maxLongEdge: 1536, destinationDir: dir, id: id)
     #expect(again.url != shrunk.url)
     #expect(try Data(contentsOf: shrunk.url) == before)
-    // A shrink of a shrunk file is named from the same stem.
+    // Downscaling an already downscaled image preserves the root identifier stem.
     let twice = try await ImagePreprocessor.shrink(shrunk, factor: 0.75)
     #expect(twice.url.lastPathComponent == "\(id.uuidString)-s1152.jpg")
     #expect(ImagePreprocessor.stem(of: twice.url) == id.uuidString)
@@ -110,7 +109,7 @@ struct ImagePreprocessorTests {
     let root = TestFileRoot()
     let dir = root.directory("prepared")
     let result = await Task {
-      // The tray item was removed: its task is cancelled before the work gets far.
+      // Simulates attachment removal where the underlying task is cancelled early in the preparation pipeline.
       withUnsafeCurrentTask { $0?.cancel() }
       return try await ImagePreprocessor.prepare(
         source: try FixtureLoader.url("Images/sample.heic"), maxLongEdge: 2048, destinationDir: dir, id: UUID())
@@ -123,7 +122,7 @@ struct ImagePreprocessorTests {
     let root = TestFileRoot()
     let p = try await prepare(try FixtureLoader.url("Images/tiny_16x9.png"), edge: 4096, root: root)
     #expect((p.pixelWidth, p.pixelHeight) == (32, 18))
-    #expect(p.mimeType == "image/jpeg")  // a PNG without alpha
+    #expect(p.mimeType == "image/jpeg")  // Normalizes opaque PNG sources to JPEG.
   }
 
   @Test func orientationApplied() async throws {
@@ -133,7 +132,7 @@ struct ImagePreprocessorTests {
     let p = try await prepare(source, root: root)
     #expect((p.pixelWidth, p.pixelHeight) == (300, 400))
     #expect(try ImageInspector.inspect(url: p.url).orientation == 1)
-    // The white mark at the stored top-left ends up at the top-right once rotated 90° clockwise.
+    // Verifies that EXIF orientation 6 (90° CW rotation) moves the top-left test mark to the top-right.
     let topRight = try pixel(p.url, x: 290, y: 10)
     #expect(topRight[0] > 230 && topRight[1] > 230 && topRight[2] > 230)
   }

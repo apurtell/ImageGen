@@ -8,7 +8,7 @@ import Testing
 struct GenerationServiceTests {
   typealias H = GenerationHarness
 
-  /// A response with text, image, text, image (two different real images).
+  /// Creates a multipart response payload containing alternating text and image candidate parts.
   static func textImageTextImage() throws -> Data {
     let png = try FixtureLoader.data("Images/tiny_16x9.png").base64EncodedString()
     let jpg = try FixtureLoader.data("Images/tiny_square.jpg").base64EncodedString()
@@ -29,8 +29,6 @@ struct GenerationServiceTests {
     let datas = parts.compactMap { ($0["inlineData"] as? [String: String])?["data"] }
     return try #require(Data(base64Encoded: datas[index]))
   }
-
-  // MARK: End to end
 
   @Test func endToEndTextToImage() async throws {
     let h = try H()
@@ -102,7 +100,7 @@ struct GenerationServiceTests {
     #expect(H.images(in: h.sentBodies[1]).first?.data == (try Self.fixtureImageBytes("Responses/resp_two_images.json", index: 0)))
   }
 
-  /// Turn 1 uploads a HEIC (prepared to JPEG) and gets a text-only reply, so the upload is the latest image.
+  /// Dispatches an initial turn uploading a HEIC asset receiving a text only reply, establishing the uploaded asset as the latest image context.
   func uploadThenText(_ h: H) async throws -> (conv: UUID, upload: StagedAttachment) {
     try h.respond("Responses/resp_text_only.json")
     let conv = try await h.s.store.createConversation()
@@ -219,8 +217,6 @@ struct GenerationServiceTests {
     #expect(H.images(in: h.sentBodies[1]).first?.data == (try FixtureLoader.data("Images/tiny_square.jpg")))
   }
 
-  // MARK: Refusals
-
   @Test func refusedOutcomeStoredNotAutoRetried() async throws {
     let h = try H()
     try h.respond("Responses/resp_image_safety.json")
@@ -270,8 +266,6 @@ struct GenerationServiceTests {
     #expect(h.recorded.count == 2)
   }
 
-  // MARK: Errors and notices
-
   @Test func apiErrorStoredWithDetails() async throws {
     let h = try H()
     try h.respond("Errors/err_400_invalid_argument.json")
@@ -310,8 +304,6 @@ struct GenerationServiceTests {
     #expect(three.inputs.map(\.imageID) == [base.imageID])
     #expect(H.images(in: h.sentBodies[2]).first?.data == (try Self.fixtureImageBytes("Responses/resp_text_image.json")))
   }
-
-  // MARK: Retries
 
   @Test func rateLimitRetriesThenSucceeds() async throws {
     let h = try H(manualSleeper: true)
@@ -409,7 +401,7 @@ struct GenerationServiceTests {
     try h.respond("Errors/err_400_civic.json", "Responses/resp_text_image.json")
     let conv = try await h.s.store.createConversation()
     _ = try await h.sendAndWait(h.draft(conv, "x"))
-    // What AppEnvironment's setOmitCivicOnMain does.
+    // Replicates the state mutation executed by `AppEnvironment.setOmitCivicOnMain`.
     if h.civicCalls.value > 0 { settings.omitCivicIntegrity = true }
     let next = GenerationSettingsResolver.resolve(ChatOverrides(), settings.generationDefaults())
     #expect(next.categories.count == 4)
@@ -467,7 +459,7 @@ struct GenerationServiceTests {
     let replaced = try await h.snapshot(id)
     #expect(!replaced.nextAttemptCreatedInBackground)
     #expect(replaced.taskIdentifier != oldTask)
-    // A new attempt number, so the replaced task's events can't touch it.
+    // Increments attempt counter to isolate foreground tasks from superseded background task events.
     #expect(replaced.attempt == 3)
     try await h.until { h.sleeper!.waitingCount == 2 }
     h.sleeper!.advance()
@@ -491,8 +483,6 @@ struct GenerationServiceTests {
     #expect(inFlight.attempt == 2)
     #expect(try await h.wait(id).state == .succeeded)
   }
-
-  // MARK: Cancels
 
   @Test func systemCancelBecomesInterrupted() async throws {
     let h = try H(scripted: true)
@@ -531,7 +521,7 @@ struct GenerationServiceTests {
     await h.service.cancel(requestID: id)
     let snap = try await h.wait(id)
     #expect(snap.state == .cancelled)
-    // The chat is free again.
+    // Confirms conversation availability unlocks following request cancellation.
     try h.respond("Responses/resp_text_image.json")
     #expect(try await h.sendAndWait(h.draft(conv, "again")).state == .succeeded)
   }
@@ -551,8 +541,6 @@ struct GenerationServiceTests {
     #expect(result.outcome == .cancelled)
   }
 
-  // MARK: Background assertion
-
   @Test func preparationHoldsBackgroundAssertion() async throws {
     let h = try H()
     try h.respond("Responses/resp_text_image.json")
@@ -565,7 +553,7 @@ struct GenerationServiceTests {
       Issue.record("no end")
       return
     }
-    // assertionEndFlushesFirst: by the end, the Send Begin, Prepare request and Attempt Begin are written.
+    // Asserts that log writes for send initiation, request preparation, and attempt dispatch flush before the assertion expires.
     #expect(lines >= 4)
     let begins = await h.probe.entries().prefix(lines)
     #expect(begins.contains { $0.name == "Attempt 1" && $0.kind == .begin })
@@ -592,7 +580,7 @@ struct GenerationServiceTests {
     for r in requests {
       #expect(!FileManager.default.fileExists(atPath: h.s.files.requestsDir.appendingPathComponent("\(r)/body.json").path))
     }
-    // The expiry's interrupted Result is in the file by the time the flush returned.
+    // Confirms that task interruption entries are persisted prior to background assertion release.
     guard case .expired(let lines) = h.tasks.events.value.first(where: { if case .expired = $0 { true } else { false } }) else {
       Issue.record("expiry not recorded")
       return
@@ -623,8 +611,6 @@ struct GenerationServiceTests {
     #expect(h.jobs.value.isEmpty)
   }
 
-  // MARK: Concurrency limits
-
   @Test func onePerChatEnforced() async throws {
     let h = try H()
     try h.respond("Responses/resp_text_image.json", delay: .seconds(1))
@@ -645,14 +631,12 @@ struct GenerationServiceTests {
     #expect(try await h.wait(rb).state == .succeeded)
   }
 
-  // MARK: Regenerate and Retry
-
   @Test func regenerateUsesRecordedSettings() async throws {
     let h = try H()
     try h.respond("Responses/resp_text_image.json", "Responses/resp_text_image.json")
     let conv = try await h.s.store.createConversation()
     let first = try await h.sendAndWait(h.draft(conv, "x", overrides: ChatOverrides(aspectRatio: .r21x9, imageSize: .s1K)))
-    // Defaults and overrides change after the first send; the regenerate ignores them.
+    // Subsequent modifications to defaults or conversation overrides do not affect the recorded snapshot settings re-executed during regeneration.
     h.edge.withLock { $0 = 4096 }
     try await h.s.store.setOverrides(conv, ChatOverrides(aspectRatio: .r1x1, imageSize: .s4K))
     let regenID = try await h.service.regenerate(sourceRequestID: first.id)
@@ -691,8 +675,6 @@ struct GenerationServiceTests {
     await #expect(throws: GenerationError.notRetryable(.succeeded)) { try await h.service.retry(requestID: failed.id) }
   }
 
-  // MARK: Notifications
-
   @Test func notificationPostedWhenInactive() async throws {
     let h = try H(active: false)
     try h.respond("Responses/resp_text_image.json", "Responses/resp_image_safety.json")
@@ -715,7 +697,7 @@ struct GenerationServiceTests {
     _ = try await h.sendAndWait(h.draft(conv, "x"))
     #expect(h.notifications.value.isEmpty)
     #expect(await h.probe.entries().contains { $0.kind == .step && $0.message == "notification not posted: chat is on screen" })
-    // Another chat on screen: posted.
+    // Notifications are posted when an inactive or different conversation is currently displayed.
     let other = try await h.s.store.createConversation()
     try h.respond("Responses/resp_text_image.json")
     _ = try await h.sendAndWait(h.draft(other, "y"))
@@ -762,12 +744,12 @@ struct GenerationServiceTests {
     let h = try H(scripted: true, active: true)
     let conv = try await h.s.store.createConversation()
     let body = try FixtureLoader.data("Responses/resp_text_image.json")
-    // In the foreground: not part of any wake.
+    // Foreground requests execute outside the scope of background wake event accounting.
     let a = try await h.service.send(h.draft(conv, "a"))
     try await h.wait(a, for: [.inFlight])
     h.scripted!.complete(a, attempt: 1, status: 200, body: body)
     try await h.wait(a, for: [.succeeded])
-    // In the background with no wake of its own; the app then comes back to the foreground.
+    // Background execution without explicit wake callback before returning to foreground.
     h.activity.setActive(false)
     let b = try await h.service.send(h.draft(conv, "b"))
     try await h.wait(b, for: [.inFlight])
@@ -775,7 +757,7 @@ struct GenerationServiceTests {
     try await h.wait(b, for: [.succeeded])
     h.activity.setActive(true)
     await h.service.appBecameActive()
-    // This wake's completion.
+    // Background completion dispatched within the active wake event cycle.
     let c = try await h.service.send(h.draft(conv, "c"))
     try await h.wait(c, for: [.inFlight])
     h.activity.setActive(false)
@@ -784,8 +766,6 @@ struct GenerationServiceTests {
     try await h.until { !h.finishedCalls.value.isEmpty }
     #expect(h.finishedCalls.value.first?.handled == 1)
   }
-
-  // MARK: Log assertions
 
   @Test func logsSendBeginParametersAndResult() async throws {
     let h = try H()
@@ -828,7 +808,7 @@ struct GenerationServiceTests {
     let prepare = await h.probe.entries().filter { $0.name == "Prepare request" && $0.kind == .begin }
     #expect(prepare[1].message.contains("original bytes (model output)"))
 
-    // A reused upload.
+    // Verifies activity logging when referencing a previously uploaded image asset.
     let h2 = try H()
     let (conv2, _) = try await uploadThenText(h2)
     try h2.respond("Responses/resp_text_image.json")
@@ -838,7 +818,7 @@ struct GenerationServiceTests {
     #expect(sends2[1].message.contains("640×480 HEIC"))
     #expect(sends2[1].message.contains("→ sent 640×480 JPEG"))
 
-    // Coercion for 3 Pro.
+    // Verifies activity logging when settings coercions are applied for Gemini Pro models.
     let h3 = try H()
     try h3.respond("Responses/resp_text_image.json", model: "gemini-3-pro-image")
     let conv3 = try await h3.s.store.createConversation()
@@ -884,7 +864,7 @@ struct GenerationServiceTests {
     let conv = try await h.s.store.createConversation()
     let id = try await h.service.send(h.draft(conv, "x"))
     let snap = try await h.snapshot(id)
-    // By the time the record exists with the ID, the Begin was already in the file (read raw, no flush).
+    // Confirms that the activity begin entry is committed to disk before the action identifier is stored in the database.
     let raw = try String(contentsOf: h.probe.fileURL, encoding: .utf8)
     #expect(raw.contains("\"actionID\":\"\(snap.activityActionID!.raw)\""))
     _ = try await h.wait(id)
@@ -942,7 +922,7 @@ struct GenerationServiceTests {
     h.service.stop()
 
     let h2 = try H(scripted: true, active: true, reuse: h)
-    // The background-created task is still waiting in the session.
+    // Simulates an outstanding background task remaining active across session restarts.
     let old = try #require(scheduled.taskIdentifier)
     h2.scripted!.live.withLock { $0 = [LiveTask(requestID: id, attempt: 2, taskIdentifier: old, countOfBytesSent: 0)] }
     h2.scripted!.failStarts.withLock { $0 = true }

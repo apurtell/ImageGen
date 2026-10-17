@@ -1,34 +1,30 @@
 import SwiftData
 import SwiftUI
 
-/// The app's entry point. `@main` marks the type that iOS starts.
+/// Application entry point and composition boundary.
 ///
-/// A SwiftUI `App` describes the app's scenes (here, one window) the way a `View` describes a screen.
-/// It creates `AppEnvironment.shared` early, attaches `AppDelegate` for the UIKit events that SwiftUI
-/// does not expose, injects the environment into the view tree, and reports scene phase changes.
-/// Everything here runs on the main actor. See the primer, *SwiftUI: the user interface* and
-/// *iOS application lifecycle*.
+/// Configures the root `WindowGroup`, coordinates system lifecycle transitions with `AppEnvironment`,
+/// binds the shared `AppDelegate` for UIKit background transfer events, and injects core dependencies
+/// and the SwiftData `ModelContainer` into the presentation hierarchy.
 @main
 struct ImageGenApp: App {
-  /// `@UIApplicationDelegateAdaptor` makes SwiftUI create one `AppDelegate` and give it the UIKit
-  /// delegate calls.
+  /// Bridges UIKit application lifecycle and background transfer delegate events.
   @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-  /// The window's phase: active, inactive or background. SwiftUI updates it.
+  /// Tracks system scene phase transitions.
   @Environment(\.scenePhase) private var scenePhase
 
   init() {
-    // Creates the environment (and the background session) before didFinishLaunching runs.
+    // Eagerly initializes runtime singletons and background session routing prior to initial delegate callbacks.
     if !AppEnvironment.isTestHost { _ = AppEnvironment.shared }
   }
 
   var body: some Scene {
     WindowGroup {
       if AppEnvironment.isTestHost {
-        // Unit tests are hosted by the app; the host stays inert (plan §2.2).
+        // Renders an inert view hierarchy when executing within a test host context.
         Color.clear
       } else {
-        // `.environment(_:)` makes each object readable by every view below with `@Environment`.
-        // `.modelContainer` gives SwiftUI's `@Query` lists the main-actor view of the database.
+        // Injects shared dependencies and the main-actor model container for declarative query bindings.
         RootView()
           .environment(AppEnvironment.shared)
           .environment(AppEnvironment.shared.navigator)

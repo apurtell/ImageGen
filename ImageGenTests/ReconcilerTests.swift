@@ -7,7 +7,7 @@ import Testing
 struct ReconcilerTests {
   typealias H = GenerationHarness
 
-  /// A request left by an earlier process in `state` at attempt 1, with its Send (and Attempt 1) open.
+  /// Creates a synthetic orphaned request state from a prior process execution with active log entries.
   func leftOver(_ h: H, state: RequestState, attemptOpen: Bool = true) async throws -> (id: UUID, send: ActionID) {
     let conv = try await h.s.store.createConversation()
     let send = h.probe.log.begin("Send", origin: .user, "earlier process")
@@ -22,7 +22,7 @@ struct ReconcilerTests {
     return (record.requestID, send)
   }
 
-  /// A new process on the same files: a new log, store actor, scripted transport and service.
+  /// Reinitializes application subsystem instances across process restart boundaries sharing the underlying storage root.
   func relaunch(_ h: H, live: [LiveTask] = [], graceSleeper: ManualSleeper? = nil) throws -> (H, Reconciler) {
     h.service.stop()
     let h2 = try H(scripted: true, reuse: h)
@@ -40,7 +40,7 @@ struct ReconcilerTests {
     let snap = try await h2.snapshot(id)
     #expect(snap.state == .inFlight)
     #expect(snap.taskIdentifier == 77)
-    // actionOfLiveRequestKeptOpen
+    // Confirms that active background requests preserve their open activity log actions across launches.
     let open = await h2.probe.log.openActionsAtLaunch()
     #expect(Set(open.map(\.actionID)).contains(send))
     #expect(await h2.probe.entries().contains { $0.actionID == send && $0.kind == .step && $0.message.contains("following req") })
@@ -106,7 +106,7 @@ struct ReconcilerTests {
     #expect(try await h2.snapshot(id).state == .succeeded)
     let tree = ActivityLogQuery.tree(send, in: await h2.probe.entries())
     #expect(tree.entries.last?.outcome == .success)
-    // The earlier process's Attempt ends with its real outcome, and nothing else ends it again.
+    // Reconciler completes the earlier process attempt using the re-parsed response without emitting conflicting results.
     let attempt = tree.entries.filter { $0.name == "Attempt 1" && $0.kind == .result }
     #expect(attempt.map(\.outcome) == [.success])
     #expect(!tree.entries.contains { $0.message == "parent finished first" || $0.message == Reconciler.closedReason })
@@ -119,7 +119,7 @@ struct ReconcilerTests {
     let h = try H(scripted: true)
     let (id, _) = try await leftOver(h, state: .inFlight)
     try FileStore.createDirectory(h.s.files.requestDir(id))
-    // A marker with no HTTP status: the connection ended without a response.
+    // Verifies handling of completion markers lacking an HTTP status code (indicating broken or unestablished connection).
     _ = ResponseAccumulator(files: h.s.files).complete(requestID: id, attempt: 1, taskIdentifier: 9, httpStatus: nil)
     let (h2, r) = try relaunch(h)
     await r.run()

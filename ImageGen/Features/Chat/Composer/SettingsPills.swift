@@ -1,16 +1,13 @@
 import SwiftUI
 
-/// The Model, Aspect and Resolution pills (D§3.5): an accent dot on an override, ⚠︎ on coercion.
-///
-/// Each item starts a `Task` that saves the override; the pill's label changes when the save
-/// completes and the model's `overrides` changes. The checkmark marks the effective value, which
-/// can differ from the override when the model coerces it.
+/// Flow wrapping pill controls displaying model selection, aspect ratio, and resolution overrides,
+/// complete with visual override indicators, coercion warnings, and hierarchical selection menus.
 struct SettingsPills: View {
   let model: ChatScreenModel
   @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
-    // Wraps whole pills to a new row at large text sizes, instead of breaking their labels.
+    // Flow layout adapts capsule pills to multi-line wrapping during Dynamic Type scaling without truncating labels.
     FlowLayout(spacing: 8) {
       Menu {
         Button(model.defaultModelItemLabel) { Task { await model.setModel(nil, from: .pill) } }
@@ -44,7 +41,7 @@ struct SettingsPills: View {
       .menuOrder(.fixed)
 
       Menu {
-        // Some models take no size parameter.
+        // Models with fixed internal output resolutions omit configurable dimension selections.
         if model.sizes.isEmpty {
           Text("Fixed by this model")
         } else {
@@ -62,15 +59,14 @@ struct SettingsPills: View {
       .accessibilityLabel("Resolution \(model.sizePillLabel)")
       .menuOrder(.fixed)
     }
-    // A menu's label takes the button tint (the accent color) over its own foreground style; the
-    // primary tint makes the labels black on light and white on dark, legible over any image.
+    // Force primary tinting across menu labels to override accent tint inheritance, maximizing contrast over underlying content.
     .tint(.primary)
   }
 
   private func pill(_ text: String, dot: Bool, caution: Bool) -> some View {
     HStack(spacing: 4) {
       if dot { Circle().fill(Color.accentColor).frame(width: 6, height: 6) }
-      // Black on light, white on dark (`.primary`), not the accent color: legible over any image.
+      // Utilize high-contrast primary foreground styling to maintain legibility across varying backdrop imagery.
       Text(text).font(.footnote.weight(.semibold)).foregroundStyle(.primary).lineLimit(1).fixedSize()
       if caution { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange) }
       Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.primary)

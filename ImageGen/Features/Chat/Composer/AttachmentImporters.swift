@@ -2,15 +2,14 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Copies a file chosen in the Files importer into `Staging/` under its security scope (D§4.8 step 1).
+/// Handles file staging from system document pickers within active security scoped resource lifecycles.
 enum FileImport {
   struct Unreadable: LocalizedError {
     var errorDescription: String? { "The file couldn't be read." }
   }
 
-  /// A file from another app's storage is readable only between the start and stop of its security
-  /// scope. `defer` stops the access on every exit, including a throw. It runs in a detached task
-  /// (see `importAndPrepare`), so a large copy doesn't block the main thread.
+  /// Duplicates external security scoped file resources into local staging storage while ensuring
+  /// resource access scopes are cleanly relinquished upon completion or error.
   static func copySecurityScoped(_ url: URL, into dir: URL, id: UUID) throws -> URL {
     let scoped = url.startAccessingSecurityScopedResource()
     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -32,8 +31,8 @@ extension AttachmentCandidate {
     var errorDescription: String? { "The photo couldn't be loaded (it may be in iCloud while offline)." }
   }
 
-  /// A Photos picker item, loaded as its original bytes (`.current` encoding keeps HEIC).
-  /// The load can take long (an iCloud download); it happens in the item's task, not here.
+  /// Wraps a Photos picker item into an attachment candidate, deferring payload transfer
+  /// and original byte preservation until pipeline ingestion.
   static func photo(_ item: PhotosPickerItem) -> AttachmentCandidate {
     let ext = item.supportedContentTypes.first?.preferredFilenameExtension
     return AttachmentCandidate(filename: nil) { dir, id in
@@ -43,17 +42,14 @@ extension AttachmentCandidate {
   }
 }
 
-/// The + menu's pickers (D§3.5): Photo Library (ordered multi-select, limit `max(1, 14 - tray)`)
-/// and Files (no count limit; extras over the cap are dropped with a toast).
-///
-/// A `ViewModifier` packages the two picker presentations so `ComposerInputRow` can attach them in
-/// one line. `@Binding` connects `showPhotos` and `showFiles` to the input row's `@State`.
+/// View modifier managing system presentation sheets for Photo Library and Files document pickers,
+/// coordinating selection limits, resource conversion, and asynchronous staging dispatch.
 struct AttachmentImporters: ViewModifier {
   let model: ChatScreenModel
   @Binding var showPhotos: Bool
   @Binding var showFiles: Bool
-  /// The picker's selection. It is cleared after each pick, so the next pick starts empty and
-  /// `.onChange` fires again even for the same photos.
+  /// Ephemeral collection of selected photo items, reset following each import event to permit
+  /// subsequent re-selection of identical assets.
   @State private var picked: [PhotosPickerItem] = []
 
   func body(content: Self.Content) -> some View {
@@ -63,7 +59,7 @@ struct AttachmentImporters: ViewModifier {
         matching: .images, preferredItemEncoding: .current
       )
       .onChange(of: picked) { _, items in
-        // Clearing `picked` fires `.onChange` again with an empty array; the guard ignores it.
+        // Guard against secondary empty change emissions resulting from explicit state resets.
         guard !items.isEmpty else { return }
         picked = []
         let candidates = items.map(AttachmentCandidate.photo)

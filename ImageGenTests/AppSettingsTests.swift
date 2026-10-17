@@ -6,7 +6,7 @@ import Testing
 @MainActor
 @Suite(.tags(.pure))
 struct AppSettingsTests {
-  /// A fresh, private defaults domain per test.
+  /// Ephemeral isolated `UserDefaults` domain fixture created per test execution.
   final class Defaults {
     let name = "ImageGenTests.\(UUID().uuidString)"
     let ud: UserDefaults

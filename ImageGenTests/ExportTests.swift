@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 
 @testable import ImageGen
 
-/// A photo library that answers with a fixed status and records adds.
+/// Controllable mock implementing `PhotoLibraryAccess` for testing photo authorization and persistence behaviors.
 final class FakePhotoLibrary: PhotoLibraryAccess {
   let status: PHAuthorizationStatus
   let failure: String?
@@ -30,7 +30,7 @@ final class FakePhotoLibrary: PhotoLibraryAccess {
   }
 }
 
-/// An original written to a temporary root, as an `ExportItem`.
+/// Writes synthetic image data to a temporary file, returning an `ExportItem` model representing the asset.
 func exportItem(in root: TestFileRoot, data: Data, mime: String, ext: String, width: Int = 64, height: Int = 48)
   throws -> ExportItem
 {
@@ -55,7 +55,7 @@ struct ExportTests {
     case "image/jpeg": ImageFactory.jpeg()
     case "image/png": ImageFactory.png()
     case "image/heic": ImageFactory.heic()
-    // ImageIO can't encode WebP; the export never decodes, so any bytes serve.
+    // Encodes synthetic RIFF/WebP headers since ImageIO lacks built-in WebP export encoding support.
     default: Data("RIFF\u{0}\u{0}\u{0}\u{0}WEBPVP8 fake".utf8)
     }
   }
@@ -69,11 +69,11 @@ struct ExportTests {
     let file = item.file
     #expect(file.utType.identifier == o.type)
 
-    // Exactly one representation applies, with the original's type.
+    // Asserts uniform type identifier fidelity across the exported representation.
     let provider = ActivityShareSheet.itemProvider(for: file)
     #expect(provider.registeredTypeIdentifiers == [o.type])
 
-    // Exported through FileRepresentation to a temporary file: the same bytes.
+    // Verifies byte-identical payload integrity through asynchronous file representation export.
     let copied: Data = try await withCheckedThrowingContinuation { c in
       _ = provider.loadFileRepresentation(forTypeIdentifier: o.type) { url, error in
         if let url, let d = try? Data(contentsOf: url) { c.resume(returning: d) } else { c.resume(throwing: error ?? CocoaError(.fileReadUnknown)) }
@@ -110,8 +110,6 @@ struct ExportTests {
     #expect(pasteboard.types == ["public.png"])
     #expect(pasteboard.data(forPasteboardType: "public.png") == data)
   }
-
-  // MARK: Log assertions
 
   @Test func saveToPhotosLogged() async throws {
     let probe = ActivityLogProbe(root: TestFileRoot())
@@ -197,7 +195,7 @@ struct ExportTests {
     tree = await probe.action(named: "Share")
     #expect(tree.last?.outcome == .cancelled)
 
-    // Torn down without a completion: cancelled from onDisappear, once.
+    // Verifies uncompleted share activities are cancelled on view dismissal.
     model.beginShare(item)
     let third = try #require(model.share)
     model.shareDisappeared(third)
@@ -272,9 +270,9 @@ struct ZoomMathTests {
   }
 
   @Test func maxScaleIsLargerOfPixelDoubleAndFourTimesFit() {
-    // A large image: 1:1 pixels × 2 (2/3 at 3×) beats 4 × fit.
+    // High-resolution images prioritize 2x 1:1 pixel scale over 4x fit bounds.
     #expect(abs(ZoomMath.maxScale(fit: 0.08, screenScale: 3) - 2.0 / 3.0) < 1e-9)
-    // A small image: 4 × fit wins.
+    // Low-resolution images bound maximum zoom to 4x fit scale.
     #expect(ZoomMath.maxScale(fit: 1.5, screenScale: 3) == 6)
   }
 

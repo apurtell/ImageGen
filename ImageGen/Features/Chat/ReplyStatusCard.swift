@@ -1,10 +1,8 @@
 import SwiftUI
 
-/// A failed, refused, empty, cancelled or interrupted reply (D§3.4): glyph, title, message line
-/// and buttons, exactly as `ReplyPresentation` maps them.
-///
-/// A pure view: it draws the `Card` value and reports a tap through `onButton`. `ModelReplyView`
-/// maps each button to a row action. A refusal's glyph is orange; every other failure is red.
+/// Renders terminal non-success reply states (including service errors, policy refusals,
+/// empty responses, cancellations, and system interruptions) as formatted cards containing
+/// diagnostic icons, explanatory messaging, and contextual recovery buttons.
 struct ReplyStatusCard: View {
   let card: ReplyPresentation.Card
   let onButton: (ReplyPresentation.Button) -> Void

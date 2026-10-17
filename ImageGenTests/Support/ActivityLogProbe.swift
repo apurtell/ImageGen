@@ -4,8 +4,8 @@ import Testing
 
 @testable import ImageGen
 
-/// An `ActivityLog` on a `TestFileRoot` file with a recording OSLog sink (plan §2.2). Every query
-/// awaits `flush()` first. Pass `root:` to open a second instance on the same file.
+/// Test fixture wrapping an `ActivityLog` instance bound to an isolated `TestFileRoot` directory,
+/// capturing mirrored OSLog events and providing inspection helpers for persisted JSONL records.
 final class ActivityLogProbe: Sendable {
   struct MirrorCall: Sendable {
     let entry: ActivityEntry
@@ -37,7 +37,7 @@ final class ActivityLogProbe: Sendable {
   }
 
   deinit {
-    // Keep the root until the store has finished, so it can't recreate Logs/ after the root is removed.
+    // Extends the temporary root lifetime until store teardown completes to prevent directory recreation races.
     let log = self.log
     let root = self.root
     Task.detached {
@@ -46,27 +46,27 @@ final class ActivityLogProbe: Sendable {
     }
   }
 
-  /// The mirror calls so far (await `flush()` first for completeness).
+  /// Snapshot of captured log mirror invocations recorded up to the current moment.
   var mirrorCalls: [MirrorCall] { recorder.calls.withLock { $0 } }
 
-  /// What the OSLog mirror was given, as `public | private`.
+  /// Formatted diagnostic strings representing mirrored entries in `[name actionID] public | private` format.
   var osLogStrings: [String] {
     mirrorCalls.map { "[\($0.entry.name) \($0.entry.actionID)] \($0.publicText) | \($0.privateText)" }
   }
 
-  /// The raw file lines.
+  /// Flushes pending actor writes and reads raw lines directly from the log file.
   func lines() async -> [String] {
     await log.flush()
     let text = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? ""
     return text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
   }
 
-  /// Every entry in the file, decoded.
+  /// Flushes pending actor writes and returns decoded `ActivityEntry` records.
   func entries() async -> [ActivityEntry] {
     await lines().compactMap { try? JSONDecoder().decode(ActivityEntry.self, from: Data($0.utf8)) }
   }
 
-  /// The tree of the newest top-level action with that name.
+  /// Resolves the subtree of entries associated with the most recent top-level action of the specified name.
   func action(named name: String) async -> [ActivityEntry] {
     let all = await entries()
     guard let id = all.last(where: { $0.kind == .begin && $0.name == name && $0.parentID == nil })?.actionID else {
@@ -80,7 +80,7 @@ final class ActivityLogProbe: Sendable {
     return await log.actionRecords()
   }
 
-  /// Every action in the file has exactly one begin and exactly one result.
+  /// Asserts that every unique action identifier in the log contains exactly one begin event and one result event.
   func assertPaired(sourceLocation: SourceLocation = #_sourceLocation) async {
     var begins: [ActionID: Int] = [:]
     var results: [ActionID: Int] = [:]

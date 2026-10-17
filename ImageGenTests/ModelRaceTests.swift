@@ -3,13 +3,13 @@ import Testing
 
 @testable import ImageGen
 
-/// User actions that overlap an await in a screen model (post-M9 concurrency review).
+/// Validates asynchronous state consistency and reentrancy protections across concurrent screen model interactions.
 @MainActor
 @Suite(.tags(.integration))
 struct ModelRaceTests {
   typealias Rig = ChatScreenModelTests.Rig
 
-  /// A ready tray item whose staged files exist.
+  /// Creates a ready tray item backed by staged file artifacts on disk.
   func stagedItem(_ r: Rig) throws -> TrayItem {
     let id = UUID()
     let original = r.s.files.stagingURL(id, ext: "png")
@@ -34,7 +34,7 @@ struct ModelRaceTests {
     r.model.composerText = "first"
     let sending = Task { await r.model.send() }
     try await waitUntil { gate.waitingCount == 1 }
-    // The tray empties at once; Send is off until the send returns.
+    // The tray clears immediately upon send dispatch while the send action remains disabled during processing.
     #expect(r.model.tray.isEmpty)
     #expect(!r.model.canSend)
     let next = try stagedItem(r)
@@ -95,7 +95,7 @@ struct ModelRaceTests {
   @Test func untouchedTitleDraftKeepsTheAutomaticTitle() async throws {
     let r = try await Rig()
     r.model.beginTitleEdit()
-    // The first send names the chat while the field is open.
+    // Initial generation assigns the conversation title while an in-place title edit remains active.
     _ = try await r.s.send(r.conv, prompt: "a lighthouse at dusk")
     await r.model.reload()
     let automatic = r.model.title
@@ -115,8 +115,6 @@ struct ModelRaceTests {
     #expect(stored.aspectRatio == .r1x1)
     #expect(r.model.overrides == stored)
   }
-
-  // MARK: Settings
 
   @Test func cancellingReplaceKeyDuringValidationKeepsTheOldKey() async throws {
     let rig = OnboardingModelTests.Rig()

@@ -1,28 +1,17 @@
 import SwiftData
 import SwiftUI
 
-/// The chat screen (D§3.4): transcript, composer, title (tap to rename) and the chat menu.
+/// Primary conversation screen presenting the message transcript, prompt composer, and header controls.
 ///
-/// A view struct is a description that SwiftUI rebuilds often; it holds no work of its own. The
-/// state and the actions are in `ChatScreenModel`, which this view creates once and keeps in
-/// `@State`. The navigation stack builds a `ChatView` for each chat it pushes.
-///
-/// Two paths bring data to the screen. The transcript reads the records directly with `@Query`
-/// (SwiftData's live queries on the main context), so a reply that lands redraws its row at once.
-/// The composer's state (pin, live request, overrides) comes from the model's snapshots. The
-/// `signature` property connects the two: a change in the queried records calls `model.reload()`.
-///
-/// Everything here runs on the main actor. Button actions start a `Task` to call the model's
-/// `async` methods, because a button's action can't `await`.
+/// Architectural Design:
+/// Integrates live SwiftData queries (`@Query`) for real-time transcript streaming with an observable
+/// view model (`ChatScreenModel`) governing interaction mechanics, generation pipelines, and composer state.
+/// An aggregated content signature observes record mutations to trigger model snapshot refreshes.
 struct ChatView: View {
   let conversationID: UUID
-  /// `@State` keeps the model alive across body rebuilds; a plain `let` would make a new model on
-  /// each rebuild of the parent.
   @State private var model: ChatScreenModel
-  /// The chat's messages and requests, kept current by SwiftData as the records change.
   @Query private var messages: [Message]
   @Query private var requests: [GenerationRequest]
-  // Presentation state: each one shows a sheet, dialog or alert while it is true or non-nil.
   @State private var renaming = false
   @State private var confirmDeleteChat = false
   @State private var showChatSettings = false
@@ -31,13 +20,10 @@ struct ChatView: View {
   @State private var deletingMessage: Message?
   @State private var viewer: ViewerRequest?
   @State private var exporter: ImageExportModel
-  /// True while the user is scrolled more than one screen up; shows "Jump to latest".
   @State private var awayFromBottom = false
-  /// The last message that the bottom-settling task scrolled to (see `transcript`).
   @State private var settledLastID: UUID?
 
-  /// The Details sheet's text. `.sheet(item:)` needs an `Identifiable` value; a new ID on each value
-  /// makes each Details tap a new presentation.
+  /// Presentation payload wrapper for arbitrary details text sheets.
   struct DetailsText: Identifiable {
     let id = UUID()
     let text: String
@@ -45,8 +31,6 @@ struct ChatView: View {
 
   init(conversationID: UUID, services: ChatServices) {
     self.conversationID = conversationID
-    // `_model` is the `@State` wrapper itself. SwiftUI uses this initial value only the first time
-    // the view appears; on later rebuilds it keeps the existing model.
     _model = State(initialValue: ChatScreenModel(conversationID: conversationID, services: services))
     _exporter = State(initialValue: ImageExportModel(log: services.log))
     _messages = Query(filter: #Predicate<Message> { $0.conversation?.id == conversationID }, sort: \Message.sequence)
@@ -55,8 +39,7 @@ struct ChatView: View {
 
   private var requestsByID: [UUID: GenerationRequest] { Dictionary(requests.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) }
 
-  /// Changes whenever the transcript's content or a request's state changes. It is a cheap value
-  /// for `.onChange` and `.task(id:)` to compare, instead of comparing the records themselves.
+  /// Compound signature reflecting transcript message cardinality and request lifecycle states.
   private var signature: String {
     "\(messages.count)|" + requests.map { "\($0.id.uuidString.prefix(4))\($0.state)\($0.attempt)" }.joined(separator: ",")
   }
@@ -78,7 +61,6 @@ struct ChatView: View {
           .padding(.horizontal, 12).padding(.vertical, 6)
           .glassEffect(.regular.interactive(), in: .capsule)
         } else {
-          // Tap opens the Rename alert; long-press edits the title in place.
           Text(model.title).font(.headline).lineLimit(1)
             .contentShape(Rectangle())
             .onLongPressGesture(minimumDuration: 0.4) { model.beginTitleEdit() }
@@ -104,8 +86,6 @@ struct ChatView: View {
     .confirmationDialog("Delete this chat?", isPresented: $confirmDeleteChat, titleVisibility: .visible) {
       Button("Delete", role: .destructive) { Task { await model.deleteChat() } }
     }
-    // A `Binding(get:set:)` built from closures turns an optional into the Bool that a dialog
-    // needs: non-nil shows it, and the dialog's dismissal sets the optional back to nil.
     .confirmationDialog(
       "Delete this message?", isPresented: Binding(get: { deletingMessage != nil }, set: { if !$0 { deletingMessage = nil } }),
       titleVisibility: .visible
@@ -140,17 +120,12 @@ struct ChatView: View {
     .sensoryFeedback(.selection, trigger: model.pinCount)
     .sensoryFeedback(.selection, trigger: model.isEditingTitle) { _, editing in editing }
     .sensoryFeedback(.success, trigger: model.completedWhileVisible)
-    // Lifecycle: `.task` runs `onAppear` each time the screen appears (and cancels it when the
-    // screen leaves). `.onDisappear` can't `await`, so it starts a task; that task is not
-    // cancelled, so the draft flush and the empty-chat check always finish.
     .task { await model.onAppear() }
     .onDisappear { Task { await model.onDisappear() } }
-    // Any change to the queried records refreshes the model's snapshots (pin chip, Send or Stop).
     .onChange(of: signature) { _, _ in Task { await model.reload() } }
   }
 
-  /// The messages in a lazy stack (rows are built only near the screen), anchored at the bottom,
-  /// with the composer in the bottom safe-area bar. `proxy` scrolls to a row by its `.id`.
+  /// Renders transcript messages within a lazily stacked scrolling view anchored to the latest message.
   private func transcript(_ proxy: ScrollViewProxy) -> some View {
       ScrollView {
       LazyVStack(spacing: 16) {
@@ -167,7 +142,6 @@ struct ChatView: View {
     }
     .defaultScrollAnchor(.bottom)
     .scrollDismissesKeyboard(.interactively)
-    // Reduces each scroll position to one Bool, so the action runs only when "away" changes.
     .onScrollGeometryChange(for: Bool.self) { geo in
       geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height > geo.containerSize.height
     } action: { _, away in
@@ -191,17 +165,13 @@ struct ChatView: View {
     .onChange(of: messages.count) { _, _ in
       if let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
     }
-    // `.task(id:)` cancels the running task and starts a new one each time the id changes. In a
-    // cancelled task the `try?` sleeps return at once, so it ends quickly; the new task then
-    // settles the scroll with its own delays.
     .task(id: "\(messages.last?.id.uuidString ?? "")|\(signature)") {
-      // Images load after the first layout, and a pending card grows when its reply lands: settle
-      // at the bottom. A state change alone doesn't pull back a user who scrolled away.
+      // Periodically re-align to bottom to accommodate delayed image layout and expansion.
       let lastID = messages.last?.id
       guard lastID != settledLastID || !awayFromBottom else { return }
       settledLastID = lastID
       for delay in [0.05, 0.35, 0.9] {
-        try? await Task.sleep(for: .seconds(delay))  // try?: a cancelled sleep ends early, as described above
+        try? await Task.sleep(for: .seconds(delay))
         if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
       }
     }
@@ -213,7 +183,7 @@ struct ChatView: View {
       pixelWidth: asset.pixelWidth, pixelHeight: asset.pixelHeight, createdAt: asset.createdAt)
   }
 
-  /// The images of the message holding `id`, in order, with their request's settings.
+  /// Builds a viewer presentation request containing ordered image assets and recorded settings for the target message.
   private func viewerRequest(startingAt id: UUID) -> ViewerRequest? {
     guard let message = messages.first(where: { $0.images.contains { $0.id == id } }) else { return nil }
     let files = model.services.files
@@ -224,10 +194,7 @@ struct ChatView: View {
     return ViewerRequest(images: images, startID: id)
   }
 
-  /// Whether the user message that produced `request` is still in the transcript. A regenerated
-  /// request has no user message of its own, so the walk follows `sourceRequestID` back to the
-  /// original. A refused card hides Edit when this is false (D§3.4). The hop limit guards against
-  /// a cycle in damaged records.
+  /// Verifies existence of the originating prompt message, traversing ancestor request records when evaluating regenerations.
   private func userMessageExists(for request: GenerationRequest?) -> Bool {
     guard let request else { return true }
     var current: GenerationRequest? = request
@@ -240,9 +207,7 @@ struct ChatView: View {
     return false
   }
 
-  /// The callbacks each row gets. The rows stay plain views that know nothing about the model;
-  /// each callback starts a `Task` where the model's method is `async`. The model is captured as a
-  /// local, a reference to the same object.
+  /// Configures message row action handlers delegating to the view model and export coordinator.
   private var rowActions: MessageRowActions {
     let model = self.model
     let files = model.services.files
@@ -262,7 +227,6 @@ struct ChatView: View {
       pin: { id in Task { await model.pin(id) } },
       view: { id in viewer = viewerRequest(startingAt: id) },
       export: { asset, action in exporter.perform(action, exportItem(asset, files: files)) },
-      // A synchronous file check for the menu; the service checks again when Regenerate runs.
       regenerateUnavailableReason: { request in
         request.inputs.allSatisfy { files.exists(relative: $0.preparedRelativePath) } ? nil : "An input image was deleted"
       })

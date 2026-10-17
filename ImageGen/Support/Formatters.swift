@@ -1,27 +1,25 @@
 import Foundation
 
-/// The activity log's conventions (D§4.13 Messages).
-/// Callers use these to build `ActivityMessage` text, so every message spells sizes, durations and
-/// IDs the same way. Pure functions, callable from any thread or actor.
+/// Formatting utilities standardizing telemetry representations for byte quantities, durations,
+/// truncated identifiers, media types, and network error codes.
 enum Format {
-  /// "1.3 MB": megabytes (2^20) with one decimal.
+  /// Formats byte quantities into mebibytes (2^20 bytes) with single-decimal precision.
   static func mb(_ bytes: Int) -> String {
     String(format: "%.1f MB", Double(bytes) / 1_048_576)
   }
 
-  /// "14.2 s"
-  /// `Duration` stores whole seconds plus attoseconds (10^-18 s).
+  /// Formats a `Duration` value into decimal seconds with tenths precision.
   static func seconds(_ d: Duration) -> String {
     let c = d.components
     return String(format: "%.1f s", Double(c.seconds) + Double(c.attoseconds) / 1e18)
   }
 
-  /// The first four hex digits of a UUID: "img 7f3a".
+  /// Returns the leading four hexadecimal characters of a UUID for concise logging.
   static func short(_ id: UUID) -> String {
     String(id.uuidString.lowercased().prefix(4))
   }
 
-  /// "PNG", "JPEG" from a MIME type.
+  /// Maps image MIME type identifiers to canonical display labels.
   static func type(_ mimeType: String) -> String {
     switch mimeType.lowercased() {
     case "image/jpeg": "JPEG"
@@ -34,13 +32,12 @@ enum Format {
     }
   }
 
-  /// "2752×1536 PNG 6.4 MB"
+  /// Assembles a compound description string containing dimensions, format label, and payload size.
   static func image(width: Int, height: Int, mimeType: String, bytes: Int) -> String {
     "\(width)×\(height) \(type(mimeType)) \(mb(bytes))"
   }
 
-  /// A readable `URLError` code name. The type has no name text of its own; a code not listed here
-  /// shows its number.
+  /// Translates standard `URLError.Code` cases to readable symbolic names.
   static func urlError(_ code: URLError.Code) -> String {
     switch code {
     case .timedOut: "timedOut"

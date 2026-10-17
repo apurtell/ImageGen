@@ -1,6 +1,6 @@
-// Generates the four checked-in binary test images (IMPLEMENTATION_PLAN.md section 2.2):
+// Generates binary image test fixtures for automated test suites:
 //   xcrun swift scripts/gen_image_fixtures.swift ImageGenTests/Fixtures/Images
-// With --large <path>, writes an 8064×6048 JPEG for manual simulator checks instead (never checked in).
+// With `--large <path>`, outputs an 8064×6048 JPEG fixture for manual display testing.
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -16,7 +16,7 @@ func gradient(width: Int, height: Int, from: (CGFloat, CGFloat, CGFloat), to: (C
   let g = CGGradient(colorsSpace: space, colors: colors, locations: [0, 1])!
   ctx.drawLinearGradient(g, start: .zero, end: CGPoint(x: width, y: height), options: [])
   if mark {
-    // An asymmetric block in the top-left corner, so orientation mistakes are visible.
+    // Renders an asymmetric corner indicator to detect coordinate orientation discrepancies.
     ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
     ctx.fill(CGRect(x: 0, y: height - max(1, height / 4), width: max(1, width / 3), height: max(1, height / 4)))
   }
@@ -47,7 +47,7 @@ try FileManager.default.createDirectory(at: out, withIntermediateDirectories: tr
 write(gradient(width: 640, height: 480, from: (0.15, 0.35, 0.75), to: (0.95, 0.55, 0.25)),
       to: out.appendingPathComponent("sample.heic"), type: .heic,
       properties: [kCGImageDestinationLossyCompressionQuality: 0.6])
-// Stored as 400×300 with EXIF orientation 6 (rotate 90° clockwise to display).
+// Configured as 400×300 with EXIF orientation 6 (requiring 90° clockwise rotation for upright display).
 write(gradient(width: 400, height: 300, from: (0.2, 0.6, 0.3), to: (0.9, 0.9, 0.3)),
       to: out.appendingPathComponent("rotated_exif6.jpg"), type: .jpeg,
       properties: [kCGImageDestinationLossyCompressionQuality: 0.7, kCGImagePropertyOrientation: 6,

@@ -5,7 +5,7 @@ import Testing
 
 @Suite(.tags(.pure))
 struct RedactorTests {
-  static let b64 = String(repeating: "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo", count: 6)  // 210 chars
+  static let b64 = String(repeating: "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo", count: 6)  // 210 characters.
   let sanitize = Redactor.forLog(secrets: { [] })
 
   func object(_ s: String) throws -> Any { try JSONSerialization.jsonObject(with: Data(s.utf8)) }
@@ -13,7 +13,7 @@ struct RedactorTests {
   @Test func overlappingSecretsRemovedWhole() {
     let full = "AIzaSyD-0123456789abcdefghijklmnopqrstu"
     let truncated = String(full.prefix(20))
-    // Either registration order: the longer secret goes first.
+    // Verifies longest match precedence regardless of secret registration order.
     for order in [[truncated, full], [full, truncated]] {
       let out = Redactor.forLog(secrets: { order })("echo \(full) end")
       #expect(out == "echo \(Redactor.keyRemoved) end")
@@ -82,7 +82,7 @@ struct RedactorTests {
   }
 
   @Test func forLogRemovesKeyShapedText() {
-    let key = "AIza" + String(repeating: "Ab3_-", count: 7)  // 4 + 35 characters
+    let key = "AIza" + String(repeating: "Ab3_-", count: 7)  // Synthesizes standard 39-character Gemini API key pattern.
     #expect(key.count == 39)
     #expect(sanitize("error: bad key \(key) here") == "error: bad key <key removed> here")
   }
@@ -104,12 +104,12 @@ struct RedactorTests {
     #expect(Redactor.errorBodyForLog(short) == short)
     let body = String(repeating: "x", count: 2047) + "é" + String(repeating: "y", count: 3000)
     let out = Redactor.errorBodyForLog(body)
-    // "é" is two bytes and would straddle the 2048-byte cut, so the head stops before it.
+    // Multibyte UTF-8 boundary protection: splits prior to character boundary to avoid encoding corruptions.
     #expect(out == String(repeating: "x", count: 2047) + "… (+3002 bytes)")
   }
 
   @Test func detailsCapKeepsValidUTF8() {
-    let s = String(repeating: "🎨", count: 20_000)  // 80 KB
+    let s = String(repeating: "🎨", count: 20_000)  // 80 KB payload.
     let capped = Redactor.capped(s, maxBytes: 64 * 1024)
     #expect(capped.utf8.count <= 64 * 1024)
     #expect(capped.hasSuffix("… (truncated)"))

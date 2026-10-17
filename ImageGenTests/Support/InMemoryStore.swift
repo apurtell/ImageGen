@@ -4,10 +4,10 @@ import Synchronization
 
 @testable import ImageGen
 
-/// SwiftData also declares a `DataStore` (custom stores); in tests the name means the app's actor.
+/// Disambiguates the application's domain `DataStore` actor from SwiftData's built-in protocol.
 typealias DataStore = ImageGen.DataStore
 
-/// An in-memory container, a `DataStore` and a `FileStore` on a `TestFileRoot` (from M2 on).
+/// Test harness providing isolated in-memory SwiftData containers and disk-backed `FileStore` hierarchies.
 final class InMemoryStore: Sendable {
   let root: TestFileRoot
   let files: FileStore
@@ -23,12 +23,12 @@ final class InMemoryStore: Sendable {
     store = DataStore(container: container, files: files, clock: { clock.now })
   }
 
-  /// A second actor on the same container, as after a relaunch.
+  /// Instantiates a new `DataStore` actor sharing the underlying container, simulating application restarts.
   func newDataStore() -> DataStore {
     DataStore(container: container, files: files, clock: { [clock] in clock.now })
   }
 
-  /// Writes an original and a prepared file into `Staging/`, as the composer would.
+  /// Writes synthetic original and preprocessed images into staging storage, returning a populated `StagedAttachment`.
   func stage(
     origin: ImageOrigin = .photos, original: Data = ImageFactory.png(), originalMime: String = "image/png",
     width: Int = 32, height: Int = 18, edge: Int = 2048, seed: Int = 0
@@ -54,7 +54,7 @@ final class InMemoryStore: Sendable {
     modelID: ModelCatalog.defaultModelID, aspectRatio: .r16x9, imageSize: .s2K, threshold: .blockNone,
     categories: HarmCategory.allCases, includeTextModality: true, coercions: [])
 
-  /// Records a send with the given attachments (selection `.attachments`, or `.noImage` without any).
+  /// Persists a send record with configured attachments, defaulting selection strategy based on attachment presence.
   @discardableResult
   func send(
     _ conv: UUID, prompt: String, attachments: [StagedAttachment] = [], selection: Selection? = nil,
@@ -71,7 +71,7 @@ final class InMemoryStore: Sendable {
   }
 }
 
-/// A settable clock.
+/// Thread-safe controllable clock fixture for deterministic temporal testing.
 final class TestClock: Sendable {
   private let value: Mutex<Date>
 

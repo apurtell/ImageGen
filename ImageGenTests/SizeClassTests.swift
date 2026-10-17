@@ -12,7 +12,7 @@ struct SizeClassTests {
   }
 
   @Test func oneK1x8_384x3072_honored() {
-    // The long edge (3072) looks like 4K territory, but the pixel count is 1.18 MP: 1K.
+    // Total pixel count determines size classification: 1.18 MP resolves to 1K despite an elongated 3072 px dimension.
     #expect(SizeClass.isSizeHonored(requested: .s1K, width: 384, height: 3072))
     #expect(SizeClass.classify(width: 384, height: 3072) == .s1K)
     #expect(SizeClass.isAspectHonored(requested: .r1x8, width: 384, height: 3072))
@@ -37,7 +37,7 @@ struct SizeClassTests {
   }
 
   @Test func aspectToleranceIsThreePercent() {
-    #expect(SizeClass.isAspectHonored(requested: .r16x9, width: 1376, height: 768))  // 1.792 vs 1.778
+    #expect(SizeClass.isAspectHonored(requested: .r16x9, width: 1376, height: 768))  // 1.792 vs 1.778 within tolerance limit.
     #expect(SizeClass.isAspectHonored(requested: .r21x9, width: 1584, height: 672))
     #expect(!SizeClass.isAspectHonored(requested: .r16x9, width: 1600, height: 1000))
     #expect(SizeClass.nearestAspect(width: 1584, height: 672) == .r21x9)

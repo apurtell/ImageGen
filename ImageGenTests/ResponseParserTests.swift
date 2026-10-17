@@ -246,7 +246,7 @@ struct ResponseParserTests {
 
   @Test(.tags(.io)) func parsesFromMappedFileOfThirtyMB() async throws {
     let root = TestFileRoot()
-    // An incompressible PNG of about 24 MB, so the body is over 30 MB.
+    // Synthesizes a high entropy incompressible PNG (~24 MB) producing a response body exceeding 30 MB.
     let side = 2850
     var rng = SystemRandomNumberGenerator()
     var pixels = [UInt8](repeating: 255, count: side * side * 4)

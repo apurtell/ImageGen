@@ -1,37 +1,33 @@
 import Foundation
 
-/// What one attempt ended with, as `GenerationService` gives it to `decide`.
+/// Intermediate result of a transport attempt provided to the retry evaluation engine.
 enum AttemptResult: Sendable {
-  /// The server answered. `error` is the decoded JSON error body, for a non-2xx status.
+  /// Upstream HTTP response accompanied by parsed error body when status indicates failure.
   case http(status: Int, headers: [String: String], bodyBytes: Int, error: GeminiErrorBody?)
-  /// `elapsed` is measured from when the attempt's task began.
+  /// Network transport error accompanied by elapsed attempt duration.
   case transport(URLError.Code, elapsed: Duration)
-  /// Never retried. `GenerationService` ends a cancelled attempt before it asks the policy.
+  /// Explicit user or system cancellation; excluded from automatic retry evaluation.
   case cancelled
 }
 
 enum RetryDecision: Sendable, Equatable {
-  /// Start the next attempt as a delayed task, after this delay.
+  /// Schedules a subsequent attempt after the specified backoff duration.
   case retry(after: Duration)
-  /// Rebuild the body without CIVIC_INTEGRITY and send it again (outside the auto-retry budget).
+  /// Reconstructs the request body omitting the `HARM_CATEGORY_CIVIC_INTEGRITY` safety category.
   case rebuildWithoutCivicAndRetry
-  /// No more automatic attempts: save the outcome of this one.
+  /// Concludes automatic attempts and transitions request to terminal failure state.
   case finish
 }
 
-/// Decides what happens after an attempt (D§6, Retry policy). Pure; the counters come from the
-/// persisted request, never from memory.
-///
-/// `GenerationService` holds one in its `Dependencies` and calls `decide` for each completion, inside
-/// the request's turn. A pure value type has no shared state, so any thread can call it. Because the
-/// counters come from the record, the budget holds across relaunches.
+/// Evaluates network transport outcomes and HTTP status codes against retry policies to determine subsequent dispatch actions.
+/// Implemented as a stateless value type where retry quotas are tracked via persisted request record counters across process boundaries.
 struct RetryPolicy: Sendable {
   var maxAutoRetries = 2
   var base: Duration = .seconds(2)
   var cap: Duration = .seconds(60)
-  /// Equals `timeoutIntervalForResource` (D§4.6).
+  /// Total resource timeout threshold matching transport session configuration.
   var resourceTimeout: Duration = .seconds(1800)
-  /// 0..<1, injectable for tests.
+  /// Jitter interval generator (0..<1) injected for deterministic testing.
   var jitter: @Sendable () -> Double
 
   init(
@@ -46,7 +42,7 @@ struct RetryPolicy: Sendable {
     self.jitter = jitter
   }
 
-  /// Request timeout, rate limit, and server errors that may pass on a later attempt.
+  /// Transient HTTP status codes eligible for automatic retry.
   static let retryableStatuses: Set<Int> = [408, 429, 500, 502, 503, 504]
   static let retryableURLErrors: Set<URLError.Code> = [
     .networkConnectionLost, .notConnectedToInternet, .cannotConnectToHost,
@@ -60,7 +56,7 @@ struct RetryPolicy: Sendable {
       return .finish
 
     case .transport(let code, let elapsed):
-      // A timeout at or beyond the resource timeout is final; below it, it's the idle timeout.
+      // Timeouts exceeding resource timeout threshold are terminal; shorter timeouts represent idle connection drops.
       let retryable =
         (code == .timedOut && elapsed < resourceTimeout) || Self.retryableURLErrors.contains(code)
       return retryable ? retry(autoRetriesUsed: autoRetriesUsed, hint: nil) : .finish
@@ -69,11 +65,11 @@ struct RetryPolicy: Sendable {
       if status == 400, let error, error.mentionsCivicIntegrity,
         error.status == nil || error.status == "INVALID_ARGUMENT"
       {
-        // Outside the budget, at most once per request.
+        // Rebuild without civic integrity category outside standard retry budget quotas, permitted at most once per request.
         return civicWasSent && !civicFallbackUsed ? .rebuildWithoutCivicAndRetry : .finish
       }
       if (200..<300).contains(status) {
-        // A 2xx with a body is final, refusals included; an empty body is #33.
+        // Successful status codes with empty payload bodies trigger retry evaluation; populated payloads are terminal.
         return bodyBytes == 0 ? retry(autoRetriesUsed: autoRetriesUsed, hint: nil) : .finish
       }
       guard Self.retryableStatuses.contains(status) else { return .finish }
@@ -82,8 +78,7 @@ struct RetryPolicy: Sendable {
     }
   }
 
-  /// Retries while the budget lasts. The server's hint wins; otherwise the delay is exponential
-  /// backoff (2 s, 4 s, …) plus up to 1 s of jitter. Both are capped at `cap`.
+  /// Calculates backoff duration honoring upstream hints with exponential backoff and jitter fallback.
   private func retry(autoRetriesUsed: Int, hint: Duration?) -> RetryDecision {
     guard autoRetriesUsed < maxAutoRetries else { return .finish }
     if let hint { return .retry(after: min(hint, cap)) }
@@ -91,13 +86,12 @@ struct RetryPolicy: Sendable {
     return .retry(after: min(backoff, cap))
   }
 
-  /// Whether a transport error can be retried at all (a timeout only below the resource timeout).
-  /// `GenerationService` uses it only for the wording of the log step after a `finish`.
+  /// Evaluates whether a URL error qualifies as retryable.
   static func isRetryable(_ code: URLError.Code) -> Bool {
     code == .timedOut || retryableURLErrors.contains(code)
   }
 
-  /// `Retry-After` in delta-seconds, matched case-insensitively.
+  /// Parses delta seconds from `Retry-After` response headers case-insensitively.
   static func retryAfter(_ headers: [String: String]) -> Duration? {
     guard let value = headers.first(where: { $0.key.caseInsensitiveCompare("Retry-After") == .orderedSame })?.value,
       let seconds = Double(value.trimmingCharacters(in: .whitespaces)), seconds >= 0

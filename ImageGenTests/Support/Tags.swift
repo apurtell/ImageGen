@@ -1,12 +1,12 @@
 import Testing
 
 extension Tag {
-  /// No I/O.
+  /// Fast, in-memory tests executing without disk or network I/O.
   @Tag static var pure: Self
-  /// Temporary files.
+  /// File-backed tests operating on isolated temporary file trees.
   @Tag static var io: Self
-  /// Transport plus store.
+  /// End-to-end integration tests exercising combined store, transport, and pipeline layers.
   @Tag static var integration: Self
-  /// Network; opt-in.
+  /// Live network tests requiring explicit external API credentials.
   @Tag static var live: Self
 }

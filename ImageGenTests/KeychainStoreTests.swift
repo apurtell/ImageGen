@@ -4,7 +4,7 @@ import Testing
 
 @testable import ImageGen
 
-/// Uses its own service name, never the app's Keychain item.
+/// Validates Keychain persistence using an isolated service identifier to protect production credentials.
 @Suite(.serialized, .tags(.io))
 struct KeychainStoreTests {
   static let service = "com.andrewpurtell.imagegen.tests"

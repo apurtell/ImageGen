@@ -3,7 +3,7 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-/// Test images made in code with ImageIO (plan §2.2). Pixels are a deterministic gradient.
+/// In-memory image generator synthesizing deterministic CoreGraphics and ImageIO fixtures for automated tests.
 enum ImageFactory {
   static func cgImage(width: Int, height: Int, alpha: Bool = false, seed: Int = 0) -> CGImage {
     let space = CGColorSpace(name: CGColorSpace.sRGB)!
@@ -61,7 +61,7 @@ enum ImageFactory {
     return data as Data
   }
 
-  /// Pixel size and EXIF orientation of encoded image data, or nil when it doesn't decode.
+  /// Inspects encoded image data to extract pixel dimensions and EXIF orientation metadata via ImageIO.
   static func inspect(_ data: Data) -> (width: Int, height: Int, orientation: Int)? {
     guard let source = CGImageSourceCreateWithData(data as CFData, nil),
       CGImageSourceGetCount(source) > 0,

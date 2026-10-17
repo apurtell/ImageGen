@@ -3,7 +3,7 @@ import Testing
 
 @testable import ImageGen
 
-/// Helpers shared by the request-building suites (plan §2.3).
+/// Shared fixture helpers and assertions for Gemini request payload construction suites.
 enum RequestFixtures {
   static let flash = ModelCatalog.defaultModelID
   static let lighthouse = "a lighthouse at dusk"
@@ -18,7 +18,7 @@ enum RequestFixtures {
       categories: categories, includeTextModality: includeText, coercions: [])
   }
 
-  /// A checked-in image from `Fixtures/Images/`.
+  /// Resolves a static test fixture image from `Fixtures/Images/` as a `BodyImage`.
   static func image(_ name: String) throws -> BodyImage {
     let url = try FixtureLoader.url("Images/\(name)")
     let ext = url.pathExtension
@@ -27,7 +27,7 @@ enum RequestFixtures {
       byteCount: try FixtureLoader.data("Images/\(name)").count)
   }
 
-  /// Writes the body to a file under `root` and returns its bytes.
+  /// Serializes a request specification to disk in the temporary root and reads back the resulting bytes.
   static func write(_ spec: RequestBodySpec, root: TestFileRoot) async throws -> Data {
     let url = root.file("Requests/\(UUID().uuidString)/body.json")
     let written = try await RequestBodyWriter.write(spec, to: url)
@@ -36,7 +36,7 @@ enum RequestFixtures {
     return data
   }
 
-  /// A golden from `Fixtures/Requests/` with each `"<b64:NAME>"` token expanded from `Fixtures/Images/`.
+  /// Loads a golden JSON fixture from `Fixtures/Requests/`, dynamically substituting `<b64:NAME>` tokens with base64 fixture data.
   static func golden(_ name: String) throws -> Any {
     var text = try FixtureLoader.string("Requests/\(name).json")
     let regex = try NSRegularExpression(pattern: "<b64:([^>]+)>")
@@ -53,7 +53,7 @@ enum RequestFixtures {
     try JSONSerialization.jsonObject(with: data)
   }
 
-  /// Structural equality: key order ignored, array order kept.
+  /// Evaluates deep structural equivalence across JSON object hierarchies, ignoring dictionary key ordering.
   static func same(_ a: Any, _ b: Any) -> Bool {
     (a as? NSObject)?.isEqual(b) ?? false
   }

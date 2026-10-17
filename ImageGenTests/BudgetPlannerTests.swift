@@ -5,7 +5,7 @@ import Testing
 
 @Suite
 struct BudgetPlannerTests {
-  /// Bytes whose base64 is exactly `mb` million bytes.
+  /// Computes raw byte count whose base64 encoding evaluates to the specified megabyte volume.
   static func bytes(base64MB mb: Double) -> Int { Int(mb * 1_000_000) / 4 * 3 }
 
   @Test(.tags(.pure)) func fitsWithoutShrink() {
@@ -31,7 +31,7 @@ struct BudgetPlannerTests {
   @Test(.tags(.pure)) func failsBelow1024() {
     let inputs = [PreparedSize(byteCount: Self.bytes(base64MB: 10), longEdge: 1024), PreparedSize(byteCount: Self.bytes(base64MB: 10), longEdge: 900)]
     #expect(BudgetPlanner.plan(inputs: inputs, envelopeBytes: 0) == .cannotFit(bodyBytes: 20_000_000))
-    // A shrink never goes below 1024.
+    // Prevents dimension scaling below the minimum allowable floor of 1024 points.
     let near = [PreparedSize(byteCount: Self.bytes(base64MB: 20), longEdge: 1200)]
     #expect(BudgetPlanner.plan(inputs: near, envelopeBytes: 0) == .shrink(index: 0, toLongEdge: 1024, bodyBytes: 20_000_000))
   }
@@ -42,7 +42,7 @@ struct BudgetPlannerTests {
       pixelWidth: edge, pixelHeight: edge * 3 / 4, longEdgeSetting: 4096)
   }
 
-  /// Shrinking scales the bytes with the pixel count.
+  /// Quadratic byte scaling heuristic approximating image size reduction proportional to pixel count.
   static let fakeShrink: @Sendable (PreparedImage, Int) async throws -> PreparedImage = { image, edge in
     let scale = Double(edge) / Double(image.pixelWidth)
     return PreparedImage(
@@ -54,7 +54,7 @@ struct BudgetPlannerTests {
     let images = [Self.fake(16, edge: 4096), Self.fake(14, edge: 4096)]
     let fitted = try await BudgetPlanner.fit(images, envelopeBytes: 2000, shrink: Self.fakeShrink)
     #expect(fitted.bodyBytes <= BudgetPlanner.budget)
-    // 30 MB: the 16 MB image shrinks first, then the 14 MB one is the largest.
+    // Verifies iterative greedy downscaling targeting the largest individual image per pass.
     #expect(fitted.shrinks == [
       BudgetPlanner.Shrink(index: 0, fromLongEdge: 4096, toLongEdge: 3072),
       BudgetPlanner.Shrink(index: 1, fromLongEdge: 4096, toLongEdge: 3072),

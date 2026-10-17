@@ -1,60 +1,44 @@
 #if DEBUG
 import Foundation
 
-/// `-SeedDemoData 1` (plan §2.6): five chats in terminal states, with images made by the mock's
-/// renderer, keyed for `-Scene chat:<key>`.
+/// Diagnostic data seeder provisioning realistic conversations in terminal states for UI testing,
+/// automated screenshot generation, and local development workflows.
 ///
-/// Purpose: screenshots and manual checks need the same chats on every run, without a key or a
-/// network. The seeder writes them through the real `DataStore` methods that a send and a reply use,
-/// so the chats are as close to real ones as possible. Every seeded request is in a terminal state, so
-/// the pipeline and the Reconciler leave them alone.
-///
-/// Place in the design: `DebugHooks.prepareLaunch` calls it once after launch. It stores the map from
-/// seed key (for example `lighthouse`) to chat ID in `UserDefaults`, so a later launch with only
-/// `-Scene` can find the chats again.
-///
-/// Concurrency: each store call is an `await` on the `DataStore` actor, and each is one complete step.
-/// Between two calls, other code (for example the chat list) can run and see a half-seeded chat; that
-/// is harmless for demo data.
+/// Generates synthetic conversations populated with locally synthesized bitmaps and structured metadata
+/// directly through `DataStore` mutation APIs, ensuring storage representation fidelity without external
+/// network dependencies. Seed identifiers are mapped and persisted in user defaults to support scene-based
+/// launch routing.
 enum DemoSeeder {
-  /// The `UserDefaults` key for the seed-key map. The map is stored as UUID strings.
+  /// User defaults key storing the dictionary mapping demo scenario identifiers to conversation UUIDs.
   static let keysDefault = "DemoSeedKeys"
 
-  /// The stored seed keys; an entry with an invalid UUID is dropped.
+  /// Retrieves persisted scenario mappings, dropping entries with malformed identifier strings.
   static func storedKeys() -> [String: UUID] {
     (UserDefaults.standard.dictionary(forKey: keysDefault) as? [String: String] ?? [:]).compactMapValues(UUID.init(uuidString:))
   }
 
-  /// Seeds when the store has no chats; returns the seed keys.
-  ///
-  /// The test is "no requests", not "no chats": a store with only an empty chat is seeded too. If the
-  /// snapshot read fails, the store counts as empty and is seeded.
+  /// Seeds standard demo scenarios when the underlying store contains no active or historical requests.
   static func seedIfEmpty(store: DataStore, files: FileStore) async -> [String: UUID] {
-    if let existing = try? await store.janitorSnapshot(), !existing.requests.isEmpty { return storedKeys() }  // A failed read seeds; demo data only.
+    if let existing = try? await store.janitorSnapshot(), !existing.requests.isEmpty { return storedKeys() }
     var keys: [String: UUID] = [:]
     let s = Seeder(store: store, files: files)
     do {
-      // Created oldest first. The chat list shows the newest first, so it reads in the reverse order:
-      // lighthouse, refused, uploads, textonly, empty-overrides.
       keys["empty-overrides"] = try await s.emptyOverrides()
       keys["textonly"] = try await s.textOnly()
       keys["uploads"] = try await s.uploads()
       keys["refused"] = try await s.refused()
       keys["lighthouse"] = try await s.lighthouse()
     } catch {
-      // The chats made before the failure stay, and their keys are still stored below.
       Log.store.error("demo seed failed: \(error.localizedDescription, privacy: .public)")
     }
     UserDefaults.standard.set(keys.mapValues(\.uuidString), forKey: keysDefault)
     return keys
   }
 
-  /// `-SeedLargeChat 1` (M9): one chat with 60 messages and 40 images, keyed "large", for
-  /// scrolling and decode-timing checks. Seeded once per store.
+  /// Provisions a high-volume scenario containing numerous turns and image assets for performance benchmarking.
   static func seedLargeChat(store: DataStore, files: FileStore) async -> UUID? {
     var keys = storedKeys()
-    // The stored key alone is not enough: `-ResetStore` deletes the chats but not `UserDefaults`.
-    if let existing = keys["large"], (try? await store.conversationTitle(existing)) != nil { return existing }  // A failed read means "not seeded yet".
+    if let existing = keys["large"], (try? await store.conversationTitle(existing)) != nil { return existing }
     do {
       let id = try await Seeder(store: store, files: files).large()
       keys["large"] = id
@@ -66,19 +50,17 @@ enum DemoSeeder {
     }
   }
 
-  /// The steps that build each chat. Each function makes one chat and returns its ID.
+  /// Builder constructing individual scenario conversations and synthesizing associated assets.
   private struct Seeder {
     let store: DataStore
     let files: FileStore
 
-    /// The settings that the seeded requests record: Flash, 16:9, 2K, all categories.
+    /// Baseline generation settings recorded across seeded requests.
     static let flash = EffectiveSettings(
       modelID: ModelCatalog.defaultModelID, aspectRatio: .r16x9, imageSize: .s2K, threshold: .blockNone,
       categories: HarmCategory.allCases, includeTextModality: true, coercions: [])
 
-    /// One user turn through the same store call as a real send. With attachments the reason is
-    /// `.attachments`, else `.noImage` unless the caller passes another. `ActionID(raw: "0000")` is a
-    /// placeholder: seeding writes no activity-log actions.
+    /// Records a user turn through standard store ingestion workflows.
     func send(_ conv: UUID, _ prompt: String, attachments: [StagedAttachment] = [], reason: SelectionReason? = nil,
               imageIDs: [UUID] = [], settings: EffectiveSettings = flash) async throws -> SendRecord {
       let r = reason ?? (attachments.isEmpty ? .noImage : .attachments)
@@ -89,11 +71,7 @@ enum DemoSeeder {
           settings: settings, activityActionID: ActionID(raw: "0000")))
     }
 
-    /// Completes a request with a rendered image (and optional text) at the mock's size.
-    ///
-    /// It does what `GenerationService` does on success: it writes the image file into the chat's
-    /// folder first, then saves the reply that refers to it, in one store call. The outcome fields
-    /// copy a real response, so the reply's Info sheet shows plausible details.
+    /// Simulates successful generation completion, synthesizing local image files and updating request metadata.
     @discardableResult
     func succeed(_ requestID: UUID, conv: UUID, prompt: String, text: String? = nil, aspect: AspectRatio = .r16x9,
                  size: ImageSize = .s2K, withImage: Bool = true) async throws -> UUID? {
@@ -127,9 +105,7 @@ enum DemoSeeder {
       return imageID
     }
 
-    /// Makes a staged attachment as the composer would: an original file in the staging folder, and a
-    /// prepared copy (the API-ready file, here the same bytes). `createSend` then moves the files into the
-    /// chat's folders.
+    /// Stages a mock image attachment into temporary storage as prepared input for send operations.
     func stage(_ seed: Int) throws -> StagedAttachment {
       let id = UUID()
       let (w, h) = (1200, 900)
@@ -146,8 +122,7 @@ enum DemoSeeder {
         prepared: PreparedImage(url: preparedURL, mimeType: "image/jpeg", byteCount: data.count, pixelWidth: w, pixelHeight: h, longEdgeSetting: 2048))
     }
 
-    /// Seed key `lighthouse`: 3 turns, reply 2 regenerated, the image in turn 1 pinned. Each edit
-    /// turn uses the latest image as its input, as the input selector would.
+    /// Constructs multi-turn iterative editing scenario featuring image regeneration and pinned reference assets.
     func lighthouse() async throws -> UUID {
       let conv = try await store.createConversation()
       let p1 = "A lighthouse on a rocky point at dusk"
@@ -167,7 +142,7 @@ enum DemoSeeder {
       return conv
     }
 
-    /// 30 turns: every reply has an image (30), and every sixth turn sends two uploads (10).
+    /// Generates high-volume chat containing 30 conversational turns with diverse aspect ratios and uploads.
     func large() async throws -> UUID {
       let conv = try await store.createConversation()
       let aspects: [AspectRatio] = [.r16x9, .r1x1, .r9x16, .r4x3, .r21x9, .r3x4]
@@ -181,7 +156,7 @@ enum DemoSeeder {
       return conv
     }
 
-    /// Seed key `uploads`: a user message with 3 uploaded images, then a reply.
+    /// Constructs scenario showcasing multi-attachment inputs and composite image synthesis.
     func uploads() async throws -> UUID {
       let conv = try await store.createConversation()
       let prompt = "Combine these three photos into one scene"
@@ -190,8 +165,7 @@ enum DemoSeeder {
       return conv
     }
 
-    /// Seed key `refused`: a refused reply (`IMAGE_SAFETY`), then a reply that failed with 429 after
-    /// two automatic retries. It sets the outcome fields directly, because no image is involved.
+    /// Constructs failure scenarios illustrating policy refusal and quota exhaustion dispositions.
     func refused() async throws -> UUID {
       let conv = try await store.createConversation()
       let p1 = "Make this photo dramatic"
@@ -220,7 +194,7 @@ enum DemoSeeder {
       return conv
     }
 
-    /// Seed key `textonly`: a text-only reply with Markdown, so it has the "No image returned" badge.
+    /// Constructs text-only assistant response demonstrating markdown rendering and empty-image badges.
     func textOnly() async throws -> UUID {
       let conv = try await store.createConversation()
       let prompt = "Explain how to light a night scene"
@@ -239,8 +213,7 @@ enum DemoSeeder {
       return conv
     }
 
-    /// Seed key `empty-overrides`: a chat with the overrides 9:16, 4K and 3 Pro, to show the override
-    /// dots. Despite the name it is not empty: it has one text-only turn, so `deleteIfEmpty` keeps it.
+    /// Constructs conversation demonstrating custom model, aspect ratio, and resolution overrides.
     func emptyOverrides() async throws -> UUID {
       let conv = try await store.createConversation()
       try await store.setOverrides(conv, ChatOverrides(modelID: "gemini-3-pro-image", aspectRatio: .r9x16, imageSize: .s4K))

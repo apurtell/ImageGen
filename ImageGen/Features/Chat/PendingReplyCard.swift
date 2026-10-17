@@ -1,12 +1,7 @@
 import SwiftUI
 
-/// A reply in progress (D§3.4): a shimmering card shaped like the requested ratio, the elapsed
-/// time, the state's label, and Cancel.
-///
-/// The card has no timer task of its own: `TimelineView(.periodic)` asks SwiftUI to redraw its
-/// content every 0.5 s with the current date, and the elapsed time, the shimmer and the retry
-/// countdown are all computed from that date. When the request's state changes, `ModelReplyView`
-/// stops showing this card, and the redraws stop with it.
+/// Transient progress card representing an in-flight generation request with aspect ratio matched geometry,
+/// animated shimmering, elapsed execution duration, and cancellation affordances.
 struct PendingReplyCard: View {
   let request: GenerationRequest
   let isNetworkUnavailable: Bool
@@ -51,15 +46,14 @@ struct PendingReplyCard: View {
     CGFloat(date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2) * 1.6 - 0.3
   }
 
-  /// "m:ss" since `startedAt` (D§3.4), or since the record was made while it is still preparing.
+  /// Formats the elapsed generation duration since request initialization.
   private func elapsed(at date: Date) -> String {
     let start = request.startedAt ?? request.createdAt
     let s = max(0, Int(date.timeIntervalSince(start)))
     return String(format: "%d:%02d", s / 60, s % 60)
   }
 
-  /// The line under the timer, from the same rules as the rest of the reply (`ReplyPresentation`).
-  /// It is computed again at each tick, so the "Retrying in N s" countdown moves.
+  /// Evaluates dynamic contextual status descriptors corresponding to current request execution or retry scheduling.
   private func label(at date: Date) -> String? {
     let input = ReplyPresentation.Input(
       state: request.requestState, modelID: request.modelID, autoRetriesUsed: request.autoRetriesUsed,

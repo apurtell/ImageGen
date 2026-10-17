@@ -3,24 +3,17 @@ import SwiftUI
 import Foundation
 import UniformTypeIdentifiers
 
-/// A stored original, exported as is (D§4.9). `transferRepresentation` is static, so it declares
-/// one representation per type the app stores, each gated on the instance's type: exactly one
-/// applies, and it carries the real type and the original bytes.
-///
-/// `Transferable` is the system protocol for data that can leave the app (share sheet, drag, Files).
-/// The share sheet uses it through `ActivityShareSheet`. Save to Files uses `ImageFileDocument` below.
-/// It is a plain `Sendable` value, so any thread can use it.
+/// Transferable encapsulation of a stored original image file, declaring uniform type representations
+/// and isolated file transfer semantics for system sharing and export.
 struct ImageFile: Transferable, Sendable, Equatable {
   let url: URL
   let utType: UTType
   let suggestedName: String
 
-  /// The AVIF type. If the system does not know `public.avif`, this declares it.
+  /// Uniform type identifier corresponding to the AVIF container format.
   static let avif = UTType("public.avif") ?? UTType(importedAs: "public.avif")
 
-  // The body is a result builder: each line declares one representation, and the builder collects
-  // them. `allowAccessingOriginalFile: false` makes the system copy the file, so the receiver
-  // never gets our stored original.
+  // Declare file representations per supported image format, disallowing direct original file access.
   static var transferRepresentation: some TransferRepresentation {
     FileRepresentation(exportedContentType: .jpeg) { SentTransferredFile($0.url, allowAccessingOriginalFile: false) }
       .exportingCondition { $0.utType == .jpeg }
@@ -38,7 +31,7 @@ struct ImageFile: Transferable, Sendable, Equatable {
       .exportingCondition { $0.utType == avif }
   }
 
-  /// `ImageGen-2026-10-15-1432-7f3a9c.jpg`.
+  /// Generates a standardized, timestamped export filename incorporating asset date, truncated UUID, and format extension.
   static func suggestedName(date: Date, id: UUID, ext: String, timeZone: TimeZone = .current) -> String {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = timeZone
@@ -47,7 +40,7 @@ struct ImageFile: Transferable, Sendable, Equatable {
     return "ImageGen-\(stamp)-\(id.uuidString.lowercased().prefix(6)).\(ext)"
   }
 
-  /// The stored types; anything unknown is treated as JPEG, the type the app writes most.
+  /// Resolves the corresponding `UTType` for a given MIME type string, defaulting to JPEG for unmapped types.
   static func utType(forMime mimeType: String) -> UTType {
     switch mimeType.lowercased() {
     case "image/jpeg", "image/jpg": .jpeg
@@ -62,8 +55,8 @@ struct ImageFile: Transferable, Sendable, Equatable {
   }
 }
 
-/// An image to export, with what the log states about it (D§4.13). The chat screen builds it from a
-/// stored `ImageAsset`'s fields, for itself and for the viewer; every export action takes one.
+/// Value type encapsulating an image asset ready for export, aggregating filesystem paths, encoding metadata,
+/// pixel dimensions, and telemetry formatting.
 struct ExportItem: Sendable, Equatable, Identifiable {
   let id: UUID
   let url: URL
@@ -81,25 +74,23 @@ struct ExportItem: Sendable, Equatable, Identifiable {
   var suggestedName: String { ImageFile.suggestedName(date: createdAt, id: id, ext: fileExtension) }
   var file: ImageFile { ImageFile(url: url, utType: utType, suggestedName: suggestedName) }
 
-  /// "img 7f3a · JPEG · 0.4 MB · 2752×1536"
+  /// Human-readable diagnostic summary describing asset dimensions, payload size, and encoding type.
   var logDescription: String {
     "img \(Format.short(id)) · \(Format.type(mimeType)) · \(Format.mb(byteCount)) · \(pixelWidth)×\(pixelHeight)"
   }
 }
 
-/// Save to Files' document (D§4.9): the original file's bytes in a `FileWrapper` named with the
-/// suggested name. `.fileExporter` with the `Transferable` item crashed on iOS 26.5 (an empty
-/// `NSFileWrapper.preferredFilename` inside SwiftUI), so the exporter takes this instead.
+/// File document representation bridging disk-backed asset files to system file export presentations.
 struct ImageFileDocument: FileDocument {
   static var readableContentTypes: [UTType] { [.image] }
   let file: ImageFile
 
   init(file: ImageFile) { self.file = file }
 
-  // Required by `FileDocument`, but the app never opens a document; it only exports.
+  // Opening documents from external inputs is unsupported; instances are strictly outbound export payloads.
   init(configuration: ReadConfiguration) throws { throw CocoaError(.featureUnsupported) }
 
-  /// `.immediate` reads the file's bytes now, so the exporter gets the bytes even if the file changes later.
+  /// Packages the underlying image payload into a `FileWrapper` configured with standard export naming.
   func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
     let wrapper = try FileWrapper(url: file.url, options: .immediate)
     wrapper.preferredFilename = file.suggestedName

@@ -22,11 +22,11 @@ struct ThumbnailServiceTests {
     #expect(FileManager.default.fileExists(atPath: await service.fileURL(id: id, px: 240).path))
     #expect(try ImageInspector.inspect(url: await service.fileURL(id: id, px: 1200)).mimeType == "image/jpeg")
 
-    // A cache hit writes nothing.
+    // In-memory cache hits avoid redundant disk writes.
     _ = await service.thumbnail(for: source, id: id, px: 240)
     #expect(await service.writes == 2)
 
-    // A new service reads the file from disk instead of making it again.
+    // Subsequent service instances restore cached thumbnails from disk storage without regenerating bitmaps.
     let fresh = ThumbnailService(directory: dir)
     let fromDisk = try #require(await fresh.thumbnail(for: source, id: id, px: 240))
     #expect((fromDisk.width, fromDisk.height) == (240, 135))

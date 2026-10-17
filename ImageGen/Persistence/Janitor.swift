@@ -1,31 +1,26 @@
 import Foundation
 
-/// Launch-time cleanup (D§4.4). Its caller (M4's `AppEnvironment`) runs it at utility priority,
-/// after the first frame and only once the Reconciler has finished. It never touches the folder
-/// of a non-terminal request, and never touches `Logs/`.
+/// Background garbage collection orchestrator reconciling disk state with persistent store metadata.
 ///
-/// It removes four kinds of leftovers, in this order: retired staging folders, request folders,
-/// unreferenced images (then empty chat folders), and thumbnails above the cap. It reads the
-/// records through `DataStore` and changes files through `FileStore`.
-///
-/// Concurrency model. `run()` is `@concurrent`, so it runs in the background, off every actor. Sends,
-/// deletes and parses continue while it runs, and nothing locks the files. So each rule is safe by
-/// its order, not by exclusion: list the files first, then take the store snapshot, then check a
-/// request again just before its folder is removed (see the primer, *Snapshot, then check again*).
-/// Each `await` on the store is a point where other code can change the records.
+/// Architecture:
+/// - Executes at low priority following initial application presentation and transport reconciliation.
+/// - Performs multi-stage pruning across retired staging artifacts, expired terminal request folders,
+///   unreferenced image assets, and LRU thumbnail cache quotas.
+/// - Concurrency guarantees: Operates concurrently off the caller's actor context via `@concurrent`.
+///   Maintains consistency without file system locks by adopting a conservative ordering strategy:
+///   enumerates directory contents prior to acquiring database snapshots, respects freshness grace periods
+///   for in-flight transactions, and re-validates request states immediately prior to folder deletion.
 struct Janitor: Sendable {
   struct Thresholds: Sendable {
-    /// Terminal request folders older than this are removed.
+    /// Age cutoff for pruning terminal request attempt directories.
     var requestAge: TimeInterval = 3600
-    /// Unreferenced images modified more recently than this are kept (a move-then-save may be in progress).
-    /// For example, `GenerationService` moves parsed images into `Images/<conv>/` and saves their
-    /// records in a later store call.
+    /// Grace period sparing unreferenced image assets to accommodate multi-stage staging and commit pipelines.
     var imageFreshness: TimeInterval = 600
-    /// Thumbnails above this are trimmed, least recently used first.
+    /// Maximum disk footprint allocated to thumbnail cache storage.
     var thumbnailCap: Int64 = 300 * 1024 * 1024
   }
 
-  /// What one run removed, by area. Tests read it; the run's log Result states it.
+  /// Telemetry report detailing reclaimed resources and non-fatal operational errors.
   struct Report: Sendable, Equatable {
     var staging = 0
     var requests = 0
@@ -42,8 +37,7 @@ struct Janitor: Sendable {
   var thresholds = Thresholds()
   var clock: @Sendable () -> Date = { Date() }
 
-  /// Runs one cleanup pass and logs it as one Janitor action. `@concurrent` makes this `async`
-  /// function run away from the caller's actor (see the primer, *Tasks and cancellation*).
+  /// Executes an end-to-end cleanup pass concurrently, emitting diagnostic telemetry upon completion.
   @concurrent
   func run() async -> Report {
     let started = ContinuousClock.now
@@ -54,21 +48,15 @@ struct Janitor: Sendable {
     var report = Report()
     var outcome = ActivityOutcome.failed
     var summary: ActivityMessage = "unknown error"
-    // `defer` runs on every exit, so exactly one Result is written for the Begin above. Each return
-    // path sets `summary` first; only the end of the pass can change `outcome` to success.
     defer { log.result(action, outcome, summary) }
 
-    // List first, then read the store. A send records its files in the same store turn that moves
-    // them into Images/, and a request's folder is made only after its record: so anything listed
-    // here that a record owns is in the snapshot taken after it. (Reading the store first would let
-    // a send that lands in between look like an orphan.)
+    // Enumerate disk hierarchies prior to acquiring database state to ensure recent writes are captured.
     let retired = Self.children(of: files.retiredStagingDir)
     let requestDirs = Self.children(of: files.requestsDir)
     let images = listImages()
 
     let snapshot: JanitorSnapshot
     do {
-      // A suspension point: sends can run here. That is safe, because of the listing order above.
       snapshot = try await store.janitorSnapshot()
     } catch {
       summary = "in \(Self.seconds(since: started)) · store unavailable: \(error.localizedDescription)"
@@ -76,24 +64,18 @@ struct Janitor: Sendable {
     }
     let now = clock()
 
-    // Staging: the folders earlier launches left (retired at this launch's start). This launch's
-    // Staging/ holds trays in use and is never touched.
+    // 1. Purge retired staging containers accumulated from earlier process runs.
     for dir in retired {
       remove(dir, counting: \.staging, into: &report)
     }
 
-    // Requests: folders with no record (listed before the snapshot, so not a send in progress),
-    // and terminal ones older than the threshold; each checked again just before removal, since a
-    // Retry may have revived it since the snapshot.
-    // A folder whose name is not a UUID has no record, so it is removed.
+    // 2. Reclaim orphaned or expired terminal request attempt directories.
     for dir in requestDirs {
       let id = UUID(uuidString: dir.lastPathComponent)
       if let id, let info = snapshot.requests[id] {
         guard info.isTerminal, now.timeIntervalSince(info.finishedOrCreatedAt) > thresholds.requestAge else { continue }
       }
-      // The re-check reads the store again, after the earlier awaits. No record now means the
-      // request was deleted meanwhile, so its folder can go. A store error keeps the folder: when
-      // in doubt, keep; the next launch's pass tries again.
+      // Re-verify request lifecycle state immediately prior to folder deletion to avoid racing active retries.
       if let id {
         let current: JanitorSnapshot.RequestInfo?
         do { current = try await store.janitorRequestInfo(id) } catch { continue }
@@ -104,11 +86,10 @@ struct Janitor: Sendable {
       remove(dir, counting: \.requests, into: &report)
     }
 
-    // Images: unreferenced files, unless modified recently. Nothing outside Images/ is scanned.
-    // It uses the listing from before the snapshot, so a file that a send moves in later is not seen.
+    // 3. Remove unreferenced images outside the freshness protection window.
     removeOrphanImages(images, referenced: snapshot.referencedPaths, now: now, &report)
 
-    // Thumbnails: trim to the cap, least recently used first.
+    // 4. Enforce thumbnail storage quotas via LRU eviction.
     trimThumbnails(&report)
 
     let removed = "staging \(report.staging) · requests \(report.requests) · images \(report.images) · thumbnails \(report.thumbnails) · \(Self.mb(report.bytesFreed)) freed"
@@ -121,17 +102,16 @@ struct Janitor: Sendable {
     return report
   }
 
-  /// The files and chat folders under `Images/`, read before the store snapshot.
+  /// Structural index of files and directory metadata discovered under `Images/`.
   private struct ImageListing {
     var files: [(url: URL, modified: Date?)] = []
-    /// Chat folders and their ages before this pass: removing a file below makes its folder look new.
     var folders: [(url: URL, modified: Date)] = []
   }
 
   private func listImages() -> ImageListing {
     var listing = ImageListing()
     for dir in Self.children(of: files.imagesDir) {
-      guard let v = try? dir.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey]),  // Unreadable: skip.
+      guard let v = try? dir.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey]),
         v.isDirectory == true, let date = v.contentModificationDate
       else { continue }
       listing.folders.append((dir, date))
@@ -139,7 +119,7 @@ struct Janitor: Sendable {
     let keys: Set<URLResourceKey> = [.isRegularFileKey, .contentModificationDateKey]
     if let e = FileManager.default.enumerator(at: files.imagesDir, includingPropertiesForKeys: Array(keys)) {
       for case let file as URL in e {
-        guard let v = try? file.resourceValues(forKeys: keys), v.isRegularFile == true else { continue }  // Unreadable: skip.
+        guard let v = try? file.resourceValues(forKeys: keys), v.isRegularFile == true else { continue }
         listing.files.append((file, v.contentModificationDate))
       }
     }
@@ -149,42 +129,34 @@ struct Janitor: Sendable {
   private func removeOrphanImages(_ listing: ImageListing, referenced: Set<String>, now: Date, _ report: inout Report) {
     for (file, modified) in listing.files {
       guard let path = files.relativePath(of: file), !referenced.contains(path) else { continue }
-      // A file with no date is old enough. A fresh one may be moved in but not yet saved.
       if let modified, now.timeIntervalSince(modified) < thresholds.imageFreshness { continue }
       remove(file, counting: \.images, into: &report)
     }
-    // Then chat folders left empty (a deleted chat's, or emptied above), unless made recently: a
-    // send creates its chat folder just before moving files in. `rmdir` removes a folder only
-    // while it is empty, so a file moved in at this moment is never taken with it.
+    // Remove empty conversation folders after file pruning, respecting recent modification grace periods.
     for (dir, modified) in listing.folders where now.timeIntervalSince(modified) >= thresholds.imageFreshness {
-      _ = rmdir(dir.path)  // Fails harmlessly on a folder that isn't empty; nothing to count.
+      _ = rmdir(dir.path)
     }
   }
 
-  /// Removes thumbnails, least recently used first, until the total is under the cap. "Used" is the
-  /// later of the access date and the modification date: `ThumbnailService` sets the modification
-  /// date on each disk hit, because the file system may not update the access date. A thumbnail removed
-  /// while `ThumbnailService` needs it is made again from the original.
+  /// Trims thumbnail cache files in least-recently-used order until aggregate size conforms to quota.
   private func trimThumbnails(_ report: inout Report) {
     let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentAccessDateKey, .contentModificationDateKey]
     var thumbs: [(url: URL, size: Int64, used: Date)] = []
     for file in Self.children(of: files.thumbnailsDir) {
-      guard let v = try? file.resourceValues(forKeys: keys), v.isRegularFile == true else { continue }  // Unreadable: skip.
+      guard let v = try? file.resourceValues(forKeys: keys), v.isRegularFile == true else { continue }
       let used = [v.contentAccessDate, v.contentModificationDate].compactMap { $0 }.max() ?? .distantPast
       thumbs.append((file, Int64(v.fileSize ?? 0), used))
     }
     var total = thumbs.reduce(0) { $0 + $1.size }
     guard total > thresholds.thumbnailCap else { return }
     for thumb in thumbs.sorted(by: { $0.used < $1.used }) where total > thresholds.thumbnailCap {
-      // Subtract the size only when the removal worked, so a failure does not end the trim early.
       let before = report.thumbnails
       remove(thumb.url, counting: \.thumbnails, into: &report)
       if report.thumbnails > before { total -= thumb.size }
     }
   }
 
-  /// Removes a file or folder and adds the counts to `report`. `folder` is a key path: it names the
-  /// `Report` field (for example `\.staging`) that gets the file count.
+  /// Removes an artifact path and records operational metrics against the designated category.
   private func remove(_ url: URL, counting folder: WritableKeyPath<Report, Int>, into report: inout Report) {
     var r = DeletionResult()
     files.remove(url, into: &r)
@@ -195,7 +167,7 @@ struct Janitor: Sendable {
   }
 
   private static func children(of dir: URL) -> [URL] {
-    (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []  // A missing folder has no children.
+    (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
   }
 
   static func mb(_ bytes: Int64) -> String {

@@ -1,12 +1,7 @@
 import Foundation
 
-// `generateContent` response shapes (D§2.7). Every field is optional so unexpected shapes decode
-// and fall through the parser's rules instead of failing.
-//
-// These are plain `Decodable` structs: the compiler generates the JSON decoding from the property
-// names, which match the API's camelCase keys. JSON keys with no property here are ignored. Only
-// `ResponseParser` reads them, and only inside one `parse` call. They are `Sendable` value types, so
-// they carry no shared state.
+// Wire data transfer models for Gemini `generateContent` response payloads.
+// Properties are optional for resilient deserialization and structured failure classification.
 
 struct GenerateContentResponse: Decodable, Sendable {
   var candidates: [Candidate]?
@@ -31,16 +26,16 @@ struct Content: Decodable, Sendable {
 struct Part: Decodable, Sendable {
   struct InlineData: Decodable, Sendable {
     var mimeType: String?
-    /// The image as base64 text. It can be several MB.
+    /// Base64-encoded image data string.
     var data: String?
   }
 
-  /// A part has one of `text` or `inlineData`. A part with neither is ignored (D§2.7 rule 5).
+  /// Polymorphic part payload containing textual responses or inline binary data.
   var text: String?
   var inlineData: InlineData?
-  /// `true` marks a thinking part. The parser drops these (D§2.6).
+  /// Flag denoting internal model thought reasoning parts.
   var thought: Bool?
-  /// Decoded but not used. `Redactor` removes its value from `details`.
+  /// Opaque model thought signature string sanitized prior to persistence.
   var thoughtSignature: String?
 }
 
@@ -49,5 +44,5 @@ struct PromptFeedback: Decodable, Sendable {
   var blockReasonMessage: String?
 }
 
-/// Ignored. An empty struct decodes from any JSON object and keeps none of its fields.
+/// Token and quota accounting metadata.
 struct UsageMetadata: Decodable, Sendable {}

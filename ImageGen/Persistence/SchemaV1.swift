@@ -1,19 +1,17 @@
 import Foundation
 import SwiftData
 
-/// The SwiftData schema (D§4.3). Enums are stored as raw `String`s and ordered or structured
-/// payloads as JSON `Data`, wrapped by typed accessors. JSON avoids SwiftData's quirks with
-/// composite `Codable` types.
+/// Versioned schema definition governing application persistence entities under SwiftData.
 ///
-/// Four records: a `Conversation` (a chat) owns its `Message`s and `GenerationRequest`s, and a
-/// `Message` owns its `ImageAsset`s. The cascade delete rules remove the owned records with their
-/// owner. Requests and messages refer to each other, and requests to their input images, by UUID only.
-///
-/// Concurrency model. `@Model` makes each class a stored record (see the primer, *SwiftData*). The
-/// classes are `nonisolated` and not `Sendable`: a record is used only inside the `ModelContext` that
-/// fetched it. `DataStore` does all writes in its own context. The views only read records, with
-/// `@Query` on the main actor's context, and see each change after `DataStore` saves it.
-/// The schema is versioned from day one, so a later `SchemaV2` can migrate from it (`ImageGenMigrationPlan`).
+/// Schema Design:
+/// - Enums are stored as canonical raw string representations, while structured array payloads
+///   are serialized to JSON `Data` containers exposed via computed property accessors.
+/// - The domain graph centers on `Conversation`, which cascades deletions to member `Message`
+///   and `GenerationRequest` entities, while `Message` cascades deletions to attached `ImageAsset` records.
+/// - Cross-entity associations between requests, originating messages, and input images are mediated via UUID references.
+/// - Model classes are nonisolated and non-Sendable, confined strictly to the context in which they are fetched.
+///   Mutations are executed exclusively within `DataStore` background contexts, while presentation queries
+///   observe snapshots via `@Query` descriptors on the main actor.
 enum SchemaV1: VersionedSchema {
   static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
 
@@ -21,10 +19,8 @@ enum SchemaV1: VersionedSchema {
     [Conversation.self, Message.self, ImageAsset.self, GenerationRequest.self]
   }
 
-  /// A chat. `nextSequence` is the next free `Message.sequence`; `DataStore` advances it on each send
-  /// and regenerate.
+  /// Persistent conversation entity representing a chat thread and its associated parameter overrides.
   @Model nonisolated final class Conversation {
-    // `#Unique` and `#Index` are macros that declare a unique constraint and an index in the database.
     #Unique<Conversation>([\.id])
 
     var id: UUID
@@ -32,19 +28,18 @@ enum SchemaV1: VersionedSchema {
     var titleIsUserSet: Bool
     var createdAt: Date
     var updatedAt: Date
-    /// nil = default (Flash).
+    /// Model identifier override, or nil to inherit system default.
     var modelIDOverride: String?
-    /// nil = Settings default.
+    /// Aspect ratio override literal, or nil to inherit settings default.
     var aspectRatioOverride: String?
-    /// nil = Settings default.
+    /// Output resolution tier override, or nil to inherit settings default.
     var imageSizeOverride: String?
-    /// The image the user pinned for reuse in later sends; nil = none.
+    /// Pinned reference image identifier for multi-turn generation context.
     var pinnedImageID: UUID?
-    /// The composer's unsent text, kept across launches.
+    /// Preserved composer draft text buffer.
     var draftText: String
     var nextSequence: Int
 
-    // `inverse` names the other side of the link, so SwiftData keeps both sides in step.
     @Relationship(deleteRule: .cascade, inverse: \Message.conversation)
     var messages: [Message] = []
 
@@ -64,29 +59,27 @@ enum SchemaV1: VersionedSchema {
     static let untitled = "New Chat"
   }
 
-  /// One bubble in the transcript: a user prompt or a model reply. A reply's state is its request's
-  /// state, and is not stored here.
+  /// Persistent message entity representing either a user prompt entry or a model response turn.
   @Model nonisolated final class Message {
     #Unique<Message>([\.id])
     #Index<Message>([\.sequence])
 
     var id: UUID
-    /// Monotonic per chat.
+    /// Monotonically increasing sequence index within the enclosing conversation.
     var sequence: Int
-    /// `user` or `model`.
+    /// Message participant role (`user` or `model`).
     var role: String
     var createdAt: Date
-    /// The prompt (user); for a model reply, its text runs joined by a blank line (Copy Text).
+    /// Raw textual prompt or accumulated response text content.
     var text: String
-    /// JSON `[MessagePart]`: the order of text and image parts.
+    /// Serialized JSON payload encoding ordered `[MessagePart]` elements.
     var partsData: Data
-    /// User: the request it started. Model: the request that produced it.
+    /// Originating or producing generation request identifier.
     var requestID: UUID?
-    /// Model only.
+    /// Lineage link to an ancestor request if generated via regeneration workflows.
     var regenerateOfRequestID: UUID?
     var conversation: Conversation?
 
-    /// Unordered in SwiftData; read through `orderedImages`.
     @Relationship(deleteRule: .cascade, inverse: \ImageAsset.message)
     var images: [ImageAsset] = []
 
@@ -102,7 +95,7 @@ enum SchemaV1: VersionedSchema {
 
     var messageRole: Role { Role(rawValue: role) ?? .user }
 
-    /// The typed view of `partsData`. Each read decodes the JSON, so callers read it once.
+    /// Strongly typed accessor decoding serialized message parts from underlying binary storage.
     var parts: [MessagePart] {
       get { JSONCoding.decode([MessagePart].self, from: partsData) ?? [] }
       set { partsData = JSONCoding.encode(newValue) }
@@ -111,30 +104,29 @@ enum SchemaV1: VersionedSchema {
     var orderedImages: [ImageAsset] { images.sorted { $0.ordinal < $1.ordinal } }
   }
 
-  /// One stored image: an upload or a model output. The original file is never changed. An upload
-  /// also has a prepared (API-ready) file, described by the `prepared*` fields.
+  /// Persistent metadata record tracking an image asset and its scaled variants.
   @Model nonisolated final class ImageAsset {
     #Unique<ImageAsset>([\.id])
 
     var id: UUID
-    /// 0-based position within its message, assigned once (D§4.3).
+    /// Ordinal index within the parent message container.
     var ordinal: Int
-    /// `photos`, `files`, `paste` or `model`.
+    /// Acquisition origin (`photos`, `files`, `paste`, or `model`).
     var origin: String
-    /// `Images/<conv>/<id>.<ext>`.
+    /// Relative file path under the storage root.
     var relativePath: String
     var mimeType: String
     var byteCount: Int
     var pixelWidth: Int
     var pixelHeight: Int
     var originalFilename: String?
-    // Uploads only: the API-ready file (D§4.3, D§4.8).
+    // Prepared preprocessed variant metadata for API submission.
     var preparedRelativePath: String?
     var preparedMimeType: String?
     var preparedByteCount: Int?
     var preparedPixelWidth: Int?
     var preparedPixelHeight: Int?
-    /// The `maxUploadLongEdge` the prepared file was made at.
+    /// Long-edge resolution threshold used during variant preprocessing.
     var preparedLongEdgeSetting: Int?
     var createdAt: Date
     var message: Message?
@@ -157,7 +149,7 @@ enum SchemaV1: VersionedSchema {
 
     var imageOrigin: ImageOrigin { ImageOrigin(rawValue: origin) ?? .files }
 
-    /// The prepared file as a `RequestInput`, when there is one. A partly set group of fields gives nil.
+    /// Strongly typed descriptor projecting the preprocessed variant as a request input.
     var preparedInput: RequestInput? {
       guard let path = preparedRelativePath, let mime = preparedMimeType, let bytes = preparedByteCount,
         let w = preparedPixelWidth, let h = preparedPixelHeight
@@ -165,7 +157,7 @@ enum SchemaV1: VersionedSchema {
       return RequestInput(imageID: id, preparedRelativePath: path, mimeType: mime, byteCount: bytes, pixelWidth: w, pixelHeight: h)
     }
 
-    /// Sets or clears all the `prepared*` fields together, so they always describe one file.
+    /// Atomically updates or clears the preprocessed variant metadata attributes.
     func setPrepared(_ input: RequestInput?, longEdgeSetting: Int?) {
       preparedRelativePath = input?.preparedRelativePath
       preparedMimeType = input?.mimeType
@@ -176,43 +168,35 @@ enum SchemaV1: VersionedSchema {
     }
   }
 
-  /// One request to the service, across all its attempts. It records the settings and inputs as sent,
-  /// so Regenerate can repeat it exactly, and the outcome of the latest attempt. `GenerationService`
-  /// is the only writer of its state (through `DataStore`).
+  /// Persistent generation request tracking execution parameters, attempt progression, and outcome diagnostics.
   @Model nonisolated final class GenerationRequest {
     #Unique<GenerationRequest>([\.id])
     #Index<GenerationRequest>([\.state])
 
     var id: UUID
-    /// nil for a regenerate.
+    /// Link to initiating user message, or nil for regeneration requests.
     var userMessageID: UUID?
     var replyMessageID: UUID
-    /// Regenerate lineage.
+    /// Ancestor request identifier tracking regeneration history.
     var sourceRequestID: UUID?
     var modelID: String
-    /// The value sent; nil if the key was omitted.
     var aspectRatio: String?
-    /// The value sent; nil if the key was omitted.
     var imageSize: String?
     var safetyThreshold: String
-    /// JSON `[String]`: the categories actually sent.
+    /// Serialized JSON array of active harm categories.
     var safetyCategoriesData: Data
     var includeTextModality: Bool
     var promptText: String
-    /// JSON `[RequestInput]`.
+    /// Serialized JSON array of `RequestInput` descriptors.
     var inputsData: Data
-    /// `attachments`, `pinned`, `latest` or `none`.
     var selectionReason: String
-    /// The raw `RequestState`; read and write it through `requestState`.
     var state: String
-    /// Every attempt, automatic or manual.
     var attempt: Int
     var maxAutoRetries: Int
-    /// Reset to 0 by a manual Retry.
     var autoRetriesUsed: Int
-    /// The CIVIC rebuild was done for this request.
+    /// Flag indicating whether civic integrity safety filtering fallback was invoked.
     var civicFallbackUsed: Bool
-    /// A `retryScheduled` task created while inactive.
+    /// Indicates whether next execution attempt was scheduled from background context.
     var nextAttemptCreatedInBackground: Bool
     var taskIdentifier: Int?
     var nextAttemptAt: Date?
@@ -220,22 +204,18 @@ enum SchemaV1: VersionedSchema {
     var startedAt: Date?
     var completedAt: Date?
     var httpStatus: Int?
-    /// For example `RESOURCE_EXHAUSTED`.
     var errorStatus: String?
-    /// The API error message, or `finishMessage` for a refusal.
     var errorMessage: String?
-    /// Redacted JSON or error body, at most 64 KB.
+    /// Diagnostic response payload snippet or error payload.
     var details: String?
-    /// JSON `[String]`: parser notices.
+    /// Serialized JSON array of parsing notice strings.
     var noticesData: Data
     var finishReason: String?
-    /// `promptFeedback.blockReason` or the refusing `finishReason`.
     var refusalReason: String?
     var modelVersion: String?
     var responseID: String?
     var outputWidth: Int?
     var outputHeight: Int?
-    /// Logging only: the action following this request (D§4.13).
     var activityActionID: String?
     var conversation: Conversation?
 
@@ -268,7 +248,7 @@ enum SchemaV1: VersionedSchema {
       self.activityActionID = activityActionID?.raw
     }
 
-    // An unknown stored value reads as `failed`, a terminal state, so a damaged record is never resumed.
+    /// Strongly typed request lifecycle state accessor, defaulting unrecognized strings to failed.
     var requestState: RequestState {
       get { RequestState(rawValue: state) ?? .failed }
       set { state = newValue.rawValue }
@@ -289,7 +269,7 @@ enum SchemaV1: VersionedSchema {
       set { noticesData = JSONCoding.encode(newValue) }
     }
 
-    /// The settings as recorded; recorded snapshots carry no coercions.
+    /// Reconstructs the effective generation settings captured at request creation time.
     var recordedSettings: EffectiveSettings {
       EffectiveSettings(
         modelID: modelID, aspectRatio: aspectRatio.flatMap(AspectRatio.init(rawValue:)),
@@ -300,20 +280,18 @@ enum SchemaV1: VersionedSchema {
   }
 }
 
-// The rest of the app uses the short names. A later schema version moves these aliases to its own classes.
 typealias Conversation = SchemaV1.Conversation
 typealias Message = SchemaV1.Message
 typealias ImageAsset = SchemaV1.ImageAsset
 typealias GenerationRequest = SchemaV1.GenerationRequest
 
-/// JSON for the stored payloads. Encoding these value types can't fail.
+/// Serialization helper providing safe encoding and decoding fallbacks for JSON-backed schema properties.
 enum JSONCoding {
   static func encode<T: Encodable>(_ value: T) -> Data {
-    (try? JSONEncoder().encode(value)) ?? Data("[]".utf8)  // Cannot fail for these types; "[]" is a safe empty list.
+    (try? JSONEncoder().encode(value)) ?? Data("[]".utf8)
   }
 
-  /// nil for damaged data; the accessors above then use an empty list.
   static func decode<T: Decodable>(_ type: T.Type, from data: Data) -> T? {
-    try? JSONDecoder().decode(type, from: data)  // Damaged data reads as nil, not as a crash.
+    try? JSONDecoder().decode(type, from: data)
   }
 }

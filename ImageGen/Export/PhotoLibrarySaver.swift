@@ -1,23 +1,23 @@
 import Foundation
 import Photos
 
-/// The parts of `PHPhotoLibrary` the saver uses; tests substitute a fake.
+/// Abstraction layer decoupling photo library authorization and asset creation routines for testing and isolation.
 protocol PhotoLibraryAccess: Sendable {
-  /// Asks for add-only access. The system shows its prompt only the first time.
+  /// Requests add-only photo library authorization asynchronously.
   func requestAddAuthorization() async -> PHAuthorizationStatus
+  /// Persists a photo asset directly from a local file URL with preserved filename metadata.
   func addPhoto(fileURL: URL, originalFilename: String) async throws
 }
 
-/// The real photo library.
+/// Concrete adapter delegating asset storage operations to `PHPhotoLibrary`.
 struct SystemPhotoLibrary: PhotoLibraryAccess {
   func requestAddAuthorization() async -> PHAuthorizationStatus {
     await PHPhotoLibrary.requestAuthorization(for: .addOnly)
   }
 
-  /// Adds the original file as is (its bytes and type); never through `UIImage`.
+  /// Persists the original image asset to the Photos library preserving pristine binary bytes and file extension.
   func addPhoto(fileURL: URL, originalFilename: String) async throws {
-    // `performChanges` runs the closure on a queue of the Photos framework and resumes this task when
-    // the change is saved. `shouldMoveFile = false` makes Photos copy the file, so our original stays.
+    // Stage asset creation within the Photos framework transaction, copying the source file.
     try await PHPhotoLibrary.shared().performChanges {
       let options = PHAssetResourceCreationOptions()
       options.originalFilename = originalFilename
@@ -27,17 +27,14 @@ struct SystemPhotoLibrary: PhotoLibraryAccess {
   }
 }
 
-/// What the screen shows: `denied` leads to the alert that offers Open Settings (D§4.9).
+/// Terminal disposition outcomes for photo library export operations.
 enum PhotoSaveResult: Equatable, Sendable {
   case saved
   case denied
   case failed(String)
 }
 
-/// Save to Photos (D§4.9), logged as one action (D§4.13).
-/// `ImageExportModel` calls `save` from a task on the main actor. The two awaits (authorization, then
-/// the add) are points where the main thread stays free. The saver holds no state that can change, so
-/// it is `Sendable`. Each path writes exactly one Result.
+/// Coordinates photo library permission validation, asset creation, and diagnostic telemetry logging.
 struct PhotoLibrarySaver: Sendable {
   let library: any PhotoLibraryAccess
   let log: ActivityLog
@@ -67,7 +64,6 @@ struct PhotoLibrarySaver: Sendable {
     case .denied: "denied"
     case .restricted: "restricted"
     case .notDetermined: "not determined"
-    // `@unknown default` handles a status that a later iOS adds.
     @unknown default: "unknown"
     }
   }

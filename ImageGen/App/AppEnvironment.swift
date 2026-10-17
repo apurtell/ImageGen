@@ -4,8 +4,8 @@ import SwiftData
 import UIKit
 import UserNotifications
 
-/// What DEBUG mock mode swaps in (D§2.6 of the plan): an ephemeral configuration with the mock
-/// protocol, and an in-memory key store holding "mock-key".
+/// Configuration bundle for mock environments, substituting background network sessions
+/// and secure Keychain storage with ephemeral protocols and in-memory credential stores.
 struct MockEnvironment: Sendable {
   let transportConfiguration: URLSessionConfiguration
   let modelsProtocolClasses: [AnyClass]
@@ -13,28 +13,21 @@ struct MockEnvironment: Sendable {
   let description: String
 }
 
-/// The app's dependency container (D§4.2). Built once, lazily, by whichever of `ImageGenApp.init`
-/// and `didFinishLaunching` runs first, so it also exists on a background relaunch. The activity
-/// log comes first and the Launch action begins before anything else is built; the transport
-/// creates its event stream before its session; the Reconciler starts in `didFinishLaunching`.
+/// Dependency injection container and service orchestrator.
 ///
-/// Place in the design: this is the assembly layer. It builds every service once, in a fixed order, and
-/// hands them to the screens (`chatServices()`, `settingsModel()`) and to `AppDelegate`. It also turns
-/// lifecycle events (launch, first frame, scene phase) into calls on the services. The start-up order
-/// in `init` and `didFinishLaunching` is part of the design:
-/// 1. the activity log and the Launch Begin, so every later step can log;
-/// 2. storage: retire the old staging folder before any screen can stage a file, then the store;
-/// 3. the transport (its stream before its session) before `GenerationService`, its one consumer;
-/// 4. in `didFinishLaunching`, the Reconciler; the Janitor only after the Reconciler and the first frame.
+/// Encapsulates application initialization order, subsystem instantiation, and lifecycle event routing.
+/// The container initializes lazily upon first access across foreground launches or background wakes,
+/// establishing dependency wiring in deterministic sequence:
+/// 1. Diagnostic activity logging initialization with credential redaction registries.
+/// 2. Relational persistence (`DataStore`) and file system hierarchy (`FileStore`).
+/// 3. Network transport layer (`URLSessionTransport`) prior to consumer pipeline construction.
+/// 4. Post-launch state reconciliation (`Reconciler`) followed by background file maintenance (`Janitor`).
 ///
-/// Concurrency: `@MainActor`, so all of its own state is read and written on the main thread. The
-/// slow work (Reconciler, Janitor) runs in detached tasks off the main thread. `@Observable` lets SwiftUI
-/// views that read it update when a property changes; `@ObservationIgnored` excludes the bookkeeping
-/// properties. See the primer, *Actors* and *SwiftUI: the user interface*.
+/// State mutations and coordinator access are bound to `@MainActor`, with compute-intensive operations
+/// delegated to background actor contexts or detached task streams.
 @Observable @MainActor
 final class AppEnvironment {
-  /// Everything that differs between production, DEBUG mock mode and tests. Tests build their own
-  /// configuration (temporary folders, fake providers, instant sleepers).
+  /// Parameterization for application runtime environments across production, testing, and mock executions.
   struct Configuration {
     var root: URL
     var cachesRoot: URL
@@ -42,30 +35,26 @@ final class AppEnvironment {
     var sessionDescription: String
     var makeKeyStore: (SecretRegistry) -> any APIKeyStore
     var defaults: UserDefaults
-    /// The `UserDefaults` suite name, for the nonisolated readers. They make their own `UserDefaults`
-    /// from the name, because a `UserDefaults` object is not `Sendable`. nil means `.standard`.
+    /// Optional UserDefaults suite identifier for non-isolated readers.
     var defaultsSuite: String?
     var modelsProtocolClasses: [AnyClass] = []
     var mockModeDescription = "off"
     var inMemoryStore = false
-    /// Deletes the store, the files and `Logs/` before the log is created (DEBUG `-ResetStore 1`).
+    /// Triggers filesystem and store purge prior to initialization.
     var resetBeforeLaunch = false
     var makeBackgroundTasks: (ActivityLog) -> any BackgroundTaskProviding = { UIApplicationBackgroundTaskProvider(log: $0) }
-    /// Replaces the system notification center (tests). nil uses `UNUserNotificationCenter`.
+    /// Custom notification delivery hook for test environments; nil delegates to `UNUserNotificationCenter`.
     var deliverNotification: (@Sendable (ReplyNotification) async -> Void)? = nil
     var connectivity: any ConnectivityMonitoring = NWPathConnectivityMonitor()
-    var reconcilerSleeper: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }  // Cancellation only ends the wait early.
-    var transportSleeper: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }  // Cancellation only ends the wait early.
+    var reconcilerSleeper: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+    var transportSleeper: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     var notificationAuthorizer: any NotificationAuthorizing = UserNotificationAuthorizer()
     var skipNotificationPrompt = false
   }
 
   static let isTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
 
-  /// The app's instance. Never touched under the unit-test host (plan §2.2).
-  ///
-  /// A Swift `static let` is lazy: the first read runs the initializer, exactly once. That is what lets
-  /// `ImageGenApp.init` and `AppDelegate` both "create" it without a race or a second copy.
+  /// Shared singleton instance, initialized lazily on first access.
   static let shared: AppEnvironment = AppEnvironment(production())
 
   let registry: SecretRegistry
@@ -93,7 +82,7 @@ final class AppEnvironment {
 
   @ObservationIgnored private let launchStarted = ContinuousClock.now
   @ObservationIgnored private var reconcilerTask: Task<Void, Never>?
-  // The Janitor waits for both flags (see `startJanitorIfReady`).
+  // Janitor execution is gated on completion of both Reconciler and the initial presentation frame.
   @ObservationIgnored private var reconcilerFinished = false
   @ObservationIgnored private var firstFrameSeen = false
   @ObservationIgnored private(set) var janitorTask: Task<Janitor.Report, Never>?
@@ -102,9 +91,7 @@ final class AppEnvironment {
     if config.resetBeforeLaunch {
       Self.deleteAllData(root: config.root, cachesRoot: config.cachesRoot)
     }
-    // 1. The log, and the Launch Begin, before anything else.
-    // The registry comes first because the log's sanitizer reads it: any key that is read later is
-    // removed from every log line.
+    // 1. Diagnostic logging and initialization action tracking.
     let registry = SecretRegistry()
     self.registry = registry
     log = ActivityLog(
@@ -117,14 +104,13 @@ final class AppEnvironment {
       "Launch", origin: .system,
       "ImageGen \(version) (\(build)) · iOS \(UIDevice.current.systemVersion) · mock mode \(config.mockModeDescription)")
 
-    // 2. Storage, key, settings.
+    // 2. Storage engine and persistent state initialization.
     files = FileStore(root: config.root, cachesRoot: config.cachesRoot)
-    // Before any screen can stage a file: the Janitor removes only what earlier launches staged.
     files.retireStaging()
     do {
       container = try StoreFactory.makeContainer(root: config.root, inMemory: config.inMemoryStore)
     } catch {
-      // The app still starts, so the user can read the log; nothing is saved in this run.
+      // Degrades to transient in-memory storage upon persistent store corruption to preserve diagnostic logging.
       log.step(launchAction, "store failed to open (\(error.localizedDescription)); using a temporary in-memory store")
       container = try! StoreFactory.makeContainer(root: config.root, inMemory: true)
     }
@@ -136,14 +122,10 @@ final class AppEnvironment {
     relay = BackgroundEventsRelay(log: log)
     router = NotificationRouter()
 
-    // 3. The transport (stream before session), then the service that consumes it.
-    // On a background relaunch, creating the transport reconnects to the system's session, and
-    // completions can arrive at once. They wait in the stream's buffer until the service reads them.
+    // 3. Network transport stream and generation pipeline assembly.
     transport = URLSessionTransport(
       configuration: config.transportConfiguration, files: files, sleeper: config.transportSleeper)
     backgroundTasks = config.makeBackgroundTasks(log)
-    // These values are copied into locals because the `@Sendable` closures below run on other actors.
-    // A closure in `init` also cannot capture `self` before every property has a value.
     let suite = config.defaultsSuite
     let activity = self.activity
     let poster =
@@ -159,14 +141,12 @@ final class AppEnvironment {
       GenerationService.Dependencies(
         transport: transport, store: store, files: files, keyStore: keyStore, log: log, backgroundTasks: backgroundTasks,
         notifier: poster, activity: activity, thumbnails: thumbnails,
-        // The service reads defaults straight from `UserDefaults` and writes through the main actor
-        // (D§5, "Settings written from the actor").
         defaults: { AppSettings.readDefaults(suite.flatMap(UserDefaults.init(suiteName:)) ?? .standard) },
         setOmitCivicOnMain: { await MainActor.run { settings.omitCivicIntegrity = true } },
         onBackgroundEventsFinished: { id, handled in await relay.callAndClear(identifier: id, completionsHandled: handled) },
         sessionDescription: config.sessionDescription))
 
-    // 4. The rest.
+    // 4. Auxiliary coordinators and navigation state.
     reconciler = Reconciler(
       store: store, transport: transport, service: service, files: files, log: log, sleeper: config.reconcilerSleeper)
     modelsClient = ModelsClient(session: ModelsClient.makeSession(protocolClasses: config.modelsProtocolClasses))
@@ -177,10 +157,10 @@ final class AppEnvironment {
     developerMenu = DeveloperMenuModel(log: log)
     notificationPermission = NotificationPermission(
       authorizer: config.notificationAuthorizer, defaults: config.defaults, log: log, skip: config.skipNotificationPrompt)
-    navigator.needsOnboarding = ((try? keyStore.read()) ?? nil)?.isEmpty ?? true  // A Keychain error counts as no key: onboarding asks for one.
+    navigator.needsOnboarding = ((try? keyStore.read()) ?? nil)?.isEmpty ?? true
   }
 
-  /// What a chat screen needs.
+  /// Constructs feature dependency bundle for chat presentation workflows.
   func chatServices() -> ChatServices {
     ChatServices(
       store: store, files: files, generation: service, settings: settings, log: log, connectivity: connectivity,
@@ -188,7 +168,7 @@ final class AppEnvironment {
       copyToPasteboard: { UIPasteboard.general.string = $0 })
   }
 
-  /// What the Settings sheet needs.
+  /// Constructs view model dependencies for application settings presentation.
   func settingsModel() -> SettingsModel {
     SettingsModel(
       services: SettingsModel.Services(
@@ -208,13 +188,9 @@ final class AppEnvironment {
     ChatActions(store: store, generation: service, log: log, navigator: navigator)
   }
 
-  // MARK: Lifecycle
-
-  /// Called from `didFinishLaunching`: logs the application state, starts the Reconciler at once
-  /// (even on a background relaunch that never draws a frame), and ends the Launch action.
+  /// Finalizes post-launch initialization: logs application execution context and initiates
+  /// background reconciliation off the main actor.
   func didFinishLaunching(applicationState: UIApplication.State) {
-    // With the scene lifecycle this reads `background` until a scene connects, even for a user
-    // launch; a background wake is identified by the Background events action that follows.
     let state = switch applicationState {
     case .active: "active"
     case .inactive: "inactive"
@@ -223,9 +199,6 @@ final class AppEnvironment {
     }
     log.step(launchAction, "application state \(state)")
     let reconciler = self.reconciler
-    // `Task.detached` runs the Reconciler off the main actor, at low priority, so launch is not slowed.
-    // `[weak self]`: the task does not keep the environment alive.
-    // The last line hops back to the main actor, because `reconcilerDidFinish` is main-actor state.
     reconcilerTask = Task.detached(priority: .utility) { [weak self] in
       await reconciler.run()
       await self?.reconcilerDidFinish()
@@ -236,29 +209,25 @@ final class AppEnvironment {
     )
   }
 
-  /// The first frame has been drawn; the Janitor may run once the Reconciler has finished too.
+  /// Signals initial presentation frame appearance, qualifying filesystem garbage collection to proceed.
   func firstFrameAppeared() {
     firstFrameSeen = true
     startJanitorIfReady()
   }
 
-  /// Called by `ImageGenApp` on every scene phase change. The phase can change several times in a
-  /// second (see the primer, *iOS application lifecycle*), so each branch is safe to repeat.
+  /// Propagates system scene phase transitions across active coordinators.
   func scenePhaseChanged(isActive: Bool, isBackground: Bool) {
     activity.setActive(isActive)
     if isActive {
       let service = self.service
       let availability = self.availability
-      // `Task {}` keeps the main actor; the two calls `await` other actors, so the main thread is free
-      // while they run.
       Task {
         await service.appBecameActive()
         await availability.refreshIfStale()
       }
     }
     if isBackground {
-      // iOS can suspend the app a few seconds after this. A short background-task assertion keeps it
-      // running while the log reaches the disk: `end` flushes the log before it ends the assertion.
+      // Secures diagnostic log flushing via a short-lived background execution assertion.
       let tasks = backgroundTasks
       Task {
         let token = await tasks.begin(name: "log-flush") {}
@@ -267,7 +236,7 @@ final class AppEnvironment {
     }
   }
 
-  /// For tests: waits until the Reconciler has finished.
+  /// Awaits completion of background launch reconciliation (testing utility).
   func waitForReconciler() async {
     await reconcilerTask?.value
   }
@@ -277,17 +246,13 @@ final class AppEnvironment {
     startJanitorIfReady()
   }
 
-  /// Starts the Janitor once, after both the Reconciler and the first frame (D§4.4). After the
-  /// Reconciler, so the Janitor never races a launch-time re-parse. After the first frame, so the
-  /// clean-up stays out of the launch path (D§8); a background relaunch with no UI never starts it.
-  /// Both callers run on the main actor, so the check and the `janitorTask` write cannot interleave.
+  /// Evaluates readiness preconditions (reconciliation completed and initial frame presented)
+  /// before scheduling detached filesystem maintenance.
   private func startJanitorIfReady() {
     guard firstFrameSeen, reconcilerFinished, janitorTask == nil else { return }
     let janitor = Janitor(files: files, store: store, log: log)
     janitorTask = Task.detached(priority: .utility) { await janitor.run() }
   }
-
-  // MARK: Configuration
 
   static var applicationSupportRoot: URL {
     FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -298,11 +263,9 @@ final class AppEnvironment {
     FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
   }
 
-  /// The production configuration, or DEBUG mock mode when its launch option is set.
-  /// In Release builds the `DebugHooks` calls are empty stubs, so this is always the production setup.
+  /// Resolves runtime environment configuration, falling back to mock configurations when flags are set.
   static func production() -> Configuration {
     let root = applicationSupportRoot
-    // Before the log exists, so a reset run's log starts with its own Launch Begin.
     DebugHooks.resetBeforeLaunchIfRequested(root: root, cachesRoot: cachesRoot)
     let bundleID = Bundle.main.bundleIdentifier ?? "com.andrewpurtell.imagegen"
     var config = Configuration(
@@ -314,10 +277,8 @@ final class AppEnvironment {
     if let mock = DebugHooks.mockEnvironment() {
       config.transportConfiguration = mock.transportConfiguration
       config.sessionDescription = "ephemeral session (mock)"
-      // The mock key store was made with its own registry; this registers its key with the app's
-      // registry too, so the log sanitizer removes it.
       config.makeKeyStore = { registry in
-        try? mock.keyStore.read().map(registry.register)  // The in-memory store does not throw.
+        try? mock.keyStore.read().map(registry.register)
         return mock.keyStore
       }
       config.modelsProtocolClasses = mock.modelsProtocolClasses
@@ -326,17 +287,14 @@ final class AppEnvironment {
     return config
   }
 
-  /// Everything under `Application Support/ImageGen/` (store, images, requests, staging, `Logs/`)
-  /// and the thumbnails.
-  /// `nonisolated`: callable without the main actor, because it touches only the file system.
+  /// Purges application support and cache directories.
   nonisolated static func deleteAllData(root: URL, cachesRoot: URL) {
-    // A folder that doesn't exist yet is already reset.
     try? FileManager.default.removeItem(at: root)
     try? FileManager.default.removeItem(at: cachesRoot.appendingPathComponent("Thumbnails"))
   }
 }
 
 extension URLSessionTransport {
-  /// "background session" or "ephemeral session", for the Launch result.
+  /// Diagnostic label for transport session classification.
   var sessionKind: String { isBackgroundSession ? "background session" : "ephemeral session" }
 }

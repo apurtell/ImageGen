@@ -1,16 +1,11 @@
 import Foundation
 
-/// Which models the key can use (D§2.5): checked when a key is saved, on foreground at most every
-/// 24 h, and on pull to refresh. Results are cached in `AppSettings`. Each run is logged.
+/// Coordinates model discovery and API credential validation. Queries available upstream models
+/// when credentials change, periodically on foreground activation (24-hour cadence), or on explicit user request.
+/// Discovered model metadata is persisted in `AppSettings` to configure model selection menus.
 ///
-/// Place in the design: `AppEnvironment` builds one and calls `refreshIfStale` when the app becomes
-/// active. Onboarding and the Settings key section call `validateKey`; Settings and onboarding call
-/// `refresh`. It calls `ModelsClient` (the models list endpoint) and writes the cache in `AppSettings`.
-///
-/// Concurrency model: `@MainActor` means every member runs on the main thread, because it writes
-/// `AppSettings`, which the screens read (see the primer, *Actors*). The main actor also runs one
-/// piece of code at a time, but at the network `await` other code runs, including another check.
-/// So two checks can overlap and finish in either order; the run numbers below decide which may store.
+/// Execution is pinned to the `@MainActor` to serialize settings updates that drive UI state.
+/// Monotonically increasing run identifiers guard against out-of-order storage when overlapping network requests complete.
 @MainActor
 final class ModelAvailabilityService {
   enum Reason: String, Sendable {
@@ -19,17 +14,17 @@ final class ModelAvailabilityService {
     case manual = "manual check"
   }
 
-  /// What a refresh found.
+  /// Outcome of a model catalog discovery operation.
   enum RefreshOutcome: Sendable, Equatable {
     case refreshed(modelCount: Int, flashListed: Bool)
     case noKey
     case failed(String)
   }
 
-  /// The answer to a key check: the key works, Google rejected it, or Google couldn't be reached.
+  /// Credential validation outcome evaluated against the upstream Gemini models endpoint.
   enum KeyValidation: Sendable, Equatable {
     case valid(modelCount: Int, flashListed: Bool)
-    /// The API message, and the `ErrorInfo` reason when there is one (`API_KEY_INVALID`).
+    /// Upstream error message accompanied by structured error code when available (e.g., `API_KEY_INVALID`).
     case rejected(String, reason: String?)
     case unreachable(String)
   }
@@ -43,8 +38,7 @@ final class ModelAvailabilityService {
   private let log: ActivityLog
   private let registry: SecretRegistry
   private let clock: @Sendable () -> Date
-  /// Each run that may store a model list takes the next number; a run stores only if no later
-  /// run has stored meanwhile, so a slow check can't overwrite newer results.
+  /// Monotonically increasing run identifier ensuring out-of-order asynchronous responses do not overwrite fresher results.
   private var runsStarted = 0
   private var newestStored = 0
 
@@ -60,11 +54,9 @@ final class ModelAvailabilityService {
     self.clock = clock
   }
 
-  /// Refreshes on foreground only when the last check is more than 24 h old (or there's none).
-  /// With no saved key (before onboarding finishes) it does nothing and logs nothing: the check
-  /// can't run, and a failed "no API key" on every foreground would show as Last Error.
+  /// Initiates model discovery on foreground activation if the cached catalog is absent or exceeds the staleness threshold.
+  /// Bypasses execution silently if no API key is configured.
   func refreshIfStale() async {
-    // A Keychain read error counts as no key here too, as in `refresh`.
     guard let key = try? keyStore.read(), !key.isEmpty else { return }
     if let checked = settings.modelAvailabilityCache?.checkedAt, clock().timeIntervalSince(checked) < Self.staleAfter {
       return
@@ -77,16 +69,14 @@ final class ModelAvailabilityService {
     let action = log.begin(
       "Models refresh", origin: reason == .foreground ? .system : .user,
       "reason \(reason.rawValue) · \(Self.listPath)")
-    // A Keychain read error counts as no key; the check can't run either way.
     guard let key = try? keyStore.read(), !key.isEmpty else {
       log.result(action, .failed, "no API key")
       return .noKey
     }
-    // Take the run number before the `await`, so the order of numbers is the order of starts.
+    // Allocate run identifier prior to network suspension to preserve invocation ordering.
     let run = startRun()
     do {
       let (models, pages) = try await client.listAll(apiKey: key)
-      // nil also when the saved key changed during the check; the log text is the same for both.
       let changes = store(models, run: run, key: key) ?? "superseded by a newer check · not stored"
       let flash = ModelsClient.flashListed(models)
       log.result(
@@ -101,8 +91,8 @@ final class ModelAvailabilityService {
     }
   }
 
-  /// Checks a typed key before it's saved (onboarding, Validate Now). The key is registered as a
-  /// secret first, so nothing that echoes it can reach the log.
+  /// Validates uncommitted API credentials prior to persistence, ensuring credentials are first registered with
+  /// the secret redaction registry to prevent accidental log exposure.
   func validateKey(_ key: String, parent: ActionID? = nil) async -> KeyValidation {
     registry.register(key)
     let started = ContinuousClock.now
@@ -112,8 +102,7 @@ final class ModelAvailabilityService {
     let run = startRun()
     do {
       let (models, _) = try await client.listAll(apiKey: key)
-      // Stored only for the saved key: a typed key isn't saved yet (and may never be); saving it
-      // runs its own refresh.
+      // Catalog caching applies only if the key has been committed to permanent storage.
       _ = store(models, run: run, key: key)
       let flash = ModelsClient.flashListed(models)
       log.result(
@@ -139,11 +128,9 @@ final class ModelAvailabilityService {
     return runsStarted
   }
 
-  /// Caches availability and describes what changed for the catalog models; nil when not stored
-  /// (a later run stored first, or `key` is no longer the saved key).
-  /// Synchronous, so the check and the write happen in one step on the main actor.
+  /// Commits discovered model availability to application settings and formats differential telemetry.
+  /// Returns nil if the pass was superseded by a later invocation or if the stored key changed.
   private func store(_ models: [ModelInfo], run: Int, key: String) -> String? {
-    // `try?` turns a Keychain error into nil (not stored); `flatMap` flattens the two optional levels.
     guard run > newestStored, (try? keyStore.read()).flatMap({ $0 }) == key else { return nil }
     newestStored = run
     let now = Dictionary(models.map { ($0.id, $0.supportsGenerateContent) }, uniquingKeysWith: { a, b in a || b })
@@ -158,7 +145,7 @@ final class ModelAvailabilityService {
     return changes.isEmpty ? "no changes" : changes.joined(separator: ", ")
   }
 
-  /// The short text for the log and the screen.
+  /// Produces a human-readable diagnostic description from an underlying error.
   static func describe(_ error: any Error) -> String {
     switch error {
     case ModelsClientError.unreachable(let why): "couldn't reach Google (\(why))"

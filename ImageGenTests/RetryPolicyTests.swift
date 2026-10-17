@@ -92,7 +92,7 @@ struct RetryPolicyTests {
       code: 429, message: "quota", status: "RESOURCE_EXHAUSTED",
       details: [.object(["@type": .string("type.googleapis.com/google.rpc.RetryInfo"), "retryDelay": .string("90s")])])
     #expect(decide(.http(status: 429, headers: [:], bodyBytes: 100, error: long)) == .retry(after: .seconds(60)))
-    // The hint replaces the backoff and its jitter.
+    // Server provided retry delay hints supersede exponential backoff and jitter calculations.
     let jittery = RetryPolicy(jitter: { 0.9 })
     #expect(decide(.http(status: 429, headers: [:], bodyBytes: 900, error: fixture), used: 1, policy: jittery) == .retry(after: .seconds(30)))
   }
@@ -108,7 +108,7 @@ struct RetryPolicyTests {
     #expect(decide(r, civicSent: true, civicUsed: false) == .rebuildWithoutCivicAndRetry)
     #expect(decide(r, civicSent: true, civicUsed: true) == .finish)
     #expect(decide(r, civicSent: false, civicUsed: false) == .finish)
-    // Outside the budget.
+    // Civic integrity fallback is permitted independently of automatic retry budget limits.
     #expect(decide(r, used: 2, civicSent: true, civicUsed: false) == .rebuildWithoutCivicAndRetry)
   }
 

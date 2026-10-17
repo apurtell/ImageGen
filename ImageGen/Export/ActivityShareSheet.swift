@@ -2,20 +2,17 @@ import LinkPresentation
 import SwiftUI
 import UIKit
 
-/// The share sheet (D§4.9): `UIActivityViewController` over one item provider holding the
-/// `ImageFile`, so the shared type and bytes are the original's. Unlike `ShareLink`, it reports
-/// the outcome through `onComplete`.
+/// Bridge presenting a UIKit activity controller configured with an item provider representation of an `ImageFile`.
 ///
-/// `UIViewControllerRepresentable` wraps a UIKit screen so that SwiftUI can present it; here
-/// `ImageExportPresenter` shows it in a `.sheet`. SwiftUI calls `makeUIViewController` once per
-/// presentation. All of it runs on the main thread, and UIKit calls `onComplete` there too.
+/// Unlike standard declarative sharing components, this representation exposes completion callbacks
+/// with activity type discrimination, completion disposition, and error propagation, enabling comprehensive
+/// export telemetry and user notification.
 struct ActivityShareSheet: UIViewControllerRepresentable {
   let file: ImageFile
-  /// The activity chosen (nil if none), whether it completed, and any error. `ImageExportModel` logs it.
+  /// Completion callback delivering selected activity type, success disposition, and optional execution failure.
   let onComplete: (UIActivity.ActivityType?, Bool, (any Error)?) -> Void
 
-  /// One provider with the `Transferable` file registered, so the sheet sees the same single
-  /// representation, with the real type, as Save to Files does.
+  /// Constructs an `NSItemProvider` exposing the underlying file representation and designated filename.
   static func itemProvider(for file: ImageFile) -> NSItemProvider {
     let provider = NSItemProvider()
     provider.register(file)
@@ -25,7 +22,7 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
 
   func makeUIViewController(context: Context) -> UIActivityViewController {
     let configuration = UIActivityItemsConfiguration(itemProviders: [Self.itemProvider(for: file)])
-    // The header's preview and title; the shared item itself stays the original file.
+    // Configure rich preview presentation metadata for system sharing sheets.
     let metadata = LPLinkMetadata()
     metadata.title = file.suggestedName
     metadata.imageProvider = NSItemProvider(contentsOf: file.url)
@@ -41,6 +38,5 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
     return controller
   }
 
-  // The sheet's content never changes while it is shown, so there is nothing to update.
   func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

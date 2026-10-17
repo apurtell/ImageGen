@@ -1,6 +1,6 @@
 import Foundation
 
-/// A per-test temporary directory, removed in `deinit`. Keep the instance alive for the test's duration.
+/// Scoped temporary directory fixture providing isolated filesystem scratch space, automatically purged on deallocation.
 final class TestFileRoot: Sendable {
   let url: URL
 
@@ -10,7 +10,7 @@ final class TestFileRoot: Sendable {
     try! FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
   }
 
-  /// A path under the root; intermediate directories are created.
+  /// Resolves a file URL within the temporary tree, ensuring intermediate ancestor directories are created.
   func file(_ relativePath: String) -> URL {
     let file = url.appendingPathComponent(relativePath)
     try! FileManager.default.createDirectory(
@@ -18,7 +18,7 @@ final class TestFileRoot: Sendable {
     return file
   }
 
-  /// A directory under the root, created.
+  /// Creates and returns a subdirectory URL located within the temporary root.
   func directory(_ relativePath: String) -> URL {
     let dir = url.appendingPathComponent(relativePath, isDirectory: true)
     try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

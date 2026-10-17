@@ -2,7 +2,7 @@ import Testing
 
 @testable import ImageGen
 
-/// Who writes a request action's result when the preparation's background-task assertion expires.
+/// Verifies state transitions and result ownership during background task assertion expiry within the preparation phase.
 @Suite(.tags(.pure))
 struct PreparationPhaseTests {
   typealias Preparation = GenerationService.Preparation
@@ -11,8 +11,8 @@ struct PreparationPhaseTests {
     let p = Preparation()
     #expect(p.claimExpiry())
     #expect(p.expired)
-    #expect(!p.claimSending())  // the task is never started
-    #expect(!p.claimFinish())  // and the preparation writes no second result
+    #expect(!p.claimSending())  // Prevents task dispatch following assertion expiration.
+    #expect(!p.claimFinish())   // Suppresses duplicate result emissions from expired preparation contexts.
   }
 
   @Test func expiryAfterTheTaskStartedIsIgnored() {

@@ -4,7 +4,7 @@ import Testing
 
 @testable import ImageGen
 
-/// A transport the test drives by hand: it records jobs and yields the events the test asks for.
+/// Controllable generation transport implementation that logs submitted jobs and yields scripted events on demand.
 final class ScriptedTransport: GenerationTransport {
   let events: AsyncStream<TransportEvent>
   private let continuation: AsyncStream<TransportEvent>.Continuation
@@ -14,7 +14,7 @@ final class ScriptedTransport: GenerationTransport {
   let cancelledTasks = Locked<[Int]>([])
   let live = Locked<[LiveTask]>([])
   private let nextID = Locked(100)
-  /// When set, `start` throws, as if the session couldn't make the task.
+  /// When enabled, forces `start` invocations to throw, simulating task creation failures in the underlying session.
   let failStarts = Locked(false)
 
   struct StartFailed: Error {}
@@ -40,12 +40,12 @@ final class ScriptedTransport: GenerationTransport {
   func cancel(taskIdentifier: Int) async { cancelledTasks.withLock { $0.append(taskIdentifier) } }
   func liveTasks() async -> [LiveTask] { live.value }
 
-  /// Writes the body to the attempt's `.part` file and the `.complete` marker, then yields `.completed`.
+  /// Writes payload bytes to the attempt's partial response file, creates completion markers, and yields a `.completed` transport event.
   func complete(
     _ requestID: UUID, attempt: Int, status: Int? = 200, body: Data = Data(), error: URLError.Code? = nil,
     cancelReason: Int? = nil, elapsed: Duration = .seconds(1), taskIdentifier: Int = 1
   ) {
-    // As if the transport had made the task (which creates the request's folder).
+    // Ensures the request directory structure exists prior to accumulator writes.
     try? FileStore.createDirectory(files.requestDir(requestID))
     live.withLock { $0.removeAll { $0.requestID == requestID && $0.attempt == attempt } }
     let acc = ResponseAccumulator(files: files)
@@ -61,12 +61,12 @@ final class ScriptedTransport: GenerationTransport {
   func yield(_ event: TransportEvent) { continuation.yield(event) }
 }
 
-/// A weak reference, for closures the harness itself owns (so they don't keep it alive).
+/// Weak reference wrapper preventing retain cycles in harness-owned callbacks.
 final class WeakHarness: @unchecked Sendable {
   weak var value: GenerationHarness?
 }
 
-/// A sleeper that waits until the test advances it.
+/// Deterministic pause coordinator allowing test drivers to manually resume suspended async tasks.
 final class ManualSleeper: Sendable {
   private let state = Locked<(requested: [Duration], waiting: [CheckedContinuation<Void, Never>])>(([], []))
 
@@ -82,7 +82,7 @@ final class ManualSleeper: Sendable {
     }
   }
 
-  /// Resumes everything waiting.
+  /// Resumes all pending continuations currently suspended within sleep calls.
   func advance() {
     let waiting = state.withLock { s in
       defer { s.waiting = [] }
@@ -92,11 +92,11 @@ final class ManualSleeper: Sendable {
   }
 }
 
-/// Records begin and end, flushing the log before each end as the real provider does; can fire expiry.
+/// Mock background task provider that records lifecycle events, flushes the activity log upon task completion, and supports simulated expiration triggers.
 final class RecordingBackgroundTaskProvider: BackgroundTaskProviding {
   enum Event: Equatable {
     case begin(String)
-    /// `fileLines`: the log file's line count once the flush before the end returned.
+    /// Recorded line count of the backing log file immediately following the completion flush.
     case end(fileLines: Int)
     case expired(fileLines: Int)
   }
@@ -125,7 +125,7 @@ final class RecordingBackgroundTaskProvider: BackgroundTaskProviding {
     events.withLock { $0.append(.end(fileLines: lines)) }
   }
 
-  /// Fires the expiry of every open assertion, as the system would.
+  /// Simulates OS expiration callbacks across all active background task assertions.
   func fireExpiry() async {
     let handlers = expiries.withLock { e in
       defer { e = [:] }
@@ -143,7 +143,7 @@ final class RecordingBackgroundTaskProvider: BackgroundTaskProviding {
   }
 }
 
-/// Everything `GenerationService` needs, on one temporary root.
+/// Comprehensive test harness orchestrating isolated storage, mock transports, activity probes, and service dependencies.
 final class GenerationHarness: Sendable {
   static let flashURL = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent")!
 
@@ -159,7 +159,7 @@ final class GenerationHarness: Sendable {
   let edge = Locked(2048)
   let omitCivic = Locked(false)
   let civicCalls = Locked(0)
-  /// Awaited inside the CIVIC fallback, before the body is rebuilt, so a test can act in that gap.
+  /// Optional synchronization hook invoked during civic fallback processing prior to request body reconstruction.
   let civicGate = Locked<(@Sendable () async -> Void)?>(nil)
   let finishedCalls = Locked<[(id: String, handled: Int, statesAtCall: [RequestState])]>([])
   let jobs = Locked<[TransportJob]>([])
@@ -261,13 +261,11 @@ final class GenerationHarness: Sendable {
     return d
   }
 
-  // MARK: Mock responses
-
   static func url(model: String) -> URL {
     URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(GeminiEndpoint.pathSegment(model)):generateContent")!
   }
 
-  /// Queues fixture responses (status 200 unless the name is under `Errors/`).
+  /// Registers canned fixture responses, inferring HTTP error status codes for fixtures located under `Errors/`.
   func respond(_ fixtures: String..., model: String = ModelCatalog.defaultModelID, delay: Duration = .zero) throws {
     let responses = try fixtures.map { name -> MockURLProtocol.Response in
       let status: Int
@@ -289,12 +287,10 @@ final class GenerationHarness: Sendable {
 
   var recorded: [MockURLProtocol.RecordedRequest] { MockURLProtocol.recorded(token: token) }
 
-  /// The JSON bodies the mock received.
+  /// Deserialized JSON payloads captured by the mock protocol across recorded requests.
   var sentBodies: [[String: Any]] {
     recorded.compactMap { (try? JSONSerialization.jsonObject(with: $0.body)) as? [String: Any] }
   }
-
-  // MARK: Drafts and waiting
 
   func draft(_ conv: UUID, _ prompt: String, attachments: [StagedAttachment] = [], overrides: ChatOverrides = ChatOverrides())
     -> SendDraft
@@ -308,7 +304,7 @@ final class GenerationHarness: Sendable {
     try #require(try await s.store.requestSnapshot(id))
   }
 
-  /// Polls until the request reaches one of the states (default: any terminal one).
+  /// Polls the database asynchronously until the specified request transitions into one of the designated target states.
   @discardableResult
   func wait(
     _ id: UUID, for states: Set<RequestState> = Set(RequestState.allCases.filter(\.isTerminal)),
@@ -317,8 +313,8 @@ final class GenerationHarness: Sendable {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
       if let snap = try await s.store.requestSnapshot(id), states.contains(snap.state) {
-        // A terminal state is written before the service notifies and logs the result; wait for
-        // the result too, so the service has finished with the request.
+        // Terminal database states are committed prior to final result logging; wait for the result entry
+        // to guarantee end-to-end service cycle completion.
         if snap.state.isTerminal, let action = snap.activityActionID {
           while ContinuousClock.now < deadline {
             if await probe.entries().contains(where: { $0.actionID == action && $0.kind == .result }) {
@@ -337,7 +333,7 @@ final class GenerationHarness: Sendable {
     throw CancellationError()
   }
 
-  /// Polls a condition.
+  /// Continuously polls an asynchronous predicate until it evaluates to true or expires against the timeout.
   func until(_ timeout: Duration = .seconds(10), _ condition: () async throws -> Bool) async throws {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
@@ -348,7 +344,7 @@ final class GenerationHarness: Sendable {
     throw CancellationError()
   }
 
-  /// Sends and waits for a terminal state.
+  /// Dispatches a generation draft and awaits its transition into a terminal state.
   @discardableResult
   func sendAndWait(_ draft: SendDraft) async throws -> RequestSnapshot {
     let id = try await service.send(draft)
@@ -359,7 +355,7 @@ final class GenerationHarness: Sendable {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
   }
 
-  /// The base64 data of each `inlineData` part of a sent body, decoded.
+  /// Decodes base64 inline image payloads embedded in serialized request content parts.
   static func images(in body: [String: Any]) -> [(mime: String, data: Data)] {
     let parts = ((body["contents"] as? [[String: Any]])?.first?["parts"] as? [[String: Any]]) ?? []
     return parts.compactMap { p in
@@ -370,7 +366,7 @@ final class GenerationHarness: Sendable {
   }
 }
 
-/// Forwards to a transport and records each job.
+/// Transport decorator intercepting and logging dispatched jobs while delegating execution to an underlying transport.
 struct RecordingTransport: GenerationTransport {
   let inner: any GenerationTransport
   let jobs: Locked<[TransportJob]>

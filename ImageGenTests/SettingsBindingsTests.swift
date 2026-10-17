@@ -6,7 +6,7 @@ import Testing
 @MainActor
 @Suite(.tags(.integration))
 struct SettingsBindingsTests {
-  /// A chat screen and the Settings model on the same settings, store and log.
+  /// Test fixture configuring a chat screen model and settings model sharing underlying preferences, store, and log subsystems.
   @MainActor
   final class Rig {
     let chat: ChatScreenModelTests.Rig
@@ -182,8 +182,6 @@ struct SettingsBindingsTests {
     #expect(r.settingsModel.notificationStatusText == "Off in system Settings")
   }
 
-  // MARK: Log assertions
-
   @Test func settingChangesLogged() async throws {
     let r = try await Rig()
     r.settingsModel.setDefaultAspect(.r1x1)
@@ -191,7 +189,7 @@ struct SettingsBindingsTests {
     r.settingsModel.setThreshold(.blockOnlyHigh)
     r.settingsModel.setIncludeText(false)
     r.settingsModel.setEnabled(Self.nb21, false)
-    r.settingsModel.setMaxLongEdge(3072)  // unchanged: not logged
+    r.settingsModel.setMaxLongEdge(3072)  // Unchanged value suppresses redundant log emissions.
     let begins = await r.chat.probe.entries().filter { $0.name == "Settings change" && $0.kind == .begin }.map(\.message)
     #expect(
       begins == [
@@ -248,7 +246,7 @@ struct SettingsBindingsTests {
     #expect(tree.last?.outcome == .success)
     #expect(tree.last?.message.hasPrefix("chats removed 1 · files removed ") == true)
 
-    // A removal that fails ends the action failed, with the counts.
+    // Failed filesystem deletions conclude the activity action as failed with detailed error accounting.
     let conv = try await r.chat.s.store.createConversation()
     try await r.chat.s.send(conv, prompt: "p", attachments: [try r.chat.s.stage()])
     let dir = r.chat.s.files.conversationDir(conv)

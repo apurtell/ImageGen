@@ -30,7 +30,7 @@ struct TestSupportTests {
     let recorded = MockURLProtocol.recorded(token: token)
     #expect(recorded.map { String(decoding: $0.body, as: UTF8.self) } == ["body-1", "body-2"])
 
-    // The queue is empty now: a third request fails.
+    // Subsequent requests fail once the mock response queue is exhausted.
     await #expect(throws: URLError.self) { _ = try await session.upload(for: request, from: Data()) }
   }
 

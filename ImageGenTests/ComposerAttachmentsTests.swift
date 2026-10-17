@@ -7,7 +7,7 @@ import Testing
 extension TrayItem {
   enum FakeState { case ready, preparing, failed }
 
-  /// A tray item with no files behind it, for enablement and ordering checks.
+  /// Factory helper creating mock tray items without backing storage files for UI state verification.
   static func fake(_ state: FakeState) -> TrayItem {
     let id = UUID()
     let s: TrayItem.State =
@@ -24,7 +24,7 @@ extension TrayItem {
   }
 }
 
-/// Holds callers until opened.
+/// Asynchronous barrier synchronization primitive suspending awaiting tasks until explicitly opened.
 final class Gate: Sendable {
   private let state = Mutex<(open: Bool, waiters: [CheckedContinuation<Void, Never>])>((false, []))
 
@@ -185,8 +185,6 @@ struct ComposerAttachmentsTests {
     #expect(sent.attachments.allSatisfy { $0.origin == .photos && $0.prepared.longEdgeSetting == 2048 })
     #expect(r.model.tray.isEmpty)
   }
-
-  // MARK: Log assertions
 
   @Test func attachLogsSourceAndPreparation() async throws {
     let r = try await Rig()

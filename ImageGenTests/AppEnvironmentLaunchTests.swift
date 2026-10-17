@@ -55,7 +55,7 @@ struct AppEnvironmentLaunchTests {
     let rig = Rig()
     rig.useManualGrace = true
     let env = AppEnvironment(rig.configuration())
-    // A request left in flight with no task, so the Reconciler waits out the grace period.
+    // Simulates an orphaned in-flight request lacking an active session task, requiring reconciler grace period deferral.
     let conv = try await env.store.createConversation()
     let record = try await env.store.createSend(
       SendRecordInput(
@@ -106,7 +106,7 @@ struct AppEnvironmentLaunchTests {
 
   @Test func resetDeletesLogBeforeLaunchBegin() async throws {
     let rig = Rig()
-    // An earlier run's log, including an open Launch.
+    // Simulates pre-existing activity log contents from an unfinalized prior execution cycle.
     let earlier = ActivityLogProbe(root: rig.root)
     earlier.log.begin("Launch", origin: .system, "earlier run")
     earlier.log.result(earlier.log.begin("Copy", origin: .user, "x"), .success, "")

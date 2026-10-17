@@ -1,31 +1,21 @@
 import SwiftData
 import SwiftUI
 
-/// The chat list (D§3.3): the app's root screen, inside the navigator's `NavigationStack`.
+/// Root conversation navigation interface displaying persistent chat sessions ordered chronologically,
+/// supporting in-place title editing, destructive deletion workflows, and conversation initialization.
 ///
-/// The list reads records straight from SwiftData with `@Query`, and it sends every change (new chat,
-/// rename, delete) to `ChatActions`, which writes through `DataStore`. The view never saves records
-/// itself. When `DataStore` saves on its own context, SwiftData merges the change into the main context
-/// and `@Query` refreshes the list (D§4.2).
-///
-/// Concurrency: a SwiftUI view runs on the main actor. The only asynchronous work here is the calls to
-/// `ChatActions`, each in its own unstructured `Task`. The view does not wait for them; the list
-/// updates when the saved change reaches `@Query`.
+/// Query results synchronize reactively with background persistence updates through SwiftData
+/// model context change propagation, isolating the presentation layer from transaction coordination.
 struct ChatListView: View {
   @Environment(AppEnvironment.self) private var env
-  /// `@Query` is a property wrapper that fetches records from the main `ModelContext` and fetches again
-  /// when they change, so `body` always sees the current list, newest first. The `Conversation`
-  /// objects belong to the main context; they stay on the main actor (see the primer, *SwiftData*).
+  /// Automatically refreshed query tracking all persisted conversations, sorted by update timestamp descending.
   @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
-  /// The chat whose title is being edited in place, and the text so far. At most one row edits at a
-  /// time. `@State` keeps these values while SwiftUI calls `body` again.
+  /// Tracks the identifier and ephemeral draft string of the conversation currently undergoing in-place title editing.
   @State private var editingID: UUID?
   @State private var titleDraft = ""
-  /// The title when editing began (an untouched draft changes nothing, even after an auto-title).
-  /// The comparison is with this value, not with the live title: an automatic title can arrive while
-  /// the field is open, and an untouched draft must not overwrite it.
+  /// Captures title state at the onset of inline editing to prevent overwriting asynchronous background auto-titling updates.
   @State private var titleAtEditStart = ""
-  /// The chat that the Delete alert asks about. The alert shows while this is non-nil.
+  /// Target conversation referenced by active deletion confirmation alerts.
   @State private var deleting: Conversation?
 
   var body: some View {
@@ -41,25 +31,22 @@ struct ChatListView: View {
         }
       } else {
         List {
-          // The first row is not a chat: it does what the toolbar's New Chat button does (D§3.3).
-          // It is outside the `ForEach` below, so it gets no swipe actions and no long-press rename.
+          // Leading standalone action row duplicating the primary creation trigger from the navigation bar.
           NewChatRow { Task { await newChat() } }
           ForEach(conversations) { conversation in
             Group {
               if editingID == conversation.id {
-                // No link while editing, so taps on the field and its buttons don't open the chat.
+                // Suppress navigation destination link while active in-place editing is occurring.
                 ChatRow(
                   conversation: conversation,
                   titleEditing: ChatRow.TitleEditing(
                     text: $titleDraft, onSave: { saveTitle(conversation) }, onCancel: cancelTitle))
               } else {
-                // The link carries only the chat's ID. The destination in `RootView` builds the chat
-                // screen from the ID, so no record object travels through the navigation path.
+                // Pass conversation identifier to destination builder to preserve value semantic navigation routes.
                 NavigationLink(value: conversation.id) {
                   ChatRow(conversation: conversation)
                 }
-                // Long-press edits the title in place. Simultaneous, so a tap still opens the chat
-                // (an exclusive long-press on the label swallowed the link's tap).
+                // Enable in-place editing on long press while allowing standard tap gestures to proceed to navigation.
                 .simultaneousGesture(
                   LongPressGesture(minimumDuration: 0.5).onEnded { _ in beginTitle(conversation) })
                 .accessibilityAction(named: "Rename") { beginTitle(conversation) }
@@ -74,18 +61,14 @@ struct ChatListView: View {
           }
         }
         .listStyle(.plain)
-        // An alert, not a row-anchored confirmation dialog: a dialog attached to a row never
-        // presented after the row's swipe action (iOS 26.5). So the alert is attached to the whole
-        // list, once, and `deleting` says which chat it is about. (D§3.3 still says "anchored to the
-        // row"; this alert replaces that dialog.)
+        // List-anchored confirmation alert presenting deletion warnings for the selected conversation.
         .alert(
           deleting.map(Self.deleteTitle) ?? "",
-          // A hand-made binding: the alert shows while `deleting` is set, and closing it clears it.
+          // Bidirectional binding deriving alert visibility from conversation selection state.
           isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })
         ) {
           Button("Delete", role: .destructive) {
-            // Only the ID goes into the task. The record object stays on the main actor, and the
-            // delete is done by `DataStore` on its own context.
+            // Dispatch deletion asynchronously by identifier across persistence worker contexts.
             if let id = deleting?.id { Task { await env.chatActions.deleteChat(id) } }
           }
           Button("Cancel", role: .cancel) {}
@@ -94,7 +77,7 @@ struct ChatListView: View {
         }
       }
     }
-    // A selection haptic when an in-place edit starts (the ID becomes non-nil), not when it ends.
+    // Emit selection haptic feedback upon initiating in-place title editing.
     .sensoryFeedback(.selection, trigger: editingID) { _, id in id != nil }
     .navigationTitle("Chats")
     .toolbar {
@@ -102,7 +85,7 @@ struct ChatListView: View {
         Button("Settings", systemImage: "gearshape") { env.navigator.showSettings = true }
           .accessibilityLabel("Settings")
       }
-      // The Developer menu comes before New Chat, so New Chat stays the trailing-most item (D§3.3).
+      // Retain New Chat as the trailing navigation bar item for primary visual prominence.
       ToolbarItemGroup(placement: .topBarTrailing) {
         DeveloperMenu()
         Button("New Chat", systemImage: "square.and.pencil") { Task { await newChat() } }
@@ -111,48 +94,42 @@ struct ChatListView: View {
     }
   }
 
-  // MARK: In-place rename
-
-  /// Starts an in-place edit of one row (long-press, the leading swipe, or the VoiceOver action).
-  /// The draft starts as the current title.
+  /// Initiates inline title editing for the specified conversation across gesture or accessibility triggers.
   private func beginTitle(_ conversation: Conversation) {
     titleDraft = conversation.title
     titleAtEditStart = conversation.title
     editingID = conversation.id
   }
 
-  /// Return or ✓. The edit closes at once; the rename itself runs later in `ChatActions`.
+  /// Commits edited title drafts, validating text modifications before asynchronously dispatching update actions.
   private func saveTitle(_ conversation: Conversation) {
-    // A late callback, from a row that no longer edits, must not save a draft that belongs to
-    // another row or to an edit that already closed.
+    // Guard against stale invocation callbacks if active editing state has already transitioned.
     guard editingID == conversation.id else { return }
     editingID = nil
     guard let name = TitleEdit.change(draft: titleDraft, current: titleAtEditStart) else { return }
-    // Captured before the task, so the task holds a plain `UUID`, not the record object.
+    // Capture identifier value semantics to decouple asynchronous persistence tasks from model instances.
     let id = conversation.id
     Task { await env.chatActions.rename(id, to: name) }
   }
 
-  /// ✕, or the field lost focus without Return.
+  /// Dismisses inline editing mode without persisting pending draft changes.
   private func cancelTitle() {
     editingID = nil
   }
 
-  /// "Delete chat and its N images?", or "Delete this chat?" when it has none (D§3.3).
+  /// Formulates localized confirmation prompts detailing associated image counts slated for cascade deletion.
   static func deleteTitle(_ conversation: Conversation) -> String {
     let count = conversation.messages.reduce(0) { $0 + $1.images.count }
     return count == 0 ? "Delete this chat?" : "Delete chat and its \(count) image\(count == 1 ? "" : "s")?"
   }
 
-  /// Creates an empty chat and pushes it. `newChat()` returns nil when the store could not create the
-  /// chat (it logs the failure); then the list stays as it is.
+  /// Initializes a new conversational session and navigates immediately to its transcript upon creation.
   private func newChat() async {
     if let id = await env.chatActions.newChat() { env.navigator.open(id) }
   }
 }
 
-/// The chat list's first row (D§3.3): a button, laid out like a chat row, that starts a new chat.
-/// The tinted square stands where a chat's thumbnail would be, so the titles line up.
+/// Dedicated creation button formatted as a list row, visually aligning with conversation cells.
 private struct NewChatRow: View {
   let action: () -> Void
 
@@ -163,12 +140,12 @@ private struct NewChatRow: View {
           .fill(.tint.opacity(0.15))
           .frame(width: 44, height: 44)
           .overlay(Image(systemName: "square.and.pencil").font(.title3).foregroundStyle(.tint))
-          // The button's text says it all; VoiceOver doesn't need the icon too.
+          // Visual glyph decorative; accessible text label provides complete context.
           .accessibilityHidden(true)
         Text("New Chat").font(.headline).foregroundStyle(.tint)
         Spacer(minLength: 0)
       }
-      // The whole row takes the tap, not only the icon and the text.
+      // Expand hit test boundary across the entire row surface.
       .contentShape(Rectangle())
     }
   }

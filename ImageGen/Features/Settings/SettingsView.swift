@@ -1,28 +1,20 @@
 import SwiftUI
 
-/// The Settings sheet (D§3.8).
-///
-/// `RootView` presents it as a sheet and passes two new models: `APIKeySectionModel` for the API
-/// Key section and `SettingsModel` for everything else. Each section is a small view below. The
-/// views only draw and forward taps; the models log, validate and save. All of it runs on the main
-/// actor. Buttons that start slow work wrap the call in a `Task`, because a button action cannot
-/// `await`.
+/// Root Settings modal sheet aggregating configuration sections for credentials, model catalog,
+/// generation defaults, upload limits, advanced transport options, notifications, storage, and
+/// application info.
 struct SettingsView: View {
-  /// `@State` keeps the two models for the life of the sheet, also when SwiftUI rebuilds this view.
   @State var keyModel: APIKeySectionModel
   @State var model: SettingsModel
   @Environment(\.dismiss) private var dismiss
   @Environment(Navigator.self) private var navigator
 
   var body: some View {
-    // `@Bindable` on a local gives `$navigator.settingsPath`, a two-way binding into the shared
-    // `@Observable` navigator, which `@Environment` alone does not offer.
     @Bindable var navigator = navigator
-    // The navigator owns the sheet's path, so the sheet can open directly on the Models page (the
-    // 404 card's Open Models).
+    // Bind navigation stack path to navigator state to support deep-linking directly into sub-pages.
     NavigationStack(path: $navigator.settingsPath) {
       Form {
-        // After Remove Key: close Settings, and the root shows onboarding.
+        // Transition to onboarding workflow if credentials are deleted.
         APIKeySection(model: keyModel) {
           dismiss()
           navigator.needsOnboarding = true
@@ -53,8 +45,7 @@ struct SettingsView: View {
       }
     }
     .toast(model.toast, offset: 64)
-    // Runs each time the sheet appears and is cancelled when it closes. The two reads run one after
-    // the other; both are fast.
+    // Synchronize storage metrics and notification permissions upon sheet presentation.
     .task {
       await model.refreshSizes()
       await model.refreshNotificationStatus()
@@ -62,11 +53,7 @@ struct SettingsView: View {
   }
 }
 
-// MARK: - API Key
-
-/// Status, then either the Replace Key form or the buttons Replace Key, Validate Now and Remove Key.
-/// `model` is a plain `let`: SwiftUI still redraws when an `@Observable` property that `body` reads
-/// changes. A `@Bindable` is needed only for two-way bindings.
+/// Renders API credential status, on-demand validation triggers, replacement forms, and revocation actions.
 struct APIKeySection: View {
   let model: APIKeySectionModel
   let onRemoved: () -> Void
@@ -80,8 +67,7 @@ struct APIKeySection: View {
       } else {
         Button("Replace Key") { model.beginReplace() }
         if model.hasKey {
-          // Disabled while a check runs: one check at a time. A result that a newer key operation
-          // made out of date is dropped by the model.
+          // Disable validation trigger while asynchronous check is active.
           Button {
             Task { await model.validateNow() }
           } label: {
@@ -111,11 +97,8 @@ struct APIKeySection: View {
   }
 }
 
-/// The onboarding form, inline in Settings (Replace Key).
-/// The same `OnboardingModel` as the onboarding screen, so validation, saving and logging are the
-/// same. Cancel tells the model first, so a validation still running saves nothing.
+/// Inline form component for entering, verifying, and persisting a replacement API credential.
 private struct ReplaceKeyForm: View {
-  /// `@Bindable` gives the two-way bindings `$model.keyText` for the text fields.
   @Bindable var model: OnboardingModel
   let onSaved: () -> Void
   let onCancel: () -> Void
@@ -152,7 +135,6 @@ private struct ReplaceKeyForm: View {
     HStack {
       Button("Cancel", role: .cancel, action: onCancel).buttonStyle(.borderless)
       Spacer()
-      // `validateAndSave` returns false after a cancel, so `onSaved` never runs for a closed form.
       Button {
         Task { if await model.validateAndSave() { onSaved() } }
       } label: {
@@ -167,10 +149,7 @@ private struct ReplaceKeyForm: View {
   }
 }
 
-// MARK: - Generation defaults
-
-/// Aspect ratio, resolution and safety for new requests. Each picker uses a hand-made binding: the
-/// getter reads `AppSettings`, and the setter goes through the model, so each change is logged.
+/// Configuration controls for global generation defaults, including aspect ratio, resolution, and safety thresholds.
 struct GenerationDefaultsSection: View {
   let model: SettingsModel
 
@@ -196,7 +175,7 @@ struct GenerationDefaultsSection: View {
     }
   }
 
-  /// The composer's order: landscape, square, portrait, extreme (D§3.5).
+  /// Ordered aspect ratio choices categorized across landscape, square, portrait, and panoramic groupings.
   static let aspectOrder: [AspectRatio] = [
     .r16x9, .r21x9, .r3x2, .r4x3, .r5x4, .r1x1, .r9x16, .r2x3, .r3x4, .r4x5, .r4x1, .r8x1, .r1x4, .r1x8,
   ]
@@ -211,9 +190,7 @@ struct GenerationDefaultsSection: View {
   }
 }
 
-// MARK: - Uploads and Advanced
-
-/// The long-edge limit for uploaded photos.
+/// Configuration section governing maximum dimensions for uploaded image preprocessing.
 struct UploadsSection: View {
   let model: SettingsModel
 
@@ -233,7 +210,7 @@ struct UploadsSection: View {
   }
 }
 
-/// The two request-body options (D§3.8).
+/// Advanced options configuring request payload formatting and safety filtering exceptions.
 struct AdvancedSection: View {
   let model: SettingsModel
 
@@ -249,9 +226,7 @@ struct AdvancedSection: View {
   }
 }
 
-// MARK: - Notifications
-
-/// The notification permission status, and the background-completion toggle.
+/// Manages notification delivery authorization and background generation completion alerts.
 struct NotificationsSection: View {
   let model: SettingsModel
   @Environment(\.openURL) private var openURL
@@ -259,7 +234,7 @@ struct NotificationsSection: View {
   var body: some View {
     Section("Notifications") {
       LabeledContent("Status", value: model.notificationStatusText)
-      // The app cannot ask again after a denial; only the system Settings can turn it back on.
+      // Guide user to iOS Settings if notifications were previously disabled.
       if model.notificationStatus == "denied" {
         Button("Open Settings") {
           if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
@@ -272,12 +247,10 @@ struct NotificationsSection: View {
   }
 }
 
-// MARK: - Storage
-
-/// Folder sizes, Clear Thumbnail Cache, and Delete All Chats with a double confirmation (D§3.8).
+/// Storage consumption metrics, thumbnail cache reclamation, and destructive conversation purging controls.
 struct StorageSection: View {
   let model: SettingsModel
-  /// The first question (a confirmation dialog), then the second (an alert).
+  /// State flags coordinating multi-stage confirmation dialogs for destructive chat deletion.
   @State private var confirmDelete = false
   @State private var confirmDeleteAgain = false
 
@@ -290,7 +263,6 @@ struct StorageSection: View {
       LabeledContent("Thumbnail cache", value: size(model.sizes.thumbnails))
       LabeledContent("Total", value: size(model.totalBytes)).bold()
       Button("Clear Thumbnail Cache") { Task { await model.clearThumbnailCache() } }
-      // On the button, so the popover points at it.
       Button("Delete All Chats", role: .destructive) { confirmDelete = true }
         .confirmationDialog("Delete all chats?", isPresented: $confirmDelete, titleVisibility: .visible) {
           Button("Delete All Chats", role: .destructive) { confirmDeleteAgain = true }
@@ -307,9 +279,7 @@ struct StorageSection: View {
   }
 }
 
-// MARK: - About
-
-/// The app version and build, and the model IDs in use.
+/// Information section displaying application version metadata, active model identifiers, and watermarking disclosures.
 struct AboutSection: View {
   let model: SettingsModel
 

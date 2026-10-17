@@ -1,22 +1,14 @@
 import Foundation
 import Observation
 
-/// Settings (D§3.8) other than the API key: models, generation defaults, uploads, advanced,
-/// notifications and storage. Every control logs a Settings change with old → new (D§4.13).
+/// Presentation model driving application settings, including model catalog availability,
+/// generation defaults, image ingestion parameters, system notifications, and storage reclamation.
 ///
-/// `AppEnvironment.settingsModel()` builds one each time the Settings sheet opens. The views in
-/// `SettingsView.swift` and `ModelsSettingsView.swift` read it and call it. Most settings live in
-/// `AppSettings` (saved to UserDefaults), and this model only logs and applies each change. The
-/// storage actions call `DataStore`, `FileStore`, `ThumbnailService` and the generation service.
-///
-/// Concurrency: `@MainActor`, so property changes and log calls happen in the order the user acts.
-/// Slow file work (sizes, deletes) runs in `Task.detached` at utility priority, so the main thread
-/// stays free. The async actions (refresh, add model, clear, delete all) can each be in progress at
-/// the same time as other controls; the comments at each `await` say what is checked again after it.
+/// Dispatches file system aggregations and deletions off the main actor via utility tasks,
+/// recording paired telemetry for configuration changes.
 @Observable @MainActor
 final class SettingsModel {
-  /// The dependencies, in one struct, so that tests can supply fakes (see the primer, *Seams for
-  /// tests*).
+  /// Dependency container providing access to underlying services, storage actors, and transports.
   struct Services {
     var settings: AppSettings
     var keyStore: any APIKeyStore
@@ -28,11 +20,11 @@ final class SettingsModel {
     var generation: any GenerationServicing
     var log: ActivityLog
     var navigator: Navigator
-    /// The notification authorization status, by name ("authorized", "denied", …).
+    /// Closure querying current system notification authorization status.
     var notificationStatus: @Sendable () async -> String
   }
 
-  /// A model's status from the cached models list, as the Models page shows it.
+  /// Categorization of model availability based on cached catalog metadata.
   enum Availability: Equatable {
     case available, notListed, unknown
 
@@ -45,8 +37,7 @@ final class SettingsModel {
     }
   }
 
-  /// The outcome of Add, with the message to show. `invalid`: the input was refused before any
-  /// network call. `rejected`: the service refused the model, or the check failed.
+  /// Outcome of custom model identifier validation and registration attempts.
   enum CustomModelResult: Equatable {
     case added
     case invalid(String)
@@ -56,11 +47,11 @@ final class SettingsModel {
   @ObservationIgnored let services: Services
   var settings: AppSettings { services.settings }
 
-  /// The folder sizes for the Storage section. Zero until the first `refreshSizes()`.
+  /// Aggregated disk consumption metrics across image, staging, and thumbnail directories.
   private(set) var sizes = FileStore.Sizes()
   private(set) var notificationStatus = "notDetermined"
   private(set) var isRefreshingModels = false
-  /// True while one custom model check runs. It is the lock that keeps checks one at a time.
+  /// Guard flag ensuring custom model validation operations execute strictly sequentially.
   private(set) var isAddingModel = false
   private(set) var toast: String?
   @ObservationIgnored private var toastTask: Task<Void, Never>?
@@ -71,13 +62,8 @@ final class SettingsModel {
 
   private var log: ActivityLog { services.log }
 
-  // MARK: Settings change
-
-  /// Logs one change as a paired Settings change, then applies it.
-  /// Each change is one action: Begin, apply, Result, with no `await`, so the pair cannot interleave
-  /// with another change.
+  /// Records atomic configuration changes in activity logs before executing local mutation closures.
   private func change(_ name: String, _ old: String, _ new: String, apply: () -> Void) {
-    // A control can set the value it already has (for example, a picker re-selects): log nothing.
     guard old != new else { return }
     let action = log.begin("Settings change", origin: .user, "\(name) \(old) → \(new)")
     apply()
@@ -86,15 +72,13 @@ final class SettingsModel {
 
   private static func onOff(_ b: Bool) -> String { b ? "on" : "off" }
 
-  // MARK: Models
-
-  /// Catalog models other than Flash, each with a toggle (D§3.8).
+  /// Built-in catalog models excluding the mandatory default model.
   var toggleableModels: [ModelDescriptor] {
     ModelCatalog.builtIns.filter { $0.id != ModelCatalog.defaultModelID }
   }
 
   /// Unknown until a models list was cached. After that, a model missing from the list is "Not
-  /// listed".
+  /// Evaluates model availability based on cached remote catalog records.
   func availability(_ id: String) -> Availability {
     guard let cache = settings.modelAvailabilityCache else { return .unknown }
     return cache.models[id] == true ? .available : .notListed
@@ -105,32 +89,25 @@ final class SettingsModel {
   func isEnabled(_ id: String) -> Bool { settings.enabledModelIDs.contains(id) }
 
   func setEnabled(_ id: String, _ on: Bool) {
-    // The default model cannot be turned off (D§3.8).
+    // Preserve default model enablement invariants.
     guard id != ModelCatalog.defaultModelID else { return }
     let name = ModelCatalog.descriptor(for: id).shortName
     change("model \(name)", Self.onOff(isEnabled(id)), Self.onOff(on)) { settings.setModel(id, enabled: on) }
   }
 
-  /// Pull to refresh, and the Check Now button. The service logs its own Models refresh action and
-  /// updates the cache in `AppSettings`, which the views read.
+  /// Triggers asynchronous model catalog availability synchronization.
   func refreshModels() async {
     isRefreshingModels = true
-    // `defer` clears the flag when the function exits, on every path.
     defer { isRefreshingModels = false }
     _ = await services.availability.refresh(reason: .manual)
   }
 
-  /// A custom ID, validated with `GET v1beta/models/{id}` before it's added (D§3.8). The ID is
-  /// logged as private.
+  /// Validates candidate custom model identifier against remote endpoints and registers valid entries.
   func addCustomModel(_ raw: String) async -> CustomModelResult {
-    // Return in the field submits again while the first check runs; one check at a time.
-    // The check and the set below have no `await` between them, so on the main actor no second
-    // call can pass this guard before the flag is set.
     guard !isAddingModel else { return .invalid("Checking the previous model…") }
     var id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     if id.hasPrefix("models/") { id.removeFirst("models/".count) }
     guard !id.isEmpty else { return .invalid("Enter a model ID.") }
-    // The ID goes into a URL path, so only safe characters are allowed.
     guard id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-._".contains($0)) }) else {
       return .invalid("Model IDs use letters, digits, “-”, “.” and “_”.")
     }
@@ -139,9 +116,8 @@ final class SettingsModel {
     }
     isAddingModel = true
     defer { isAddingModel = false }
-    // From here on, every return writes this action's Result.
     let action = log.begin("Add custom model", origin: .user, "\(private: id) · GET /v1beta/models/{id}")
-    guard let key = try? services.keyStore.read(), !key.isEmpty else {  // try?: an unreadable key is the same as no key.
+    guard let key = try? services.keyStore.read(), !key.isEmpty else {
       log.result(action, .failed, "no API key · not added")
       return .rejected("Add an API key first.")
     }
@@ -151,7 +127,6 @@ final class SettingsModel {
         log.result(action, .failed, "HTTP 200 · no generateContent · not added")
         return .rejected("This model doesn't support image generation (generateContent).")
       }
-      // Checked again: the list may have changed while the model was looked up.
       if !settings.customModelIDs.contains(id) { settings.customModelIDs.append(id) }
       log.result(action, .success, "HTTP 200 · added")
       return .added
@@ -165,14 +140,12 @@ final class SettingsModel {
     }
   }
 
-  /// Swipe to delete on a custom ID. No check is needed, so it is synchronous.
+  /// Deletes a registered custom model identifier and logs the configuration change.
   func removeCustomModel(_ id: String) {
     let action = log.begin("Settings change", origin: .user, "custom model \(private: id) removed")
     settings.customModelIDs.removeAll { $0 == id }
     log.result(action, .success, "saved")
   }
-
-  // MARK: Generation defaults, uploads, advanced, notifications
 
   func setDefaultAspect(_ r: AspectRatio) {
     change("default aspect ratio", settings.defaultAspectRatio.rawValue, r.rawValue) { settings.defaultAspectRatio = r }
@@ -208,8 +181,7 @@ final class SettingsModel {
     }
   }
 
-  /// Reads the system's authorization status. It runs each time the sheet opens, because the user
-  /// can change it in the system Settings at any time.
+  /// Queries system notification authorization status.
   func refreshNotificationStatus() async {
     notificationStatus = await services.notificationStatus()
   }
@@ -223,35 +195,25 @@ final class SettingsModel {
     }
   }
 
-  // MARK: Storage
-
   var totalBytes: Int64 { sizes.images + sizes.requests + sizes.staging + sizes.thumbnails }
 
-  /// Walks the folders off the main thread, then writes `sizes` back on the main actor.
+  /// Measures disk consumption across application directories on a background utility queue.
   func refreshSizes() async {
-    // `FileStore` is a `Sendable` struct, copied into the detached task. `self` stays on the main
-    // actor; the task needs only the copy.
     let files = services.files
-    // `Task.detached` has no actor, so the folder walk runs on a background thread. `.value` waits
-    // for its result; the assignment then runs on the main actor again.
     sizes = await Task.detached(priority: .utility) { files.sizes() }.value
   }
 
-  /// Clear Thumbnail Cache: empties the memory cache, then deletes the thumbnail files. Thumbnails
-  /// are made again from the images when a view next needs them.
+  /// Purges in-memory and on-disk thumbnail caches, prompting regeneration upon subsequent access.
   func clearThumbnailCache() async {
     let files = services.files
     let dir = files.thumbnailsDir
-    // The size before, for the log. The walk of the folder runs off the main thread.
     let before = await Task.detached(priority: .utility) { FileStore.usage(of: dir) }.value
     let action = log.begin(
       "Clear thumbnail cache", origin: .user, "\(before.count) files · \(Format.mb(Int(before.bytes)))")
-    // Memory first, so that a view does not draw a cached thumbnail whose file is gone.
     await services.thumbnails.removeFromMemory()
-    // `remove(_:into:)` takes the result as `inout`: each call adds its counts to `r`.
     let result = await Task.detached(priority: .utility) { () -> DeletionResult in
       var r = DeletionResult()
-      let items = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []  // try?: no thumbnail folder yet means nothing to clear.
+      let items = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
       for item in items { files.remove(item, into: &r) }
       return r
     }.value
@@ -265,15 +227,11 @@ final class SettingsModel {
     await refreshSizes()
   }
 
-  /// Delete All Chats: cancels live requests, then deletes every chat and its files.
-  ///
-  /// The order matters. Live requests are cancelled first, so that they stop before their chats and
-  /// folders are deleted. Each `await` here lets other code run, so a send can record a new request
-  /// after the list is read; `deleteAll()` returns those too, and they are cancelled after.
+  /// Cancels in-flight generation requests and deletes all conversations, image assets, and thumbnails.
   func deleteAllChats() async {
     let store = services.store
-    let inventory = (try? await store.inventory()) ?? (chats: 0, images: 0)  // try?: the counts are only for the log.
-    let live = (try? await store.nonTerminalRequests()) ?? []  // try?: requests missed here are cancelled after `deleteAll()`.
+    let inventory = (try? await store.inventory()) ?? (chats: 0, images: 0)
+    let live = (try? await store.nonTerminalRequests()) ?? []
     let action = log.begin(
       "Delete all chats", origin: .user,
       "\(inventory.chats) chat\(inventory.chats == 1 ? "" : "s") · \(inventory.images) image\(inventory.images == 1 ? "" : "s") · \(Format.mb(Int(sizes.images + sizes.requests))) · \(live.count) live request\(live.count == 1 ? "" : "s") to cancel"
@@ -281,14 +239,13 @@ final class SettingsModel {
     for request in live { await services.generation.cancel(requestID: request.id) }
     do {
       var r = try await store.deleteAll()
-      // A request recorded after the list above was read (a send that was on its way) is stopped too.
+      // Terminate any newly scheduled requests created concurrently during deletion dispatch.
       let cancelled = Set(live.map(\.id))
       for id in r.liveRequestIDs where !cancelled.contains(id) { await services.generation.cancel(requestID: id) }
-      // Their thumbnails go too.
       let files = services.files
       let thumbs = await Task.detached(priority: .utility) { () -> DeletionResult in
         var t = DeletionResult()
-        let items = (try? FileManager.default.contentsOfDirectory(at: files.thumbnailsDir, includingPropertiesForKeys: nil)) ?? []  // try?: no thumbnail folder yet means nothing to clear.
+        let items = (try? FileManager.default.contentsOfDirectory(at: files.thumbnailsDir, includingPropertiesForKeys: nil)) ?? []
         for item in items { files.remove(item, into: &t) }
         return t
       }.value
@@ -306,22 +263,19 @@ final class SettingsModel {
     } catch {
       log.result(action, .failed, "\(error.localizedDescription)")
     }
-    // On every path, also after a failure: pop any chat screen, because its chat may be gone.
+    // Unwind navigation stack to root conversation list to prevent viewing invalid deleted sessions.
     services.navigator.path = []
     await services.thumbnails.removeFromMemory()
     show("All chats deleted")
     await refreshSizes()
   }
 
-  // MARK: Toast
-
-  /// Shows a toast for 2 seconds. A newer toast cancels the older one's timer, so the older timer
-  /// cannot hide the newer text early. `[weak self]`: the timer does not keep the model alive.
+  /// Displays a transient informational toast message for a standard display duration.
   func show(_ text: String) {
     toast = text
     toastTask?.cancel()
     toastTask = Task { [weak self] in
-      try? await Task.sleep(for: .seconds(2))  // try?: a cancelled sleep is handled by the check below.
+      try? await Task.sleep(for: .seconds(2))
       guard !Task.isCancelled else { return }
       self?.toast = nil
     }

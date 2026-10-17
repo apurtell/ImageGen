@@ -90,7 +90,7 @@ struct SettingsResolverTests {
     d.enabledModelIDs.insert("one-k")
     let s = GenerationSettingsResolver.resolve(ChatOverrides(modelID: "one-k", imageSize: size), d) { _ in oneK }
     #expect(s.imageSize == .s1K)
-    // 16:9 isn't supported, so 1:1.
+    // Coerces unsupported 16:9 aspect ratio to model-supported 1:1.
     #expect(s.aspectRatio == .r1x1)
     #expect(s.coercions.contains { $0.field == .imageSize } == (size != .s1K))
   }
@@ -102,7 +102,7 @@ struct SettingsResolverTests {
       role: .custom)
     var d = defaults
     d.enabledModelIDs.insert("x")
-    // 2K is 1 step from 4K and 2 from 512; 1K is equidistant… from 512 (1) and 4K (2): 512.
+    // Distance evaluation: 2K resolves to closest neighbor 4K; 1K resolves to 512.
     #expect(GenerationSettingsResolver.resolve(ChatOverrides(modelID: "x", imageSize: .s2K), d) { _ in twoAndFour }.imageSize == .s4K)
     #expect(GenerationSettingsResolver.resolve(ChatOverrides(modelID: "x", imageSize: .s1K), d) { _ in twoAndFour }.imageSize == .s512)
     let oneAndFour = ModelDescriptor(
@@ -110,7 +110,7 @@ struct SettingsResolverTests {
       capability: ModelCapability(aspectRatios: AspectRatio.allCases, imageSizes: [.s1K, .s4K], sendsImageConfig: true, highFidelityInputLimit: 14),
       role: .custom)
     d.enabledModelIDs.insert("y")
-    // 2K is one step from both 1K and 4K: the larger wins.
+    // Tie-breaking behavior: equidistant candidate sizes resolve in favor of the larger option.
     #expect(GenerationSettingsResolver.resolve(ChatOverrides(modelID: "y", imageSize: .s2K), d) { _ in oneAndFour }.imageSize == .s4K)
   }
 
@@ -129,7 +129,7 @@ struct SettingsResolverTests {
     d.enabledModelIDs.remove("gemini-3-pro-image")
     let s = resolve(ChatOverrides(modelID: "gemini-3-pro-image", aspectRatio: .r1x8, imageSize: .s512), d)
     #expect(s.modelID == flash)
-    // Flash supports both, so only the model is coerced.
+    // Default model accommodates requested aspect ratio and size; only the model identifier undergoes coercion.
     #expect(s.aspectRatio == .r1x8)
     #expect(s.imageSize == .s512)
     #expect(s.coercions.map(\.field) == [.model])

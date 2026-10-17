@@ -49,7 +49,7 @@ struct MarkdownBlocksTests {
     #expect(MarkdownBlocks.parse(text) == [
       .listItem(depth: 0, number: nil, text: "fruit"), .listItem(depth: 1, number: nil, text: "apple"),
       .listItem(depth: 0, number: nil, text: "bread"), .paragraph("Then a paragraph."),
-      // A paragraph ended the list, so a new list starts at depth 0 whatever its indent.
+      // An intervening paragraph terminates list context, resetting subsequent list items to base depth 0 regardless of indentation.
       .listItem(depth: 0, number: nil, text: "indented again"),
     ])
   }

@@ -3,15 +3,15 @@ import Testing
 
 @testable import ImageGen
 
-/// The app's body equals the pipe's, apart from the D§2.6 deviations: `generationConfig.imageConfig`
-/// and the `?key=` query (plan §2.3).
+/// Validates serialized request body and endpoint URL parity against reference pipe fixtures,
+/// accounting for intentional design deviations including `generationConfig.imageConfig` and header-based authentication.
 @Suite(.tags(.io))
 struct PipeParityTests {
   typealias F = RequestFixtures
 
   struct Case: Sendable, CustomTestStringConvertible {
     let name: String
-    /// The app-side inputs, built by hand (Track 1B doesn't use the selector).
+    /// Synthetic input specifications configured directly for fixture comparison.
     let images: [String]
     let prompt: String
     var threshold: SafetyThreshold = .blockNone

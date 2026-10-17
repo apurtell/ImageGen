@@ -10,7 +10,7 @@ struct DecodeTimerTests {
     let reports = Mutex<[String]>([])
   }
 
-  /// Each reading advances 20 ms.
+  /// Deterministic clock advancing by 20ms intervals per sample to simulate threshold exceeding latency.
   final class SteppingClock: Sendable {
     let base = ContinuousClock.now
     let n = Mutex(0)

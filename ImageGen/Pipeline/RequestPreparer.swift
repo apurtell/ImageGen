@@ -1,15 +1,14 @@
 import Foundation
 
-/// Why a body couldn't be prepared. Each case maps to a `LocalErrorStatus` for the record, and to
-/// the message that the reply card and the log show.
+/// Errors encountered during generation request payload construction.
 enum PrepareError: Error, Equatable {
-  /// The body is over the budget even when no image can shrink further; `mb` is that predicted size.
+  /// Aggregate payload exceeds maximum upload budget after exhausting all downsizing iterations.
   case tooLarge(mb: Double)
-  /// An input's original is gone (a missing prepared file is re-made instead).
+  /// Referenced input image is absent from persistent storage.
   case inputMissing
   case diskFull
   case noAPIKey
-  /// The body would have no text and no image.
+  /// Request payload lacks both textual prompts and multimodal image parts.
   case emptyParts
 
   var status: LocalErrorStatus {
@@ -34,27 +33,16 @@ enum PrepareError: Error, Equatable {
   }
 }
 
-/// The result of a preparation: where `body.json` is, its size, and the inputs it contains.
+/// Output artifacts resulting from successful generation request payload preparation.
 struct PreparedBody: Sendable, Equatable {
   let url: URL
   let size: Int
   let inputs: [RequestInput]
 }
 
-/// Turns a recorded request into `body.json` (D§4.8 steps 4–5): resolves each input to the bytes
-/// to send, re-prepares a reused upload when its prepared file is missing or was made at another
-/// max long edge, fits the body under the budget, and streams it to disk. Logs a Prepare request
-/// sub-action under the request's action.
-///
-/// Place in the design: only `GenerationService` calls it, for a first send, a Regenerate, a Retry
-/// that must rebuild its body, and a CIVIC rebuild. It calls `ImagePreprocessor`, `BudgetPlanner`
-/// and `RequestBodyWriter`, and `DataStore` to record the files it used.
-///
-/// Concurrency model: a `Sendable` struct with no state of its own. Its slow steps (decode, shrink,
-/// body write) are `@concurrent` functions that run off the caller's actor, so the service actor
-/// serves other calls meanwhile. Cancellation is cooperative: the caller cancels the preparation's
-/// task (a Stop, or the end of background time), and this code checks between steps, then removes
-/// any half-written body (D§5). See the primer, *Tasks and cancellation*.
+/// Orchestrates request serialization and payload budget fitting. Resolves input assets from persistent storage,
+/// rescales images according to resolution preferences and total payload constraints, and streams JSON directly to disk.
+/// Diagnostic telemetry for preparation is nested under the parent generation action.
 struct RequestPreparer: Sendable {
   let files: FileStore
   let store: DataStore
@@ -63,28 +51,26 @@ struct RequestPreparer: Sendable {
   var shrink: @Sendable (PreparedImage, Int) async throws -> PreparedImage = BudgetPlanner.shrinkWithPreprocessor
   var budget = BudgetPlanner.budget
 
-  /// Where the bytes for one input come from. Each case carries the data it needs (an enum with
-  /// associated values).
+  /// Origin strategy for sourcing serialized input image data.
   private enum Source {
-    /// The file recorded on the request: what an earlier send of it used.
+    /// Staged file previously recorded on the request record.
     case recorded(RequestInput)
-    /// The upload's current prepared file, made at the current max long edge.
+    /// Existing prepared representation matching the current resolution configuration.
     case prepared(RequestInput)
-    /// The original file, sent as it is (a model output; never re-encoded).
+    /// Original uncompressed image data (e.g. prior model output transferred verbatim).
     case original(InputSnapshot)
-    /// An upload whose prepared file must be made again from its original.
+    /// Upload asset requiring re-scaling from source due to resolution settings changes.
     case reprepare(InputSnapshot, reason: String)
   }
 
-  /// `reuseRecorded`: Regenerate and Retry send the recorded inputs verbatim while their files
-  /// exist; a first send checks reused uploads against the current max long edge.
+  /// Prepares and serializes the JSON request payload for transmission to the Gemini API.
   func prepare(
     _ snap: RequestSnapshot, parent: ActionID, reuseRecorded: Bool, categories: [HarmCategory]? = nil
   ) async throws -> PreparedBody {
     let edge = defaults().maxUploadLongEdge
     let assets = Dictionary(snap.inputAssets.map { ($0.imageID, $0) }, uniquingKeysWith: { a, _ in a })
 
-    // Decide first, so the Begin states every decision.
+    // Resolve source strategies for all inputs to inform diagnostic logging.
     var sources: [Source] = []
     var notes: [String] = []
     var missing = false
@@ -133,8 +119,7 @@ struct RequestPreparer: Sendable {
       "Prepare request", parent: parent,
       "\(snap.inputs.count) input\(snap.inputs.count == 1 ? "" : "s") · budget \(String(format: "%.1f", Double(budget) / 1_000_000)) MB · max long edge \(edge)\(notes.isEmpty ? "" : " · " + notes.joined(separator: " · "))"
     )
-    // Exactly one Result for the Prepare request sub-action, on every path: `defer` runs when the
-    // function exits, and each path sets `outcome` and `summary` first.
+    // Conclude preparation sub-activity on all exit paths.
     var outcome = ActivityOutcome.failed
     var summary: ActivityMessage = "unknown error"
     defer { log.result(action, outcome, summary) }
@@ -142,7 +127,7 @@ struct RequestPreparer: Sendable {
     do {
       if missing { throw PrepareError.inputMissing }
 
-      // Resolve to files.
+      // Resolve and scale image files.
       var images: [PreparedImage] = []
       var ids: [UUID] = []
       for source in sources {
@@ -164,7 +149,7 @@ struct RequestPreparer: Sendable {
           let prepared = try await ImagePreprocessor.prepare(
             source: files.url(relative: a.originalRelativePath), maxLongEdge: edge,
             destinationDir: files.conversationDir(snap.conversationID).appendingPathComponent("prepared"), id: a.imageID)
-          // Record the new file on the image, so a later send reuses it.
+          // Update persistent image record with generated representations to optimize future reuse.
           let input = requestInput(prepared, id: a.imageID)
           try await store.setPreparedFile(imageID: a.imageID, input, longEdgeSetting: edge)
           images.append(prepared)
@@ -172,8 +157,7 @@ struct RequestPreparer: Sendable {
         }
       }
 
-      // Budget. `categories` replaces the recorded ones for a CIVIC rebuild. The envelope is the
-      // body without its image bytes; `BudgetPlanner` shrinks images until the total fits.
+      // Budget fitting: estimate non-image payload envelope and iteratively downscale images to fit overall budget.
       var settings = snap.settings
       if let categories { settings.categories = categories }
       let envelope = try RequestBodyWriter.predictedSize(
@@ -181,17 +165,15 @@ struct RequestPreparer: Sendable {
           images: images.map { BodyImage(fileURL: $0.url, mimeType: $0.mimeType, byteCount: 0) },
           promptText: snap.promptText, settings: settings))
       let preparedDir = files.conversationDir(snap.conversationID).appendingPathComponent("prepared")
-      // A local copy, so the closure below captures this one function and not the whole preparer.
       let shrink = self.shrink
       let fitted: BudgetPlanner.Fitted
       do {
         fitted = try await BudgetPlanner.fit(images, envelopeBytes: envelope, budget: budget) { image, target in
           var out = try await shrink(image, target)
-          // A shrunk model output goes into prepared/ with the uploads' API-ready files (D§4.4).
+          // Relocate downscaled model outputs to prepared image storage.
           if out.url.deletingLastPathComponent().standardizedFileURL != preparedDir.standardizedFileURL {
             let dest = preparedDir.appendingPathComponent(out.url.lastPathComponent)
             try FileStore.createDirectory(preparedDir)
-            // Best effort: a stale file left here makes the move below throw, and that is reported.
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: out.url, to: dest)
             out = PreparedImage(
@@ -204,10 +186,9 @@ struct RequestPreparer: Sendable {
         throw PrepareError.tooLarge(mb: Double(error.bodyBytes) / 1_000_000)
       }
 
-      // Body.
+      // Payload generation.
       try Task.checkCancellation()
       let bodyURL = files.bodyURL(snap.id)
-      // A body from an earlier attempt; the write below replaces it anyway.
       try? FileManager.default.removeItem(at: bodyURL)
       let spec = RequestBodySpec(
         images: fitted.images.map { BodyImage(fileURL: $0.url, mimeType: $0.mimeType, byteCount: $0.byteCount) },
@@ -218,20 +199,16 @@ struct RequestPreparer: Sendable {
       } catch RequestBodyError.emptyParts {
         throw PrepareError.emptyParts
       } catch {
-        // Cleanup after a failed write; the Janitor removes anything left (D§4.4).
         try? FileManager.default.removeItem(at: bodyURL)
         if Self.isDiskFull(error) { throw PrepareError.diskFull }
         throw error
       }
-      // The write may finish even though a cancel arrived during it; a cancelled preparation must
-      // not leave a body that looks ready.
       if Task.isCancelled {
-        // Cleanup on cancellation; the Janitor removes anything left (D§4.4).
         try? FileManager.default.removeItem(at: bodyURL)
         throw CancellationError()
       }
 
-      // Record the bytes actually sent (after any shrink), so Regenerate and Retry send the same ones.
+      // Commit serialized input references to the request record to ensure deterministic re-execution.
       let inputs = zip(ids, fitted.images).map { requestInput($1, id: $0) }
       try await store.updateRequest(snap.id) { patch in
         patch.inputs = inputs
@@ -252,7 +229,6 @@ struct RequestPreparer: Sendable {
     } catch is CancellationError {
       outcome = .interrupted
       summary = "preparation cancelled"
-      // Cleanup on cancellation; the Janitor removes anything left (D§4.4).
       try? FileManager.default.removeItem(at: files.bodyURL(snap.id))
       throw CancellationError()
     } catch {
@@ -277,7 +253,7 @@ struct RequestPreparer: Sendable {
       byteCount: p.byteCount, pixelWidth: p.pixelWidth, pixelHeight: p.pixelHeight)
   }
 
-  /// True for an out-of-space error, also when it is wrapped as the underlying error of another one.
+  /// Identifies out-of-space filesystem conditions across direct errors and nested causes.
   static func isDiskFull(_ error: any Error) -> Bool {
     let ns = error as NSError
     if ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteOutOfSpaceError { return true }

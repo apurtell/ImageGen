@@ -1,15 +1,10 @@
 import SwiftUI
 
-/// Connect Gemini (D§3.2).
-///
-/// The form that `RootView` shows in place of the chat list while `needsOnboarding` is set (no key
-/// in the Keychain). The view draws `OnboardingModel.phase`; the model does the checks, the saving
-/// and the logging. `onFinished` clears `needsOnboarding`, and the root then shows the chat list.
-/// It runs on the main actor; each button starts one `Task`.
+/// First launch onboarding view presenting credential configuration and validation workflows,
+/// transitioning to the primary chat interface upon verified persistence.
 struct OnboardingView: View {
-  /// `@State` keeps one model for the life of this screen.
   @State var model: OnboardingModel
-  /// Called once the key is saved (after the Flash warning, when there is one).
+  /// Completion handler invoked upon successful credential configuration and warning acknowledgment.
   let onFinished: () -> Void
   @State private var showFlashWarning = false
 
@@ -24,7 +19,7 @@ struct OnboardingView: View {
             .font(.callout.monospaced())
             .textSelection(.enabled)
           HStack {
-            // The reveal toggle swaps a secure field for a plain one. Both bind to the same text.
+            // Dynamically alternate between obscured SecureField and plaintext TextField based on visibility state.
             Group {
               if model.reveal {
                 TextField("API key", text: $model.keyText)
@@ -82,10 +77,10 @@ struct OnboardingView: View {
     }
   }
 
-  /// Validate and Save, or Retry. The model's `phase` shows the outcome when nothing is saved.
+  /// Dispatches asynchronous credential verification and routes to completion or advisory warnings.
   private func validate() async {
     guard await model.validateAndSave() else { return }
-    // The key is saved. A missing Flash model is a warning, not a failure: the alert's OK finishes.
+    // Prompt with non-blocking advisory alert if the validated key lacks explicit Flash model entitlements.
     if case .saved(let warn) = model.phase, warn {
       showFlashWarning = true
     } else {

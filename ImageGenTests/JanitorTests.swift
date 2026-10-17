@@ -5,7 +5,7 @@ import Testing
 
 @Suite(.tags(.io))
 struct JanitorTests {
-  /// A store, a probe log on the same temporary root, and the clock the Janitor and store share.
+  /// Test fixture providing an in-memory data store, shared virtual clock, and activity log probe.
   struct Fixture {
     let s: InMemoryStore
     let probe: ActivityLogProbe
@@ -20,7 +20,7 @@ struct JanitorTests {
         thresholds: Janitor.Thresholds(thumbnailCap: thumbnailCap), clock: { clock.now })
     }
 
-    /// Writes a file with the given modification time relative to the clock.
+    /// Writes synthetic file payload with an explicit modification timestamp offset from the test clock.
     func write(_ url: URL, bytes: Int = 100, age: TimeInterval) throws {
       try FileStore.createDirectory(url.deletingLastPathComponent())
       try Data(repeating: 7, count: bytes).write(to: url)
@@ -30,7 +30,7 @@ struct JanitorTests {
 
     func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
 
-    /// What a new process does before any screen appears.
+    /// Simulates initialization lifecycle steps executed prior to initial view presentation.
     func relaunch() { s.files.retireStaging() }
   }
 
@@ -48,7 +48,7 @@ struct JanitorTests {
     let f = try Fixture()
     try f.write(f.s.files.stagingURL(UUID(), ext: "jpg"), age: 0)
     f.relaunch()
-    // The user attached a photo before the Janitor ran (it waits for the Reconciler's grace).
+    // Simulates attachment staging during launch before janitor maintenance execution.
     let tray = f.s.files.stagingURL(UUID(), ext: "jpg")
     let prepared = f.s.files.stagingDir.appendingPathComponent("prepared/y-2048.jpg")
     try f.write(tray, age: 7200)
@@ -61,7 +61,7 @@ struct JanitorTests {
 
   @Test func movedFilesLookNewToTheFreshnessTest() async throws {
     let f = try Fixture()
-    // A month-old file (Edit and Resend clones keep the original's date) moved in by a send.
+    // Simulates moving a preserved-timestamp staged asset into the permanent image repository during send.
     let staged = f.s.files.stagingURL(UUID(), ext: "jpg")
     try f.write(staged, age: 30 * 86400)
     let placed = f.s.files.imageURL(conv: UUID(), image: UUID(), ext: "jpg")
@@ -147,7 +147,7 @@ struct JanitorTests {
     let conv = try await f.s.store.createConversation()
     let a = try f.s.stage()
     let record = try await f.s.send(conv, prompt: "x", attachments: [a])
-    // A reused model output recorded only as a request input is kept too.
+    // Preserves model output assets referenced exclusively as historical request inputs.
     let reused = f.s.files.imageURL(conv: conv, image: UUID(), ext: "png")
     try f.write(reused, age: 3600)
     try await f.s.store.updateRequest(record.requestID) { [path = f.s.files.relativePath(of: reused)!] in
@@ -189,7 +189,7 @@ struct JanitorTests {
     let f = try Fixture(thumbnailCap: 3000)
     let thumbs = (0..<5).map { _ in f.s.files.thumbnailsDir.appendingPathComponent("\(UUID().uuidString)-240.jpg") }
     for (i, url) in thumbs.enumerated() {
-      // thumbs[0] is the least recently used.
+      // Designates lowest indexed thumbnail entry as least recently accessed.
       try f.write(url, bytes: 1000, age: TimeInterval(1000 - i * 100))
       var values = URLResourceValues()
       values.contentAccessDate = f.s.clock.now.addingTimeInterval(-TimeInterval(1000 - i * 100))
@@ -235,7 +235,7 @@ struct JanitorTests {
     f.relaunch()
     let retired = try #require(try FileManager.default.contentsOfDirectory(at: f.s.files.retiredStagingDir, includingPropertiesForKeys: nil).first)
     let locked = retired.appendingPathComponent("locked")
-    // A read-only folder can't have its contents removed.
+    // Restricts directory POSIX write permissions to simulate unremovable filesystem entries.
     try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: locked.path)
     defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
     let report = await f.janitor.run()

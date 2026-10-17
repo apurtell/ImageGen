@@ -3,31 +3,21 @@ import OSLog
 import SwiftUI
 import UIKit
 
-/// One page of the viewer (D§3.7): a `UIScrollView` that fits the image, zooms to the larger of
-/// 1:1 × 2 and 4× fit, double-taps between fit and 2.5× at the tap point, and keeps the image
-/// centered while zoomed out. The 1200 px thumbnail shows until the full decode, made off the main
-/// actor, replaces it. A downward swipe at the minimum zoom dismisses.
+/// Bridge component hosting an interactive UIKit zooming scroll view within SwiftUI paging hierarchies.
 ///
-/// The file has three parts: this `UIViewRepresentable` bridge, the `FullDecode` helper, and the
-/// UIKit `ZoomingScrollView`. A UIKit scroll view is used because it gives real pinch zoom, zoom to a
-/// rectangle, and bounce; SwiftUI has no built-in view that does all of this. `ImageViewer` makes one per page.
-///
-/// Concurrency: the views and the coordinator run on the main actor. Each page loads its thumbnail
-/// from the `ThumbnailService` actor at once. Only the current page asks for the full decode
-/// (D§3.7: one full-resolution decode at a time; the pages beside it keep their thumbnails). The
-/// `FullDecoder` actor runs the decodes one at a time, on its own thread, and skips a request whose
-/// page stopped being current while it waited. It keeps the last image it decoded, so the pager's
-/// rebuild after a rotation shows that image again without a second decode. A decode that has started
-/// can't be stopped; when its page is gone by then, its result is dropped.
+/// Manages progressive visual staging, transitioning smoothly from an initial downsampled preview to a
+/// full resolution decode while supporting pinch gestures, double-tap zoom targets, and interactive downward
+/// drag-to-dismiss mechanics. Background decoding requests are prioritized for the currently active page,
+/// ensuring low memory pressure and responsive interaction across carousel navigations.
 struct ZoomableImageView: UIViewRepresentable {
   let image: ViewerImage
   let thumbnails: ThumbnailService
-  /// False for the pages next to the one on screen; they reset to the fitted zoom.
+  /// Indicates whether this page is the active selection, controlling high-resolution decoding triggers and zoom resets.
   let isCurrent: Bool
   let onSingleTap: () -> Void
   let onDismiss: () -> Void
 
-  /// Called once per page. The thumbnail load starts here, so it runs once for the life of the UIKit view.
+  /// Instantiates and configures the underlying scroll canvas, kicking off initial thumbnail loading.
   func makeUIView(context: Context) -> ZoomingScrollView {
     let view = ZoomingScrollView(pixelSize: CGSize(width: image.item.pixelWidth, height: image.item.pixelHeight))
     view.onSingleTap = onSingleTap
@@ -38,14 +28,14 @@ struct ZoomableImageView: UIViewRepresentable {
   }
 
   func updateUIView(_ view: ZoomingScrollView, context: Context) {
-    // The closures are copied again on each update, so the UIKit view calls the latest ones.
+    // Update interaction callbacks and reset zoom scale if the view is no longer actively selected.
     view.onSingleTap = onSingleTap
     view.onDismiss = onDismiss
     if !isCurrent { view.resetZoom() }
     context.coordinator.setCurrent(isCurrent, image, view: view)
   }
 
-  /// SwiftUI calls this when it removes the UIKit view. It is the one place that stops the loads.
+  /// Cancels in-flight asynchronous decode tasks when the view lifecycle concludes.
   static func dismantleUIView(_ view: ZoomingScrollView, coordinator: Coordinator) {
     coordinator.thumbnailTask?.cancel()
     coordinator.fullTask?.cancel()
@@ -53,7 +43,7 @@ struct ZoomableImageView: UIViewRepresentable {
 
   func makeCoordinator() -> Coordinator { Coordinator() }
 
-  /// Holds the page's load tasks, so that `dismantleUIView` and a change of page can cancel them.
+  /// Coordinates progressive image pipeline operations and tracks asynchronous decode tasks for the page view.
   @MainActor
   final class Coordinator {
     var thumbnailTask: Task<Void, Never>?
@@ -61,19 +51,15 @@ struct ZoomableImageView: UIViewRepresentable {
     private var hasFull = false
 
     func loadThumbnail(_ image: ViewerImage, into view: ZoomingScrollView, thumbnails: ThumbnailService) {
-      // Plain `Sendable` values, copied before the task.
       let url = image.item.url
       let id = image.item.id
-      // `Task {}` inherits the main actor, so `view?.show` runs on the main thread.
-      // `[weak view]`: the task does not keep a removed page's view alive; `view?` is then nil.
       thumbnailTask = Task { [weak view] in
         guard let thumb = await thumbnails.thumbnail(for: url, id: id, px: ThumbnailService.bubbleSize) else { return }
-        view?.show(UIImage(cgImage: thumb), isFull: false)  // Ignored once the full image is showing.
+        view?.show(UIImage(cgImage: thumb), isFull: false)
       }
     }
 
-    /// The current page asks for its full decode once; a page that stops being current withdraws a
-    /// request that hasn't finished, so the decoder skips it if it hasn't started.
+    /// Manages the activation lifecycle for high-resolution asset decoding as page focus changes.
     func setCurrent(_ isCurrent: Bool, _ image: ViewerImage, view: ZoomingScrollView) {
       guard !hasFull else { return }
       if !isCurrent {
@@ -86,7 +72,6 @@ struct ZoomableImageView: UIViewRepresentable {
       let id = image.item.id
       fullTask = Task { [weak view, weak self] in
         let full = await FullDecoder.shared.decode(url: url, id: id)
-        // Checked after the `await`: the page may be gone or no longer current.
         guard !Task.isCancelled, let full else { return }
         self?.hasFull = true
         view?.show(full, isFull: true)
@@ -95,38 +80,33 @@ struct ZoomableImageView: UIViewRepresentable {
   }
 }
 
-/// Runs the viewer's full-resolution decodes one at a time (D§3.7). An actor runs one call at a time
-/// on its own executor, off the main thread; `decode` never awaits, so each decode runs to the end
-/// before the next starts. It keeps the last decoded image, which the pager's rebuild after a
-/// rotation asks for again.
+/// Serialized background decoder managing full-resolution bitmap rendering and retaining the most recently
+/// decoded image to optimize interface orientation transitions without redundant work.
 actor FullDecoder {
   static let shared = FullDecoder()
   private var last: (id: UUID, image: UIImage)?
 
-  /// nil when the caller's task was cancelled while it waited (its page is gone or no longer
-  /// current), or when the file can't be decoded.
+  /// Decodes and returns the full-resolution image from disk, or nil if cancelled or decoding fails.
   func decode(url: URL, id: UUID) -> UIImage? {
     if let last, last.id == id { return last.image }
-    // The caller's cancellation is visible here: an actor method runs in the caller's task.
     guard !Task.isCancelled else { return nil }
     let image = FullDecode.decode(url: url, id: id)
     last = image.map { (id, $0) }
     return image
   }
 
-  /// Releases the kept image (about 67 MB for a 4K image) when the viewer closes.
+  /// Purges the cached full-resolution bitmap upon viewer dismissal to reclaim system memory.
   func clear() { last = nil }
 }
 
-/// The full-resolution decode (D§3.7), off the main actor, with the stored orientation applied.
-/// Synchronous and slow (a 4K image is about 67 MB decoded); callers run it in a detached task.
+/// Low-level image decoding utilities executing synchronously off the main actor, mapping EXIF metadata to orientation.
 enum FullDecode {
-  /// nil when the file cannot be read or decoded; the page then keeps the thumbnail.
+  /// Decodes the primary image bitmap at full resolution with EXIF orientation metadata applied.
   static func decode(url: URL, id: UUID) -> UIImage? {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, ImageInspector.noCache),
-      let info = try? ImageInspector.inspect(source)  // try?: an unreadable file keeps the thumbnail on screen.
+      let info = try? ImageInspector.inspect(source)
     else { return nil }
-    // Decode now, on this background thread, not lazily on the main thread at first draw.
+    // Force immediate decode off the main thread to prevent UI hitches during first presentation.
     let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
     guard let cg = DecodeTimer().measure("viewer full \(info.pixelWidth)×\(info.pixelHeight)", { CGImageSourceCreateImageAtIndex(source, 0, options) })
     else { return nil }
@@ -138,7 +118,7 @@ enum FullDecode {
     return UIImage(cgImage: cg, scale: 1, orientation: orientation(info.orientation))
   }
 
-  /// Maps the EXIF orientation value (1 to 8) to UIKit's orientation. Unknown values count as up.
+  /// Translates standard EXIF orientation integers to corresponding `UIImage.Orientation` cases.
   static func orientation(_ exif: Int) -> UIImage.Orientation {
     switch exif {
     case 2: .upMirrored
@@ -153,23 +133,24 @@ enum FullDecode {
   }
 }
 
-/// The UIKit scroll view for one page. The image view is sized in image pixels, as points, and the
-/// scroll view zooms it (see `ZoomMath`). It is its own delegate, and it adds three gestures:
-/// double tap (zoom), single tap (chrome) and a downward pan (dismiss). Main thread only.
+/// Custom scroll canvas managing image zooming, centering, and gesture interactions.
+///
+/// Implements pinch-to-zoom, double-tap zoom toggling, single-tap chrome toggling, and interactive downward
+/// translation to dismiss the full-screen viewer hierarchy.
 final class ZoomingScrollView: UIScrollView, UIScrollViewDelegate, UIGestureRecognizerDelegate {
   let imageView = UIImageView()
-  /// As displayed (orientation applied), in pixels.
+  /// Native pixel dimensions of the target image after orientation transformations.
   private let pixelSize: CGSize
-  /// Set once the full image is shown. After that, a thumbnail never replaces it.
+  /// Indicates whether the high-resolution decoded image has been rendered, preventing thumbnail regression.
   private var hasFull = false
-  /// The bounds at the last layout, so the zoom is set again only when the size changes.
+  /// Cached container dimensions from the previous layout pass to detect viewport resizes.
   private var lastBounds = CGSize.zero
   private let dismissPan = UIPanGestureRecognizer()
   var onSingleTap: () -> Void = {}
   var onDismiss: () -> Void = {}
 
   init(pixelSize: CGSize) {
-    // At least 1 × 1, so the zoom math never divides by zero.
+    // Enforce non-zero dimensions to ensure well-defined scale calculations.
     self.pixelSize = CGSize(width: max(pixelSize.width, 1), height: max(pixelSize.height, 1))
     super.init(frame: .zero)
     delegate = self
@@ -187,7 +168,7 @@ final class ZoomingScrollView: UIScrollView, UIScrollViewDelegate, UIGestureReco
     doubleTap.numberOfTapsRequired = 2
     addGestureRecognizer(doubleTap)
     let singleTap = UITapGestureRecognizer(target: self, action: #selector(handleSingleTap))
-    // A single tap waits until the double tap fails, so a double tap does not also toggle the chrome.
+    // Prevent chrome toggle conflict when initiating double-tap zoom interactions.
     singleTap.require(toFail: doubleTap)
     addGestureRecognizer(singleTap)
     dismissPan.addTarget(self, action: #selector(handleDismissPan(_:)))
@@ -200,8 +181,7 @@ final class ZoomingScrollView: UIScrollView, UIScrollViewDelegate, UIGestureReco
 
   required init?(coder: NSCoder) { fatalError("not used") }
 
-  /// Shows the thumbnail or the full image. The thumbnail is smaller, but the image view keeps its
-  /// pixel-sized frame, so the swap does not change the zoom.
+  /// Updates displayed content with progressive image resolution upgrades while maintaining spatial layout stability.
   func show(_ image: UIImage, isFull: Bool) {
     if hasFull && !isFull { return }
     hasFull = hasFull || isFull
@@ -209,32 +189,29 @@ final class ZoomingScrollView: UIScrollView, UIScrollViewDelegate, UIGestureReco
   }
 
   private var fitScale: CGFloat { ZoomMath.fitScale(image: pixelSize, bounds: bounds.size) }
-  /// A small tolerance, because a floating-point zoom scale is not always exactly the minimum.
+  /// Evaluates whether the current zoom scale matches the aspect-fit baseline within floating-point epsilon.
   private var isAtMinimum: Bool { zoomScale <= minimumZoomScale + 0.0001 }
 
-  /// Sets the zoom limits for the current size: on the first layout, and after each rotation.
+  /// Recalculates zoom boundaries, viewport scaling, and content centering across layout invalidations.
   override func layoutSubviews() {
     super.layoutSubviews()
-    // Layout runs often (for example during every scroll); only a size change needs new limits.
     guard bounds.size != lastBounds, bounds.width > 0 else { return }
-    // A fitted image stays fitted at the new size. A zoomed image keeps its zoom when it can.
     let wasAtMinimum = lastBounds == .zero || isAtMinimum
     lastBounds = bounds.size
     minimumZoomScale = fitScale
     maximumZoomScale = ZoomMath.maxScale(fit: fitScale, screenScale: window?.screen.scale ?? traitCollection.displayScale)
     if wasAtMinimum || zoomScale < minimumZoomScale { zoomScale = minimumZoomScale }
     center()
-    // After a rotation the old offset would leave the fitted image off-center.
     if wasAtMinimum { contentOffset = CGPoint(x: -contentInset.left, y: -contentInset.top) }
   }
 
-  /// Back to the fitted zoom without animation, for a page that is no longer on screen.
+  /// Resets viewport magnification to the aspect-fit baseline without animation.
   func resetZoom() {
     guard minimumZoomScale > 0, !isAtMinimum else { return }
     setZoomScale(minimumZoomScale, animated: false)
   }
 
-  /// Centers an image smaller than the view with content insets. The insets change with each zoom.
+  /// Adjusts content insets dynamically to maintain centered positioning when the image is smaller than viewport bounds.
   private func center() {
     let inset = ZoomMath.centeringInsets(content: contentSize, bounds: bounds.size)
     contentInset = UIEdgeInsets(top: inset.vertical, left: inset.horizontal, bottom: inset.vertical, right: inset.horizontal)
@@ -254,18 +231,14 @@ final class ZoomingScrollView: UIScrollView, UIScrollViewDelegate, UIGestureReco
     }
   }
 
-  // MARK: Swipe down to dismiss (at the minimum zoom only)
-
-  /// The dismiss pan begins only at the minimum zoom and for a mostly downward motion. Otherwise the
-  /// scroll view's own pan (and the pager's horizontal swipe) handle the touch.
+  /// Validates downward drag initiation only when viewport is unmagnified and trajectory is predominantly vertical.
   override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
     guard gesture === dismissPan else { return super.gestureRecognizerShouldBegin(gesture) }
     let v = dismissPan.velocity(in: self)
     return isAtMinimum && v.y > 0 && v.y > abs(v.x)
   }
 
-  /// The image follows the finger down and the page fades. A long or fast swipe dismisses;
-  /// anything else springs back.
+  /// Drives interactive downward translation and backdrop opacity decay, triggering dismissal or spring restoration.
   @objc private func handleDismissPan(_ gesture: UIPanGestureRecognizer) {
     let t = gesture.translation(in: self)
     switch gesture.state {

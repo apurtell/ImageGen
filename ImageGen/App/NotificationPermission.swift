@@ -1,22 +1,22 @@
 import Foundation
 import UserNotifications
 
-/// The system permission request, behind a protocol so that tests can supply a fake answer.
+/// Abstraction for system level notification authorization requests, allowing deterministic mock substitution.
 protocol NotificationAuthorizing: Sendable {
-  /// Asks for alert and sound; returns whether it was granted and the authorization status now.
+  /// Requests notification authorization options (.alert, .sound) and queries active authorization status.
   func request() async -> (granted: Bool, status: String)
 }
 
-/// The production authorizer: `UNUserNotificationCenter`. It shows the system alert the first time.
+/// Production notification authorization adapter delegating to `UNUserNotificationCenter`.
 struct UserNotificationAuthorizer: NotificationAuthorizing {
   func request() async -> (granted: Bool, status: String) {
     let center = UNUserNotificationCenter.current()
-    let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false  // An error counts as not granted.
+    let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
     let status = await center.notificationSettings().authorizationStatus
     return (granted, Self.name(status))
   }
 
-  /// The status as a short word, for the log and the Settings sheet.
+  /// Canonical string representation of authorization status for telemetry and settings presentation.
   static func name(_ s: UNAuthorizationStatus) -> String {
     switch s {
     case .authorized: "authorized"
@@ -24,18 +24,16 @@ struct UserNotificationAuthorizer: NotificationAuthorizing {
     case .notDetermined: "notDetermined"
     case .provisional: "provisional"
     case .ephemeral: "ephemeral"
-    // `@unknown default` handles a case that a later iOS version adds.
     @unknown default: "unknown"
     }
   }
 }
 
-/// Asks for notification permission once, on the first send (D§4.11), and logs it as its own
-/// system action, so Last Action still shows the Send.
+/// Orchestrates user notification permission acquisition on first generation dispatch.
 ///
-/// The chat screen calls `requestOnFirstSend()` on each send; only the first call asks. When the user
-/// denies, the app works normally and Settings shows the status. `@MainActor`, so two sends cannot run
-/// the check at the same time.
+/// Gated to run exactly once across the application lifecycle. Gating state is persisted to `UserDefaults`.
+/// Operates on `@MainActor` to prevent race conditions during rapid consecutive dispatches,
+/// committing the acquisition flag prior to asynchronous suspension.
 @MainActor
 final class NotificationPermission {
   static let askedKey = "notifications.askedOnFirstSend"
@@ -43,7 +41,6 @@ final class NotificationPermission {
   private let authorizer: any NotificationAuthorizing
   private let defaults: UserDefaults
   private let log: ActivityLog
-  /// DEBUG `-SkipNotificationPrompt 1`: never ask, so unattended UI tests are not blocked.
   private let skip: Bool
 
   init(authorizer: any NotificationAuthorizing, defaults: UserDefaults, log: ActivityLog, skip: Bool = false) {
@@ -57,8 +54,8 @@ final class NotificationPermission {
 
   func requestOnFirstSend() async {
     guard !skip, !hasAsked else { return }
-    // The flag is set before the `await`: a second send while the system alert is on screen runs
-    // while this call waits, and it must find the flag already set.
+    // Optimistically record that the prompt was presented prior to awaiting the system dialog,
+    // ensuring concurrent dispatches do not duplicate the request.
     defaults.set(true, forKey: Self.askedKey)
     let action = log.begin("Notification permission", origin: .system, "asked on the first send · options alert, sound")
     let (granted, status) = await authorizer.request()

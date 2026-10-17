@@ -3,15 +3,15 @@ import Testing
 
 @testable import ImageGen
 
-/// M1 integration: for each pipe case, the selector picks the image the pipe sent (plan §2.3).
-/// This is where p7 and p8 show that rule 3's highest ordinal is the pipe's `images[-1]`.
+/// Validates input selection parity against reference pipe fixtures across all defined test scenarios.
+/// Verifies that highest ordinal selection resolves identical inline images to the golden pipeline.
 @Suite(.tags(.io))
 struct PipeParitySelectionTests {
   struct Case: Sendable, CustomTestStringConvertible {
     let name: String
     let input: SelectionInput
     let reason: SelectionReason
-    /// The fixture file each candidate image ID stands for.
+    /// Maps candidate image identifiers to corresponding disk fixture files.
     let files: [UUID: String]
     var testDescription: String { name }
   }

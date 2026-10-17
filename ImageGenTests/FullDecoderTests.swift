@@ -4,7 +4,7 @@ import UIKit
 
 @testable import ImageGen
 
-/// The viewer's full-resolution decoder (D§3.7): one decode at a time, the last image kept.
+/// Verifies serialized full resolution image decoding and single item cache retention for viewer operations.
 @Suite(.tags(.io))
 struct FullDecoderTests {
   func jpeg(_ root: TestFileRoot) throws -> URL {
@@ -30,7 +30,7 @@ struct FullDecoderTests {
     let root = TestFileRoot()
     let url = try jpeg(root)
     let decoder = FullDecoder()
-    // The page stopped being current before its turn came.
+    // Simulates task cancellation triggered when the user scrolls away prior to decode scheduling.
     let result = await Task {
       withUnsafeCurrentTask { $0?.cancel() }
       return await decoder.decode(url: url, id: UUID())

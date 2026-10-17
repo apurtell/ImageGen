@@ -1,10 +1,10 @@
 import Foundation
 import OSLog
 
-/// OSLog categories (D§7). From M2 on the activity log mirrors every entry through these; other
-/// code logs through `ActivityLog`, except DEBUG-only diagnostics and the smoke test.
-/// The store also reports problems with the log itself under `store`. A `Logger` is thread-safe, so
-/// these constants work from any thread or actor.
+/// Logging subsystems organizing Apple unified logging categories across the application architecture.
+///
+/// Dispatches log events into domain-specific categories including pipeline orchestration, transport networking,
+/// storage persistence, imaging operations, and diagnostic test harnesses.
 enum Log {
   static let subsystem = Bundle.main.bundleIdentifier ?? "com.andrewpurtell.imagegen"
 

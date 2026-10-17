@@ -1,15 +1,8 @@
 import Foundation
 
-// Activity-log vocabulary (D§4.13). Behavior arrives in M2. Lives in Support/ because every layer
-// logs and Support/ must not depend on Pipeline/.
-//
-// Every type here is a `Sendable` value, so an entry can travel from any caller, through the
-// facade's stream, to the store's actor. `ActivityEntry`'s `Codable` code defines the JSON shape of
-// each line of `activity.jsonl`.
+// Core domain models defining the schema, serialization rules, and operational taxonomy for the activity log.
 
-/// Four lowercase hex digits. Encoded as a bare string.
-/// The custom `init(from:)` and `encode(to:)` write `"a1b2"`, not the default `{"raw":"a1b2"}`.
-/// `ActivityLog.actionID(counter:)` makes them.
+/// Four-character hexadecimal identifier representing an isolated action scope. Encoded as a single scalar string.
 struct ActionID: Sendable, Codable, Hashable, CustomStringConvertible {
   let raw: String
 
@@ -27,28 +20,28 @@ struct ActionID: Sendable, Codable, Hashable, CustomStringConvertible {
   var description: String { raw }
 }
 
-/// Every action has exactly one begin and one result; steps are optional (D§4.13 Pairing).
+/// Classification of lifecycle checkpoints within an action execution.
 enum ActivityKind: String, Sendable, Codable { case begin, step, result }
 
+/// Provenance categorization indicating whether an action was initiated by user interaction or system automation.
 enum ActivityOrigin: String, Sendable, Codable { case user, system }
 
-/// No `empty` case on purpose: an empty reply's Send ends `failed` (D§4.13 Outcomes).
+/// Terminal disposition descriptor recorded upon action completion.
 enum ActivityOutcome: String, Sendable, Codable { case success, failed, refused, cancelled, interrupted }
 
-/// One line of the log file. `name` is on every line: the facade sets it on a begin, and the store
-/// fills it in on steps and results from its index.
+/// Canonical record representing an individual line in the newline-delimited activity log file.
 struct ActivityEntry: Sendable, Codable, Equatable {
-  /// ISO 8601 with milliseconds in the file.
+  /// UTC timestamp with millisecond precision.
   var timestamp: Date
   var actionID: ActionID
   var parentID: ActionID?
   var name: String
   var kind: ActivityKind
-  /// Begin only; the store fills it for sub-actions.
+  /// Origin indicator, present on action initiation records.
   var origin: ActivityOrigin?
-  /// Result only.
+  /// Outcome status, present exclusively on terminal result records.
   var outcome: ActivityOutcome?
-  /// Late completion begin only: the original action.
+  /// Target action identifier for late completion reconciliation.
   var relatedID: ActionID?
   var message: String
 
@@ -72,12 +65,10 @@ struct ActivityEntry: Sendable, Codable, Equatable {
     self.message = message
   }
 
-  // `Codable` is written out by hand for the timestamp: `JSONEncoder`'s built-in ISO 8601 has no
-  // milliseconds. A bad timestamp throws, so readers skip that line.
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let stamp = try c.decode(String.self, forKey: .timestamp)
-    guard let date = try? Date(stamp, strategy: Self.timestampStyle) else {  // Becomes the error below.
+    guard let date = try? Date(stamp, strategy: Self.timestampStyle) else {
       throw DecodingError.dataCorruptedError(
         forKey: .timestamp, in: c, debugDescription: "not ISO 8601 with milliseconds: \(stamp)")
     }
@@ -105,16 +96,15 @@ struct ActivityEntry: Sendable, Codable, Equatable {
     try c.encode(message, forKey: .message)
   }
 
-  /// UTC, for example `2026-10-16T09:41:00.123Z`.
+  /// ISO 8601 formatting style including fractional seconds and UTC timezone indication.
   static let timestampStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 }
 
-/// Published by `changes()` (M2).
-/// The store computes it from its index after each write. `DeveloperMenuModel` uses it to enable the
-/// menu's items, and the viewer to see that new entries exist.
+/// Published telemetry snapshot reflecting log sequence advancement and active diagnostic anchors.
 struct ActivityLogStatus: Sendable, Equatable {
   var lastSequence: Int
-  /// What Last Action and Last Error would show; nil when there is none.
+  /// Identifier of the most recently initiated primary action, if present.
   var lastActionID: ActionID?
+  /// Identifier of the most recent action concluding with an error disposition, if present.
   var lastErrorID: ActionID?
 }

@@ -3,16 +3,16 @@ import Testing
 
 @testable import ImageGen
 
-/// Records what the chat screen asks generation to do.
+/// Mock implementation of `GenerationServicing` capturing dispatched requests and providing synchronization test gates.
 final class FakeGeneration: GenerationServicing {
   let sends = Locked<[SendDraft]>([])
   let cancels = Locked<[UUID]>([])
   let retries = Locked<[UUID]>([])
   let regenerates = Locked<[UUID]>([])
 
-  /// Awaited inside `send`, so a test can act while a send is on its way.
+  /// Optional suspension hook invoked inside `send` to permit concurrent test actions during dispatch.
   let sendGate = Locked<(@Sendable () async -> Void)?>(nil)
-  /// Thrown by `send` (after the gate), when set.
+  /// Configured error instance thrown by `send` post-gate to simulate dispatch failures.
   let sendError = Locked<(any Error)?>(nil)
 
   func send(_ d: SendDraft) async throws -> UUID {
@@ -76,7 +76,7 @@ struct ChatScreenModelTests {
 
     deinit { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
 
-    /// A finished turn with one model image; returns (record, image ID).
+    /// Synthesizes and persists a completed generation turn containing a generated model image, returning the record and image identifier.
     func imageTurn(_ prompt: String = "draw") async throws -> (SendRecord, UUID) {
       let record = try await s.send(conv, prompt: prompt)
       let id = UUID()
@@ -205,7 +205,7 @@ struct ChatScreenModelTests {
 
   @Test func editFromHereTakesTheImagesAspectAndSize() async throws {
     let r = try await Rig()
-    // The image was made at 16:9 · 2K (the global defaults); the chat has since moved to 9:16 · 4K.
+    // Simulates an image generated under 16:9 · 2K defaults while current conversation settings have diverged to 9:16 · 4K.
     let (_, image) = try await r.imageTurn()
     await r.model.setAspect(.r9x16, from: .pill)
     await r.model.setSize(.s4K, from: .pill)
@@ -220,7 +220,7 @@ struct ChatScreenModelTests {
   @Test func editFromHereWithoutRecordedSettingsLeavesThePills() async throws {
     let r = try await Rig()
     await r.model.setAspect(.r9x16, from: .pill)
-    // An image with no model request behind it (an upload, or a record since deleted).
+    // Evaluates pinning an unassociated image identifier lacking recorded generation settings.
     await r.model.pin(UUID())
     #expect(r.model.overrides.aspectRatio == .r9x16)
   }
@@ -301,7 +301,7 @@ struct ChatScreenModelTests {
     try await r.s.store.updateRequest(refused.requestID) { $0.state = .refused }
     await r.model.reload()
 
-    // A non-empty draft asks first.
+    // Requires confirmation before overwriting non-empty existing composer draft content.
     r.model.composerText = "draft in progress"
     await r.model.editRefused(requestID: refused.requestID)
     #expect(r.model.pendingEdit != nil)

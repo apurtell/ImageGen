@@ -1,4 +1,4 @@
 import Foundation
 
-/// Anchors `Bundle(for:)` to the test bundle.
+/// Marker class establishing a bundle reference anchor for test target resource resolution.
 final class BundleToken {}

@@ -1,12 +1,10 @@
 import Synchronization
 
-/// A `Mutex` in a class, so closures can capture it (a `Mutex` itself can't be copied).
+/// Reference typed wrapper around `Synchronization.Mutex`, providing shared memory synchronization
+/// for closures and asynchronous callbacks without requiring `@unchecked Sendable`.
 ///
-/// A class instance is shared by reference, so every closure that captures one `Locked` uses the
-/// same lock. The class is `Sendable` with no `@unchecked`, because `Mutex` is `Sendable` and guards
-/// every access (see the primer, *Locks*). Use it for small, fast state that synchronous code
-/// changes, such as network callbacks and `ActivityLog.flush(timeout:)`. `Mutex` is not reentrant:
-/// don't call `withLock` on the same `Locked` inside the closure.
+/// Encapsulates thread-safe access to mutable value state across concurrent boundaries where reference
+/// semantics are required.
 final class Locked<Value: Sendable>: Sendable {
   private let mutex: Mutex<Value>
 
@@ -14,13 +12,11 @@ final class Locked<Value: Sendable>: Sendable {
     mutex = Mutex(value)
   }
 
-  /// Runs `body` under the lock. `inout` lets it change the value in place; `rethrows` means this
-  /// throws only when `body` throws.
+  /// Executes a closure synchronously within the mutex critical section, providing mutable in-place access to protected state.
   func withLock<T>(_ body: (inout Value) throws -> T) rethrows -> T {
     try mutex.withLock { try body(&$0) }
   }
 
-  /// A copy, read under the lock. It can be out of date as soon as this returns, so a
-  /// read-then-write must use one `withLock` call instead.
+  /// Retrieves a snapshot copy of the protected value under the lock.
   var value: Value { mutex.withLock { $0 } }
 }

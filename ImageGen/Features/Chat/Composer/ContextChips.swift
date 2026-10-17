@@ -1,10 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// The pin chip (with ✕) and the informational "Editing latest image" chip (no ✕) (D§3.5).
-///
-/// Which chip shows comes from the model (`showsPinChip`, `showsImplicitChip`), so the rule lives in
-/// one place. The thumbnail's record is fetched here from the main context by ID.
+/// Renders conversational context indicator chips above the composer, displaying pinned image
+/// references or implicit prior turn edit continuity indicators alongside dismissal actions.
 struct ContextChips: View {
   let model: ChatScreenModel
   @Environment(\.modelContext) private var context
@@ -12,7 +10,8 @@ struct ContextChips: View {
 
   private func asset(_ id: UUID?) -> ImageAsset? {
     guard let id else { return nil }
-    return try? context.fetch(FetchDescriptor<ImageAsset>(predicate: #Predicate { $0.id == id })).first  // try?: a failed fetch shows the placeholder
+    // Gracefully resolve entity lookup errors to nil to display fallback thumbnail placeholders.
+    return try? context.fetch(FetchDescriptor<ImageAsset>(predicate: #Predicate { $0.id == id })).first
   }
 
   var body: some View {
@@ -31,7 +30,7 @@ struct ContextChips: View {
         .accessibilityLabel("Unpin")
       }
       .padding(.horizontal, 10).padding(.vertical, 6)
-      // Dimmed through its content: opacity on a glass view inside a GlassEffectContainer has no effect.
+      // Apply dimming directly to subview content to bypass container-level glass compositing constraints.
       .glassEffect(.composerControl(colorScheme))
     } else if model.showsImplicitChip {
       HStack(spacing: 8) {

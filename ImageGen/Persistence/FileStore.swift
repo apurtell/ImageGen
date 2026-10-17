@@ -1,14 +1,13 @@
 import Foundation
 
-/// The file layout under `Application Support/ImageGen/` (D§4.4). Paths stored in the model are
-/// relative to `root`, because the app's container path can change between installs. Thumbnails
-/// live under a separate caches root, which the system may clear.
+/// Manages on-disk directory hierarchies and file operations rooted under `Application Support/ImageGen/`.
 ///
-/// It sits in the storage layer. `DataStore`, the Janitor, the pipeline and the screen models use it to
-/// build paths and to move, copy and remove files. It holds only two URLs, so it is a `Sendable` value
-/// that every actor keeps its own copy of. Its methods do synchronous file I/O on the caller's thread.
-/// No lock protects the files: the code that shares them (a send, a delete, the Janitor) avoids races
-/// by the order of its steps and by tolerating a file that another task moved or removed first.
+/// Architecture:
+/// - Relational entities persist relative paths relative to the application support root, ensuring portability
+///   across sandboxed container relocations during iOS updates.
+/// - Transient artifacts such as thumbnails reside in dedicated cache directory hierarchies subject to OS reclamation.
+/// - Operates as an immutable `Sendable` value type safely held across actor boundaries, executing synchronous I/O
+///   on the caller's thread without shared file-descriptor locking.
 struct FileStore: Sendable {
   let root: URL
   let thumbnailsDir: URL
@@ -18,17 +17,14 @@ struct FileStore: Sendable {
     self.thumbnailsDir = cachesRoot.appendingPathComponent("Thumbnails", isDirectory: true)
   }
 
-  /// The data-protection class for every folder the app makes: readable after the first unlock
-  /// since the device started, so a background relaunch can write (see the primer, *Data protection*).
+  /// Default file protection attribute ensuring accessibility following first device authentication.
   static let protection = FileProtectionType.completeUntilFirstUserAuthentication
-
-  // MARK: Layout
 
   var imagesDir: URL { root.appendingPathComponent("Images", isDirectory: true) }
   var requestsDir: URL { root.appendingPathComponent("Requests", isDirectory: true) }
-  /// Composer attachments not yet sent, for this launch only.
+  /// Staging container for in-flight composer attachments scoped to the current process lifetime.
   var stagingDir: URL { root.appendingPathComponent("Staging", isDirectory: true) }
-  /// Earlier launches' `Staging/` folders, each renamed here at launch for the Janitor to remove.
+  /// Archival staging location isolating orphaned artifacts from prior application runs for background reclamation.
   var retiredStagingDir: URL { root.appendingPathComponent("StagingRetired", isDirectory: true) }
   var logsDir: URL { root.appendingPathComponent("Logs", isDirectory: true) }
 
@@ -36,7 +32,7 @@ struct FileStore: Sendable {
     imagesDir.appendingPathComponent(conv.uuidString, isDirectory: true)
   }
 
-  /// `Images/<conv>/<image>.<ext>`
+  /// Computes the relative storage path: `Images/<conv>/<image>.<ext>`
   func imageRelativePath(conv: UUID, image: UUID, ext: String) -> String {
     "Images/\(conv.uuidString)/\(image.uuidString).\(ext)"
   }
@@ -45,8 +41,7 @@ struct FileStore: Sendable {
     url(relative: imageRelativePath(conv: conv, image: image, ext: ext))
   }
 
-  /// `Images/<conv>/prepared/<image>-<edge>.<ext>`. `edge` is the `maxUploadLongEdge` setting the
-  /// file was made at, so a change of the setting gives a new name.
+  /// Computes the relative storage path for scaled multi-modal inputs: `Images/<conv>/prepared/<image>-<edge>.<ext>`
   func preparedRelativePath(conv: UUID, image: UUID, edge: Int, ext: String) -> String {
     "Images/\(conv.uuidString)/prepared/\(image.uuidString)-\(edge).\(ext)"
   }
@@ -55,8 +50,7 @@ struct FileStore: Sendable {
     url(relative: preparedRelativePath(conv: conv, image: image, edge: edge, ext: ext))
   }
 
-  // A request's folder: the request body, and each attempt's response and parsed output (D§4.4).
-  // The Janitor never removes the folder of a request that is not terminal.
+  // Request directory layouts encapsulating attempt artifacts, payloads, and execution sentinels.
 
   func requestDir(_ request: UUID) -> URL {
     requestsDir.appendingPathComponent(request.uuidString, isDirectory: true)
@@ -70,8 +64,7 @@ struct FileStore: Sendable {
     requestDir(request).appendingPathComponent("response-\(attempt).part")
   }
 
-  /// The marker that the transport wrote the delegate's completion for this attempt; it holds the
-  /// HTTP status (D§4.7).
+  /// Completion sentinel URL recording task termination status for crash recovery reconciliation.
   func completeMarkerURL(_ request: UUID, attempt: Int) -> URL {
     requestDir(request).appendingPathComponent("response-\(attempt).complete")
   }
@@ -88,7 +81,7 @@ struct FileStore: Sendable {
     root.appendingPathComponent(path)
   }
 
-  /// The path relative to `root`, or nil for a URL outside it.
+  /// Computes path relative to the store root, returning nil if outside the hierarchy.
   func relativePath(of url: URL) -> String? {
     let base = root.standardizedFileURL.path
     let full = url.standardizedFileURL.path
@@ -100,18 +93,13 @@ struct FileStore: Sendable {
     FileManager.default.fileExists(atPath: url(relative: path).path)
   }
 
-  // MARK: Operations
-
-  /// Creates a directory (and its parents) with the store's protection class.
+  /// Creates a directory hierarchy configured with the standard data protection class.
   static func createDirectory(_ url: URL) throws {
     try FileManager.default.createDirectory(
       at: url, withIntermediateDirectories: true, attributes: [.protectionKey: protection])
   }
 
-  /// Moves a staged file into place (a rename on the same volume) and marks it modified now: a
-  /// rename or clone keeps the source's date, and the Janitor spares only recently modified files
-  /// that no record references yet. `createSend` uses it for attachments and `GenerationService` for
-  /// parsed output images. An existing file at the destination is replaced.
+  /// Moves a staged file into its canonical destination path, updating modification timestamps to reflect recent creation.
   func moveStaged(_ from: URL, to: URL) throws {
     let dir = to.deletingLastPathComponent()
     try Self.createDirectory(dir)
@@ -119,36 +107,29 @@ struct FileStore: Sendable {
     do {
       try FileManager.default.moveItem(at: from, to: to)
     } catch {
-      // The Janitor can run at the same time and `rmdir` an empty chat folder. If it removed the
-      // (empty) folder between the two steps, make it again, once. Any other failure is real.
+      // Mitigate race condition where concurrent directory cleanup removes an empty conversation folder.
       guard FileManager.default.fileExists(atPath: from.path), !FileManager.default.fileExists(atPath: dir.path) else { throw error }
       try Self.createDirectory(dir)
       try FileManager.default.moveItem(at: from, to: to)
     }
-    try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: to.path)  // Only the Janitor's freshness test reads it.
+    try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: to.path)
   }
 
-  /// Renames this launch's `Staging/` (anything in it belongs to an earlier process: trays aren't
-  /// kept across launches) into `StagingRetired/<uuid>/`, before any screen can stage a file. The
-  /// Janitor later removes only retired folders, so it can never take a file this launch staged.
-  /// `AppEnvironment` calls it at launch.
+  /// Relocates the staging directory to retired storage at process startup, isolating stale artifacts for pruning.
   func retireStaging() {
     guard FileManager.default.fileExists(atPath: stagingDir.path) else { return }
-    // On failure the files stay in Staging/; the next launch retires them.
-    try? Self.createDirectory(retiredStagingDir)  // If this fails, the move below fails too; see above.
-    try? FileManager.default.moveItem(at: stagingDir, to: retiredStagingDir.appendingPathComponent(UUID().uuidString))  // The next launch retries.
+    try? Self.createDirectory(retiredStagingDir)
+    try? FileManager.default.moveItem(at: stagingDir, to: retiredStagingDir.appendingPathComponent(UUID().uuidString))
   }
 
-  /// Copies a file; on APFS this is a clone, so it costs no space until one side changes.
-  /// Edit and Resend uses it to copy a message's images into the tray. An existing file at the
-  /// destination is replaced.
+  /// Duplicates an item using APFS copy-on-write clone semantics when supported.
   func cloneItem(at from: URL, to: URL) throws {
     try Self.createDirectory(to.deletingLastPathComponent())
     if FileManager.default.fileExists(atPath: to.path) { try FileManager.default.removeItem(at: to) }
     try FileManager.default.copyItem(at: from, to: to)
   }
 
-  /// Removes `Images/<conv>/` and each of the given `Requests/<id>/` folders.
+  /// Purges file artifacts associated with a conversation and its member generation requests.
   func removeConversationFiles(_ conv: UUID, requestIDs: [UUID]) -> DeletionResult {
     var result = DeletionResult()
     for dir in [conversationDir(conv)] + requestIDs.map(requestDir) {
@@ -157,9 +138,7 @@ struct FileStore: Sendable {
     return result
   }
 
-  /// Removes a file or folder, counting the regular files and bytes it held. It adds to `result`
-  /// (an `inout` parameter: the caller's value, changed in place), so one result can collect many
-  /// removals. It never throws: a failure is counted in `result`.
+  /// Removes a file or directory tree while aggregating freed storage metrics and tracking non-fatal errors.
   func remove(_ url: URL, into result: inout DeletionResult) {
     guard FileManager.default.fileExists(atPath: url.path) else { return }
     let (count, bytes) = Self.usage(of: url)
@@ -168,14 +147,14 @@ struct FileStore: Sendable {
       result.filesRemoved += count
       result.bytesFreed += bytes
     } catch CocoaError.fileNoSuchFile {
-      // Removed by someone else meanwhile (the Janitor and a delete overlapping): the goal is met.
+      // Concurrently removed by maintenance routine; safely ignored.
     } catch {
       result.failures += 1
       if result.firstError == nil { result.firstError = "\(url.lastPathComponent): \(error.localizedDescription)" }
     }
   }
 
-  /// Bytes on disk for each area, for the storage section of Settings.
+  /// Aggregate storage allocation metrics partitioned by functional subsystem.
   struct Sizes: Sendable, Equatable {
     var images: Int64 = 0
     var requests: Int64 = 0
@@ -191,12 +170,12 @@ struct FileStore: Sendable {
       logs: Self.usage(of: logsDir).bytes)
   }
 
-  /// Regular files and their total bytes in a file or folder tree.
+  /// Traverses a file hierarchy to compute total item count and byte consumption.
   static func usage(of url: URL) -> (count: Int, bytes: Int64) {
     var isDir: ObjCBool = false
     guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return (0, 0) }
     if !isDir.boolValue {
-      let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0  // An unreadable size counts as 0.
+      let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
       return (1, Int64(size))
     }
     var count = 0
@@ -204,7 +183,7 @@ struct FileStore: Sendable {
     let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
     if let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: keys) {
       for case let file as URL in e {
-        guard let v = try? file.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { continue }  // Skip; a count only.
+        guard let v = try? file.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { continue }
         count += 1
         bytes += Int64(v.fileSize ?? 0)
       }

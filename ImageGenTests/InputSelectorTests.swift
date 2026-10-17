@@ -5,7 +5,7 @@ import Testing
 
 @Suite(.tags(.pure))
 struct InputSelectorTests {
-  // Fixed IDs so failures are readable.
+  // Deterministic UUIDs to ensure reproducible and human-readable test diagnostics.
   static func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", n))! }
   let a1 = id(1), a2 = id(2), pin = id(10), u0 = id(20), u1 = id(21), m0 = id(30), m1 = id(31), m2 = id(32)
 
@@ -57,7 +57,7 @@ struct InputSelectorTests {
 
   @Test(arguments: [RequestState.failed, .refused, .cancelled, .interrupted, .inFlight, .preparing])
   func latestSkipsFailedReplies(state: RequestState) {
-    // A model reply that didn't succeed is skipped even if it somehow lists an image.
+    // Model replies in non-succeeded states are excluded from selection regardless of referenced image metadata.
     let h = [user(0, [u0]), model(1, .succeeded, [m0]), user(2), model(3, state, [m1])]
     let s = InputSelector.select(SelectionInput(attachments: [], pinnedImageID: nil, pinnedImageExists: false, history: h))
     #expect(s == Selection(imageIDs: [m0], reason: .latest, clearPin: false))
@@ -70,7 +70,7 @@ struct InputSelectorTests {
   }
 
   @Test func latestTakesHighestOrdinal() {
-    // Ordinals decide, not array order.
+    // Selection priority is governed by explicit image ordinal values rather than array index ordering.
     let message = SelectorMessage(
       sequence: 1, role: .model, replyState: .succeeded,
       images: [SelectorImage(id: m2, ordinal: 2), SelectorImage(id: m0, ordinal: 0), SelectorImage(id: m1, ordinal: 1)])
@@ -87,7 +87,7 @@ struct InputSelectorTests {
 
   @Test func latestSkipsTextOnlySucceededReply() {
     let h = [user(0), model(1, .succeeded, [m0]), user(2), model(3, .succeeded)]
-    // Shuffled input order: the walk sorts by sequence.
+    // Verifies historical evaluation order invariance by passing reversed sequence inputs.
     let s = InputSelector.select(
       SelectionInput(attachments: [], pinnedImageID: nil, pinnedImageExists: false, history: h.reversed()))
     #expect(s.imageIDs == [m0])

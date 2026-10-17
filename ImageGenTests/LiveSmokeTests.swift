@@ -3,8 +3,8 @@ import Testing
 
 @testable import ImageGen
 
-/// Opt-in: runs only when GEMINI_API_KEY is in the test runner's environment (plan §2.5).
-/// `TEST_RUNNER_GEMINI_API_KEY="$GEMINI_API_KEY" scripts/live-smoke.sh`
+/// End-to-end integration suite verifying live image generation and editing.
+/// Conditionally executed when `GEMINI_API_KEY` is present in the environment.
 @Suite(.tags(.live), .enabled(if: ProcessInfo.processInfo.environment["GEMINI_API_KEY"] != nil))
 struct LiveSmokeTests {
   @Test(.timeLimit(.minutes(10)))
@@ -47,7 +47,7 @@ struct LiveSmokeTests {
     }
 
     _ = try await run("A small red lighthouse on a rock, simple flat illustration", .r1x1, .s512)
-    // The edit reuses the output as its original bytes. Its size class is the R3 measurement.
+    // Subsequent turn reuses the generated output as input bytes to verify sequential image editing.
     _ = try await run("Make the sky purple", .r16x9, .s2K)
   }
 }

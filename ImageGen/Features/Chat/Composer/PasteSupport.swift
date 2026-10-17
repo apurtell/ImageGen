@@ -2,15 +2,12 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// An image from the pasteboard (D§4.8 step 1). Plain `Data` is avoided: its representation is
-/// generic data, which may not match image pasteboard items.
-///
-/// `Transferable` is the system's protocol for values that move through paste, drag and share.
-/// The representations are tried in order; each one takes the item's bytes unchanged.
+/// Transferable container encapsulating raw image data imported via system pasteboard operations,
+/// providing typed matching across PNG, JPEG, HEIC, and generic uniform image identifiers.
 struct PastedImage: Transferable, Sendable {
   let data: Data
 
-  /// A result builder: the lines below are a list of representations, not statements.
+  /// Prioritized transfer representations mapping system image types to internal byte payloads.
   static var transferRepresentation: some TransferRepresentation {
     DataRepresentation(importedContentType: .png) { PastedImage(data: $0) }
     DataRepresentation(importedContentType: .jpeg) { PastedImage(data: $0) }
@@ -18,7 +15,7 @@ struct PastedImage: Transferable, Sendable {
     DataRepresentation(importedContentType: .image) { PastedImage(data: $0) }
   }
 
-  /// The type the bytes declare (`CGImageSourceGetType`), or nil when they aren't an image.
+  /// Uniform type identifier determined from embedded image stream headers via Core Graphics.
   var detectedType: UTType? {
     guard let source = CGImageSourceCreateWithData(data as CFData, ImageInspector.noCache),
       let type = CGImageSourceGetType(source)
@@ -27,14 +24,13 @@ struct PastedImage: Transferable, Sendable {
   }
 }
 
-/// The composer's PasteButton (D§3.5), shown by `ComposerInputRow` only while the pasteboard has
-/// images and the tray has room.
+/// Dedicated paste button invoking system pasteboard extraction workflows without prompting for
+/// explicit permissions until user-initiated interaction occurs.
 struct ComposerPasteButton: View {
   let model: ChatScreenModel
 
   var body: some View {
-    // The system's PasteButton reads the pasteboard only on the user's tap, so the app shows no
-    // paste permission prompt. The task states `@MainActor` explicitly, because `attach` runs there.
+    // System PasteButton defers pasteboard access to direct user interaction, bypassing permission prompts.
     PasteButton(payloadType: PastedImage.self) { images in
       let candidates = images.map { AttachmentCandidate.data($0.data) }
       Task { @MainActor in await model.attach(candidates, from: .paste) }
@@ -45,10 +41,8 @@ struct ComposerPasteButton: View {
   }
 }
 
-/// Keeps `hasImages` current. `UIPasteboard.hasImages` doesn't prompt; it's re-checked when the
-/// app becomes active and when the pasteboard changes. Another app can change the pasteboard while
-/// this app is in the background, and the change notification doesn't arrive then, so the check
-/// on `.active` is needed too.
+/// View modifier maintaining real-time awareness of pasteboard image presence, synchronizing across
+/// system pasteboard notification events and application foreground reactivation cycles.
 struct PasteboardImageWatcher: ViewModifier {
   @Binding var hasImages: Bool
   @Environment(\.scenePhase) private var scenePhase

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Loads files from the bundled `Fixtures/` folder, for example `FixtureLoader.url("Responses/resp_text_image.json")`.
+/// Utility namespace for resolving and loading static test resource fixtures bundled within the test target.
 enum FixtureLoader {
   struct Missing: Error, CustomStringConvertible {
     let path: String
@@ -25,7 +25,7 @@ enum FixtureLoader {
     String(decoding: try data(path), as: UTF8.self)
   }
 
-  /// Every file name in a fixture folder, sorted.
+  /// Returns sorted filenames contained within the designated subfolder of the fixtures bundle.
   static func names(in folder: String) throws -> [String] {
     try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(folder).path).sorted()
   }

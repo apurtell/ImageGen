@@ -1,11 +1,10 @@
 import Foundation
 import Synchronization
 
-/// Serves canned responses to requests made through an ephemeral session that lists it in
-/// `protocolClasses` (plan §2.2). Each URL has a queue: one response per request, in order.
+/// Custom `URLProtocol` implementation serving scripted HTTP responses for network isolation during testing.
 ///
-/// State is keyed by a per-test token sent in the `X-Test-Token` header, so suites can run in
-/// parallel. Requests without the header use the empty token.
+/// Supports ordered FIFO response queues keyed by URL string and isolates parallel test execution state
+/// using ephemeral test tokens propagated through `X-Test-Token` request headers.
 final class MockURLProtocol: URLProtocol, @unchecked Sendable {
   static let tokenHeader = "X-Test-Token"
 
@@ -29,7 +28,7 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
 
   struct RecordedRequest: Sendable {
     let request: URLRequest
-    /// From `httpBody` or, for upload-from-file bodies, the drained `httpBodyStream`.
+    /// Request payload captured from `httpBody` or drained from `httpBodyStream`.
     let body: Data
   }
 
@@ -40,11 +39,9 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
 
   private static let registry = Mutex<[String: TokenState]>([:])
 
-  // MARK: Test API
-
   static func makeToken() -> String { UUID().uuidString }
 
-  /// Appends responses to the queue for `url` (matched on the full URL string).
+  /// Enqueues scripted responses for the specified absolute URL string under a test token scope.
   static func register(_ responses: [Response], for url: URL, token: String) {
     registry.withLock { r in
       r[token, default: TokenState()].queues[url.absoluteString, default: []].append(contentsOf: responses)
@@ -59,14 +56,12 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     _ = registry.withLock { $0.removeValue(forKey: token) }
   }
 
-  /// An ephemeral configuration that routes through this protocol.
+  /// Produces an ephemeral `URLSessionConfiguration` configured to intercept traffic with this protocol class.
   static func configuration() -> URLSessionConfiguration {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [MockURLProtocol.self]
     return config
   }
-
-  // MARK: URLProtocol
 
   private let cancelled = Mutex(false)
 

@@ -3,13 +3,13 @@ import Testing
 
 @testable import ImageGen
 
-/// Interleavings found by the post-M9 concurrency review: two handlers on one request, a Stop
-/// that lands before its task exists, and overlapping foreground re-creation.
+/// Validates asynchronous edge case interleavings across concurrent pipeline operations,
+/// including duplicate completion handling, cancellation races, and foreground retry re-creation.
 @Suite(.tags(.integration))
 struct PipelineRaceTests {
   typealias H = GenerationHarness
 
-  /// A Send left in flight by an earlier process, and a new process on the same files.
+  /// Sets up an in-flight send left uncompleted across process restarts to simulate crash recovery.
   func relaunchedInFlight() async throws -> (h2: H, id: UUID, conv: UUID, send: ActionID) {
     let h = try H(scripted: true)
     let conv = try await h.s.store.createConversation()
@@ -33,8 +33,7 @@ struct PipelineRaceTests {
 
   @Test func relaunchCompletionAndReparseSaveTheReplyOnce() async throws {
     let (h2, id, conv, send) = try await relaunchedInFlight()
-    // The transport writes the marker, then delivers the completion; the Reconciler, finding no
-    // live task and the marker, re-parses at the same time.
+    // Simulates concurrent response handling where transport completion and reconciler re-parsing execute simultaneously.
     h2.scripted!.complete(id, attempt: 1, status: 200, body: try FixtureLoader.data("Responses/resp_text_image.json"))
     await h2.service.reparse(id, attempt: 1)
     #expect(try await h2.wait(id).state == .succeeded)
@@ -48,7 +47,7 @@ struct PipelineRaceTests {
 
   @Test func reparseAfterTheCompletionReportsAlreadyHandled() async throws {
     let (h2, id, conv, send) = try await relaunchedInFlight()
-    // The transport's completion ends the request first; the Reconciler's re-parse comes after.
+    // Transport completion finishes request processing prior to reconciler invocation.
     h2.scripted!.complete(id, attempt: 1, status: 200, body: try FixtureLoader.data("Responses/resp_text_image.json"))
     #expect(try await h2.wait(id).state == .succeeded)
     try await settled(h2, send)
@@ -64,7 +63,7 @@ struct PipelineRaceTests {
       p.attempt = 2
       p.state = .retryScheduled
     }
-    // The Reconciler checked attempt 1; by now attempt 2 is scheduled and has no response yet.
+    // The reconciler targets an earlier attempt while a subsequent retry attempt is already active.
     #expect(await h2.service.reparse(id, attempt: 1) == .alreadyHandled)
     let snap = try await h2.snapshot(id)
     #expect(snap.state == .retryScheduled)
@@ -86,8 +85,7 @@ struct PipelineRaceTests {
     let entries = await h.probe.entries()
     let late = entries.contains { $0.name == "Late completion" && $0.kind == .begin }
     let result = try #require(entries.last { $0.actionID == send && $0.kind == .result })
-    // Either the completion won (Send succeeded) or the interruption did (and the completion is a
-    // Late completion); never a success logged as interrupted.
+    // Verifies consistent outcome logging: completion wins as success or yields a late completion action, avoiding conflicting interruption logs.
     if final.state == .succeeded && !late { #expect(result.outcome == .success) }
     #expect(final.state == .succeeded || final.state == .interrupted)
     #expect(try await h.s.store.imageCount(conv: conv) <= 1)
@@ -102,7 +100,7 @@ struct PipelineRaceTests {
     try await h.wait(id, for: [.inFlight])
     h.scripted!.complete(id, attempt: 1, status: 400, body: try FixtureLoader.data("Errors/err_400_civic.json"))
     try await h.until { gate.waitingCount == 1 }
-    // No task exists while the body is rebuilt.
+    // Dispatches cancellation while request payload reconstruction is in progress prior to task instantiation.
     await h.service.cancel(requestID: id)
     gate.advance()
     #expect(try await h.wait(id).state == .cancelled)
@@ -139,7 +137,7 @@ struct PipelineRaceTests {
     h.scripted!.complete(id, attempt: 1, status: 503, body: try FixtureLoader.data("Errors/err_503.json"))
     #expect(try await h.wait(id, for: [.retryScheduled]).nextAttemptCreatedInBackground)
     #expect(h.scripted!.jobs.value.count == 2)
-    // Active, inactive, active again in quick succession (Control Center, a system alert).
+    // Simulates rapid foreground reactivation cycles (e.g. system alert or Control Center toggles).
     h.activity.setActive(true)
     async let a: Void = h.service.appBecameActive()
     async let b: Void = h.service.appBecameActive()

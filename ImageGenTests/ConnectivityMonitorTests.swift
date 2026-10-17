@@ -3,7 +3,7 @@ import Testing
 
 @testable import ImageGen
 
-/// A monitor the test drives.
+/// Mock implementation of `ConnectivityMonitoring` allowing test suites to simulate network availability transitions.
 final class FakeConnectivityMonitor: ConnectivityMonitoring {
   private let subscribers = Locked<[AsyncStream<Bool>.Continuation]>([])
   private let current = Locked(true)

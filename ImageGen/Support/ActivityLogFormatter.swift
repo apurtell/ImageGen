@@ -1,12 +1,9 @@
 import Foundation
 
-/// Turns entries into the viewer's lines (D§3.10). Pure.
+/// Formats structured activity log entries into indented textual lines for display and diagnostics.
 ///
-///     14:02:11.384 [Send a1b2] Begin: gemini-3.1-flash-image · 16:9 · 2K
-///     14:02:11.390   [Prepare request 3c5e] Result: success in 0.0 s · body.json 1.3 MB
-///
-/// The log viewer (`LogViewerModel`) uses `lines`; the OSLog mirror uses `body`. Indent shows nesting: two
-/// spaces for each parent level among the shown entries.
+/// Renders timestamps, action scopes, hierarchical indentation based on parent-child relationships,
+/// date transitions, and outcome descriptors.
 enum ActivityLogFormatter {
   static let rotatedOutNote = "(earlier entries rotated out)"
   static let completedLaterNote = "(completed later)"
@@ -17,10 +14,10 @@ enum ActivityLogFormatter {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = timeZone
 
-    // Depth from the parent links among the shown entries.
+    // Build parent adjacency map across displayed entries to compute indentation hierarchy.
     var parents: [ActionID: ActionID] = [:]
     for e in view.entries { if let p = e.parentID { parents[e.actionID] = p } }
-    // The limit of 64 stops the walk if bad data ever links an action back to itself.
+    // Bound tree traversal depth to prevent infinite loops from malformed cyclical references.
     func depth(_ id: ActionID) -> Int {
       var d = 0
       var current = id
@@ -39,21 +36,20 @@ enum ActivityLogFormatter {
 
     for e in view.entries {
       let day = calendar.dateComponents([.year, .month, .day], from: e.timestamp)
-      // A date line at each change of day. Full Log also starts with one.
+      // Insert day boundary separator when calendar day rolls over.
       if day != lastDay {
         if lastDay != nil || view.isFullLog { out.append("— \(dateString(e.timestamp, calendar)) —") }
         lastDay = day
       }
       let isLate = view.lateCompletionIDs.contains(e.actionID)
-      // `ActivityLogQuery.tree` puts the Late completions after the action's own lines, so one note
-      // starts their section.
+      // Insert section demarcation when entering late completion entries.
       if isLate && !inLateSection {
         out.append("\(blank)  \(completedLaterNote)")
         inLateSection = true
       }
       let level = depth(e.actionID) + (isLate ? 1 : 0)
       let indent = String(repeating: "  ", count: level)
-      // An action whose first shown entry isn't its begin lost the begin to rotation.
+      // Note truncation if the leading entry for an action is not an initiation record.
       if !seen.contains(e.actionID) {
         seen.insert(e.actionID)
         if e.kind != .begin { out.append("\(blank) \(indent)\(rotatedOutNote)") }
@@ -67,8 +63,7 @@ enum ActivityLogFormatter {
     lines(view, timeZone: timeZone).joined(separator: "\n")
   }
 
-  /// `Begin: …`, `Step: …`, or `Result: <outcome> …` (a message starting with "in " follows the
-  /// outcome word directly; anything else after ` · `).
+  /// Formats the payload segment of an entry according to its kind and terminal outcome.
   static func body(_ e: ActivityEntry) -> String {
     switch e.kind {
     case .begin: return "Begin: \(e.message)"
@@ -80,7 +75,7 @@ enum ActivityLogFormatter {
     }
   }
 
-  /// Rounded to the millisecond, so a stored `.384` that reads back as `.38399…` prints as `.384`.
+  /// Formats an event timestamp into millisecond-precision 24-hour time notation.
   private static func timeString(_ date: Date, _ calendar: Calendar) -> String {
     let totalMs = Int64((date.timeIntervalSince1970 * 1000).rounded())
     let ms = Int(((totalMs % 1000) + 1000) % 1000)

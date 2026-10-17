@@ -1,13 +1,11 @@
 import Foundation
 
-/// Whether the app is active and which chat is on screen (D§4.11). The main actor writes it from
-/// `scenePhase` and the chat view; the generation actor reads it.
+/// Thread safe tracker for application foreground activity and visible conversation context.
 ///
-/// `NotificationPoster` and `AppDelegate` read it to decide whether a finished request needs a banner.
-/// Concurrency: the reader (`GenerationService`, an actor) and the writer (the main actor) are in
-/// different concurrency domains, and the reader must not wait for the main thread. So the state is a
-/// plain value behind a lock (`Locked`; see the primer, *Locks*), not main-actor state. Each read and
-/// each write is one short locked step, which makes the class `Sendable`.
+/// Consulted by `NotificationPoster` and `AppDelegate` to determine notification presentation policy:
+/// suppressing completion alerts when the target conversation is actively viewed in the foreground.
+/// Concurrency: bridges `@MainActor` UI view lifecycles with the `GenerationService` actor domain
+/// using lightweight mutual exclusion (`Locked`), ensuring lock free nonblocking reads across concurrency boundaries.
 final class AppActivity: Sendable {
   private let state: Locked<(isActive: Bool, visibleConversationID: UUID?)>
 
@@ -20,10 +18,9 @@ final class AppActivity: Sendable {
 
   func setActive(_ active: Bool) { state.withLock { $0.isActive = active } }
 
-  /// `nil` clears it only if `id` is still the visible chat.
-  ///
-  /// The chat view calls this with `leaving:` when it disappears. When the user goes from chat A to
-  /// chat B, B can appear before A disappears. The check keeps A's late "leaving" call from clearing B.
+  /// Updates visible conversation context. When `leaving` is specified, clears the identifier
+  /// only if it matches the current value, preventing out-of-order disappearance transitions
+  /// from clearing newly presented conversations.
   func setVisible(_ id: UUID?, leaving: UUID? = nil) {
     state.withLock { s in
       if let leaving {

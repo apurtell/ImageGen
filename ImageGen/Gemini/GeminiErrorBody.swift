@@ -1,14 +1,10 @@
 import Foundation
 
-// Decoding of the error body that Google APIs return for a failed call. `ResponseParser` (for
-// `generateContent`) and `ModelsClient` (for the models calls) use it. The pipeline's retry policy
-// reads `retryDelay`, and the CIVIC fallback reads `mentionsCivicIntegrity` (D§2.4).
-// All types here are values with no shared state, so any task can use them.
+// Decodes Google RPC error envelopes returned during failed API invocations. Utilized by
+// `ResponseParser` and `ModelsClient` to extract structured error details, backoff recommendations,
+// and safety rejection diagnostics.
 
-/// Any JSON value, for the open-ended `error.details` entries.
-///
-/// Swift note: each case carries the value of one JSON kind (see the primer, *Enum with associated
-/// values*). This lets the code read a few known fields of a detail and ignore the rest.
+/// Represents arbitrary JSON data structures embedded within open-ended `error.details` arrays.
 enum AnyJSON: Sendable, Equatable, Decodable {
   case null
   case bool(Bool)
@@ -17,28 +13,25 @@ enum AnyJSON: Sendable, Equatable, Decodable {
   case array([AnyJSON])
   case object([String: AnyJSON])
 
-  /// Tries each JSON kind in turn; `try?` turns "not this kind" into "try the next one". `Bool` comes
-  /// before `Double`, so `true` does not become `1`. An object is the last case, and its failure is
-  /// the error for a value of no known kind.
+  /// Dynamically decodes JSON tokens across primitive types and nested containers.
   init(from decoder: Decoder) throws {
     let c = try decoder.singleValueContainer()
     if c.decodeNil() {
       self = .null
-    } else if let b = try? c.decode(Bool.self) {  // Not a Bool: try the next kind.
+    } else if let b = try? c.decode(Bool.self) {
       self = .bool(b)
-    } else if let n = try? c.decode(Double.self) {  // Not a number: try the next kind.
+    } else if let n = try? c.decode(Double.self) {
       self = .number(n)
-    } else if let s = try? c.decode(String.self) {  // Not a string: try the next kind.
+    } else if let s = try? c.decode(String.self) {
       self = .string(s)
-    } else if let a = try? c.decode([AnyJSON].self) {  // Not an array: try an object last.
+    } else if let a = try? c.decode([AnyJSON].self) {
       self = .array(a)
     } else {
       self = .object(try c.decode([String: AnyJSON].self))
     }
   }
 
-  /// The member `key` of an object; nil for a missing key or for a value that is not an object.
-  /// So chains like `detail["@type"]?.string` stay short and never fail.
+  /// Accesses object properties by key; returns nil if self is not a dictionary or key is missing.
   subscript(key: String) -> AnyJSON? {
     if case .object(let o) = self { return o[key] }
     return nil
@@ -50,17 +43,13 @@ enum AnyJSON: Sendable, Equatable, Decodable {
   }
 }
 
-/// A Google RPC error body: `{"error":{"code","message","status","details":[…]}}`.
-///
-/// Every field is optional, because error bodies vary. Decoding fails only when there is no `error`
-/// object, so a successful response or a body from a proxy is not mistaken for an API error.
+/// Standardized Google RPC error response envelope: `{"error":{"code","message","status","details":[...]}}`.
 struct GeminiErrorBody: Sendable, Equatable, Decodable {
   var code: Int?
   var message: String?
   var status: String?
   var details: [AnyJSON]
 
-  // The wire shape. The public fields above flatten it.
   private struct Envelope: Decodable { var error: Inner? }
   private struct Inner: Decodable {
     var code: Int?
@@ -84,15 +73,12 @@ struct GeminiErrorBody: Sendable, Equatable, Decodable {
     self.init(code: inner.code, message: inner.message, status: inner.status, details: inner.details ?? [])
   }
 
-  /// The decoded body, or nil when the data isn't a Google RPC error.
+  /// Deserializes JSON payload into structured RPC error data; returns nil if the payload does not conform to the schema.
   static func decode(_ data: Data) -> GeminiErrorBody? {
-    try? JSONDecoder().decode(GeminiErrorBody.self, from: data)  // Not an RPC error: the caller uses the raw text.
+    try? JSONDecoder().decode(GeminiErrorBody.self, from: data)
   }
 
-  /// `google.rpc.RetryInfo.retryDelay`, for example `"30s"` or `"1.5s"`.
-  /// A detail with a value in another form (no `s`, negative, not a number) is skipped, not an error.
-  /// The `@type` check uses a suffix, because the full value carries a URL prefix
-  /// (`type.googleapis.com/…`).
+  /// Extracts backoff duration from structured `google.rpc.RetryInfo` details when present.
   var retryDelay: Duration? {
     for detail in details where detail["@type"]?.string?.hasSuffix("google.rpc.RetryInfo") == true {
       guard let text = detail["retryDelay"]?.string, text.hasSuffix("s"),
@@ -103,13 +89,12 @@ struct GeminiErrorBody: Sendable, Equatable, Decodable {
     return nil
   }
 
-  /// `google.rpc.ErrorInfo.reason`, for example `API_KEY_INVALID`.
+  /// Extracts error rationale code from structured `google.rpc.ErrorInfo` details (e.g. `API_KEY_INVALID`).
   var reason: String? {
     details.first { $0["@type"]?.string?.hasSuffix("google.rpc.ErrorInfo") == true }?["reason"]?.string
   }
 
-  /// The deprecated-category rejection that triggers the CIVIC fallback (D§2.4). This property checks
-  /// only the message. `RetryPolicy` also checks for HTTP 400 and a status of `INVALID_ARGUMENT` or none.
+  /// Identifies policy rejections specifically referencing civic integrity safety constraints.
   var mentionsCivicIntegrity: Bool {
     message?.contains("CIVIC_INTEGRITY") == true
   }

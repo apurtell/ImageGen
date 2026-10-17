@@ -3,7 +3,7 @@ import Testing
 
 @testable import ImageGen
 
-/// M1 integration: the resolver's coercion feeds the writer end to end.
+/// End-to-end integration tests verifying that settings resolution coercions properly feed request serialization.
 @Suite(.tags(.io))
 struct CoercedGoldenTests {
   @Test func proOverride1x8_512ProducesCoercedGolden() async throws {

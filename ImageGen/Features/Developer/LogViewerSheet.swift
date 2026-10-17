@@ -1,13 +1,10 @@
 import SwiftUI
 import UIKit
 
-/// Last Action, Last Error or Full Log (D§3.10).
-///
-/// The sheet that `DeveloperMenu` presents. It shows the model's text in `LogTextView` and offers
-/// Done, Copy and Share. Its lifecycle drives the model: `.task` loads and starts following the log,
-/// and `.onDisappear` stops following. It runs on the main actor.
+/// Modal presentation container displaying filtered or exhaustive activity log records,
+/// providing clipboard export, share sheet distribution, and live stream updates.
 struct LogViewerSheet: View {
-  /// `@State` keeps the one model for the life of the sheet, also when SwiftUI rebuilds this struct.
+  /// Dedicated presentation model maintaining active log inspection state and streaming updates.
   @State var model: LogViewerModel
   @Environment(\.dismiss) private var dismiss
   @State private var copied = false
@@ -31,7 +28,7 @@ struct LogViewerSheet: View {
       }
       .navigationTitle(model.title)
       .navigationBarTitleDisplayMode(.inline)
-      // Copy and Share use the current text, so they include lines that arrived while open.
+      // Export actions access the latest evaluated log text reflecting active streaming appends.
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
@@ -42,7 +39,7 @@ struct LogViewerSheet: View {
             copied = true
           }
           .accessibilityLabel("Copy")
-          // A `ShareLink` is enough here: sharing the log is not logged, so no completion is needed.
+          // Expose standard share link providing file transfer representations for external inspection.
           ShareLink(item: model.shareFile, preview: SharePreview(model.shareFile.fileName)) {
             Image(systemName: "square.and.arrow.up")
           }
@@ -56,9 +53,9 @@ struct LogViewerSheet: View {
             .padding(.horizontal, 16).padding(.vertical, 8)
             .glassEffect()
             .padding(.bottom, 24)
-            // The toast's own `.task`: it starts when the toast appears and is cancelled if it goes away.
+            // Dismiss confirmation badge after timed display interval or upon view disappearance.
             .task {
-              try? await Task.sleep(for: .seconds(1.5))  // try?: a cancelled sleep only hides the toast early.
+              try? await Task.sleep(for: .seconds(1.5))
               copied = false
             }
         }

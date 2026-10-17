@@ -1,12 +1,11 @@
 import SwiftUI
 
-/// An image in the viewer, with what its Info shows (D§3.7).
-/// A `Sendable` value with no record objects, so it can be built from a snapshot and passed to the
-/// decode task freely.
+/// An immutable, sendable representation of an image presented within the full screen viewer, encapsulating
+/// export metadata, origin provenance, and request generation parameters.
 struct ViewerImage: Identifiable, Equatable, Sendable {
   let item: ExportItem
   let origin: ImageOrigin
-  /// The settings of the request the image belongs to, when known.
+  /// Generation configuration associated with the image request, when applicable.
   let settings: EffectiveSettings?
 
   var id: UUID { item.id }
@@ -21,31 +20,29 @@ struct ViewerImage: Identifiable, Equatable, Sendable {
   }
 }
 
-/// What opens the viewer: the images of one message and the one to show first.
-/// The chat screen sets one to present the viewer with `.fullScreenCover(item:)`.
+/// Presentation payload supplied to initiate the full-screen viewer, specifying the collection of images
+/// associated with a message and the initial selection identifier.
 struct ViewerRequest: Identifiable {
   let images: [ViewerImage]
   let startID: UUID
   var id: UUID { startID }
 }
 
-/// The full-screen viewer (D§3.7): pages through a message's images, each zoomable; a single tap
-/// toggles the chrome; ✕ or a downward swipe at the minimum zoom dismisses.
+/// Full-screen image viewer supporting horizontal paging across message assets, interactive pinch and double-tap
+/// zooming, dismiss gestures, and contextual export actions.
 ///
-/// `ChatView` presents it as a full-screen cover. A page `TabView` holds one `ZoomableImageView` per
-/// image; each page loads its own thumbnail and full decode. The viewer owns its own
-/// `ImageExportModel` for the toolbar's export buttons, so Share and Save to Files present over the
-/// viewer, and any export still open is closed when the viewer goes away. The view runs on the main
-/// actor; the only background work is each page's decode.
+/// Hosted as a modal presentation over the chat interface. Each image is rendered in an isolated zoomable
+/// container that coordinates progressive loading from local thumbnails to full-resolution decodes. The viewer
+/// encapsulates its own export state machine to present system share sheets directly above the immersive canvas.
 struct ImageViewer: View {
   let request: ViewerRequest
   let thumbnails: ThumbnailService
   let onEditFromHere: (UUID) -> Void
   @State private var exporter: ImageExportModel
-  /// The ID of the page on screen. It is the pager's selection, and it survives the pager's rebuild.
+  /// Active page identifier driving pager selection and tracking across layout transitions.
   @State private var current: UUID
   @State private var showsChrome = true
-  /// The image whose Info sheet is open, or nil.
+  /// Active image payload currently presented in the detailed inspection sheet.
   @State private var info: ViewerImage?
   @Environment(\.dismiss) private var dismiss
 
@@ -53,24 +50,20 @@ struct ImageViewer: View {
     self.request = request
     self.thumbnails = thumbnails
     self.onEditFromHere = onEditFromHere
-    // `_exporter` is the `@State` storage itself. SwiftUI uses this initial value only the first
-    // time; when it calls `init` again, the existing model and page are kept.
+    // Initialize state-backed export model and initial page selection.
     _exporter = State(initialValue: ImageExportModel(log: log))
     _current = State(initialValue: request.startID)
   }
 
-  /// Falls back to the first image if `current` matches none.
+  /// Resolved image corresponding to the active selection, falling back to the initial asset.
   private var currentImage: ViewerImage? { request.images.first { $0.id == current } ?? request.images.first }
   private var position: Int { (request.images.firstIndex { $0.id == current } ?? 0) + 1 }
 
   var body: some View {
     GeometryReader { geo in
       pager
-        // A page TabView keeps a stale container frame after a live rotation (a 10 pt strip on
-        // iOS 26.5), so it's rebuilt for each size; the selection is kept in `current`.
-        // A new `.id` makes SwiftUI discard the old pages and build new ones. Each old page's
-        // load is cancelled (`dismantleUIView`); the new current page gets its full image from the
-        // `FullDecoder`, which kept it, so a rotation doesn't decode it again.
+        // Recreate the paging hierarchy when geometry changes across interface orientation shifts,
+        // preventing stale container frame calculations while relying on cache retention for decoded bitmaps.
         .id("\(Int(geo.size.width))x\(Int(geo.size.height))")
     }
     .ignoresSafeArea()
@@ -82,7 +75,7 @@ struct ImageViewer: View {
       if showsChrome, let image = currentImage {
         ViewerToolbar(
           onExport: { exporter.perform($0, image.item) },
-          // The chat pins the image (the composer then shows its chip), then the viewer closes (D§3.7).
+          // Stage the selected asset into the composer attachment context and dismiss the viewer.
           onEditFromHere: {
             onEditFromHere(image.id)
             dismiss()
@@ -94,11 +87,10 @@ struct ImageViewer: View {
       }
     }
     .statusBarHidden(!showsChrome)
-    // The viewer's own presenter: its `.onDisappear` closes an open Share or Save to Files when the
-    // viewer goes away.
+    // Coordinate dismissal of secondary presentation sheets when dismissing the viewer hierarchy.
     .modifier(ImageExportPresenter(model: exporter, toastOffset: 64))
     .sheet(item: $info) { ViewerInfoSheet(image: $0) }
-    // The decoder's kept image is for this viewer only; closing the viewer releases it.
+    // Evict cached high-resolution decoded representations upon dismissing the viewer hierarchy.
     .onDisappear { Task { await FullDecoder.shared.clear() } }
     .preferredColorScheme(.dark)
   }
@@ -106,7 +98,7 @@ struct ImageViewer: View {
   private var pager: some View {
     TabView(selection: $current) {
       ForEach(request.images) { image in
-        // `isCurrent` lets a page that is swiped away reset its zoom (each page starts fitted).
+        // Notify the target page view of active selection status to reset zoom levels when paged out.
         ZoomableImageView(
           image: image, thumbnails: thumbnails, isCurrent: image.id == current,
           onSingleTap: { withAnimation(.easeInOut(duration: 0.2)) { showsChrome.toggle() } },
@@ -141,8 +133,8 @@ struct ImageViewer: View {
   }
 }
 
-/// The viewer's Info: pixel size, type, bytes, source, model and settings (D§3.7).
-/// A read-only list over a `ViewerImage` value.
+/// Detailed asset metadata inspector displaying dimensions, encoding MIME type, payload size, source provenance,
+/// and model inference configurations.
 struct ViewerInfoSheet: View {
   let image: ViewerImage
   @Environment(\.dismiss) private var dismiss

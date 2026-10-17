@@ -1,21 +1,20 @@
 import Foundation
 
-/// One input's size, for planning. `byteCount` is the file size before base64 encoding.
+/// Dimensional and storage footprint descriptor evaluated during request payload budget planning.
 struct PreparedSize: Sendable, Equatable {
   let byteCount: Int
   let longEdge: Int
 }
 
-/// The next step of the budget loop. An enum with associated values: each case carries its own data.
+/// Discretized decision step emitted by the payload constraint solver.
 enum BudgetPlan: Sendable, Equatable {
   case fits(bodyBytes: Int)
-  /// Shrink input `index` to `toLongEdge`, then plan again.
+  /// Directs targeted downsampling of an input asset to the designated long-edge dimension.
   case shrink(index: Int, toLongEdge: Int, bodyBytes: Int)
   case cannotFit(bodyBytes: Int)
 }
 
-/// The body cannot fit even with every input at the minimum edge. `RequestPreparer` turns it into a
-/// failed send before any network call.
+/// Error indicating that input images exceed allowable payload budgets even after maximal downsampling.
 struct BudgetTooLarge: LocalizedError, Equatable {
   let bodyBytes: Int
   var errorDescription: String? {
@@ -23,23 +22,25 @@ struct BudgetTooLarge: LocalizedError, Equatable {
   }
 }
 
-/// Fits a request body under the inline limit by shrinking the largest input first (D§4.8 step 5).
+/// Enforces inline request payload size boundaries by iteratively downsampling input images.
 ///
-/// `RequestPreparer` calls `fit` at send time. `plan` is pure and decides one step; `fit` repeats it and
-/// calls the shrink closure, which does the slow work in `ImagePreprocessor`. It holds no state.
+/// Strategy:
+/// - Evaluates estimated base64 wire payload size against a strict budget ceiling (default 19 MB).
+/// - Iteratively selects the largest byte contributor exceeding minimum resolution boundaries
+///   and scales its long edge by a decaying factor until the aggregated body satisfies limits.
+/// - Guarantees termination as dimensions monotonically decrease toward `minLongEdge`.
 enum BudgetPlanner {
-  /// The 20 MB inline limit, minus a margin.
+  /// Payload budget ceiling reserving headroom under the upstream 20 MB inline transfer limit.
   static let budget = 19_000_000
   static let minLongEdge = 1024
   static let factor = 0.75
 
-  /// The predicted body size: the JSON envelope plus each image's base64 length.
+  /// Computes predicted request body size accounting for JSON envelope overhead and base64 expansion.
   static func bodySize(_ inputs: [PreparedSize], envelopeBytes: Int) -> Int {
     envelopeBytes + inputs.reduce(0) { $0 + RequestBodyWriter.base64Length($1.byteCount) }
   }
 
-  /// Pure: the next step. The largest input (by bytes) that is still above `minLongEdge` shrinks
-  /// to 0.75× its long edge, never below `minLongEdge`.
+  /// Evaluates current input configurations and determines the next optimization step.
   static func plan(
     inputs: [PreparedSize], envelopeBytes: Int, budget: Int = budget, minLongEdge: Int = minLongEdge
   ) -> BudgetPlan {
@@ -65,10 +66,7 @@ enum BudgetPlanner {
     let bodyBytes: Int
   }
 
-  /// Shrinks until the body fits, checking cancellation between iterations; throws
-  /// `BudgetTooLarge` when it can't fit. Cancellation is cooperative: `checkCancellation()` throws if
-  /// the send was stopped, so a Stop does not wait for every shrink (see the primer, *Tasks and
-  /// cancellation*). The loop ends: each shrink lowers one edge, and no edge goes below `minLongEdge`.
+  /// Iteratively optimizes and downsamples image inputs until aggregate payload fits within the designated budget.
   static func fit(
     _ images: [PreparedImage], envelopeBytes: Int, budget: Int = budget, minLongEdge: Int = minLongEdge,
     shrink: @Sendable (PreparedImage, Int) async throws -> PreparedImage = BudgetPlanner.shrinkWithPreprocessor
@@ -85,14 +83,13 @@ enum BudgetPlanner {
         throw BudgetTooLarge(bodyBytes: bytes)
       case .shrink(let index, let edge, _):
         let from = sizes[index].longEdge
-        // A suspension point: the shrink runs in the background, and this task waits for it.
         current[index] = try await shrink(current[index], edge)
         shrinks.append(Shrink(index: index, fromLongEdge: from, toLongEdge: edge))
       }
     }
   }
 
-  /// The production shrink: a factor from the current edge to the target. Tests supply a fake.
+  /// Default production image downsampling implementation delegating to `ImagePreprocessor`.
   static let shrinkWithPreprocessor: @Sendable (PreparedImage, Int) async throws -> PreparedImage = { image, edge in
     let long = max(image.pixelWidth, image.pixelHeight)
     return try await ImagePreprocessor.shrink(image, factor: Double(edge) / Double(max(1, long)))

@@ -5,7 +5,7 @@ import Testing
 
 @Suite(.tags(.integration))
 struct TransportTests {
-  /// A transport on a mock session, a temporary root, and a token tagging its requests.
+  /// Test fixture configuring a URLSessionTransport on an isolated temporary root using mock network protocols.
   final class Rig: Sendable {
     let root = TestFileRoot()
     let files: FileStore
@@ -40,7 +40,7 @@ struct TransportTests {
       MockURLProtocol.register(responses, for: GenerationHarness.flashURL, token: token)
     }
 
-    /// The next event of a kind.
+    /// Awaits and returns the next transport event from the stream iterator.
     func next(_ iterator: inout AsyncStream<TransportEvent>.Iterator) async -> TransportEvent? {
       await iterator.next()
     }
@@ -72,7 +72,7 @@ struct TransportTests {
     try first.prepareNewAttempt(requestID: id, attempt: 1)
     first.append(Data("a".utf8), requestID: id, attempt: 1, taskIdentifier: 7)
     first.append(Data("b".utf8), requestID: id, attempt: 1, taskIdentifier: 7)
-    // A relaunch: a new accumulator, the same task, more chunks.
+    // Simulates process restart where a new accumulator instance resumes chunk assembly for an active task.
     let second = ResponseAccumulator(files: files)
     for s in ["c", "d", "e"] { second.append(Data(s.utf8), requestID: id, attempt: 1, taskIdentifier: 7) }
     let (url, bytes) = second.complete(requestID: id, attempt: 1, taskIdentifier: 7, httpStatus: 200)
@@ -119,7 +119,7 @@ struct TransportTests {
   }
 
   @Test func cancelReasonCarried() async throws {
-    // The reason comes from the delegate's error; check the extraction on a synthesized one.
+    // Validates background task cancellation reason extraction from delegate error userInfo dictionaries.
     let error = NSError(
       domain: NSURLErrorDomain, code: NSURLErrorCancelled,
       userInfo: [NSURLErrorBackgroundTaskCancelledReasonKey: NSURLErrorCancelledReasonUserForceQuitApplication])
@@ -127,7 +127,7 @@ struct TransportTests {
     rig.respond([.init(status: 200, body: Data(), delay: .seconds(5))])
     let job = try rig.job()
     let task = try rig.transport.start(job, apiKey: "k")
-    // Deliver the system cancel the way URLSession would after a force-quit.
+    // Simulates system cancellation dispatch emitted by URLSession following application termination.
     let session = URLSession(configuration: .ephemeral)
     let fake = session.dataTask(with: URLRequest(url: GenerationHarness.flashURL))
     fake.taskDescription = TaskDescription.make(requestID: job.requestID, attempt: 1)
@@ -143,7 +143,7 @@ struct TransportTests {
     let rig = Rig()
     rig.respond([.init(status: 200, body: Data("{}".utf8))])
     _ = try rig.transport.start(try rig.job(), apiKey: "k")
-    // Nothing listens until the request has long finished.
+    // Verifies that transport stream events buffer successfully prior to consumer subscription.
     try await Task.sleep(for: .milliseconds(300))
     var it = rig.transport.events.makeAsyncIterator()
     #expect(Self.completion(await it.next())?.httpStatus == 200)
@@ -236,7 +236,7 @@ struct BackgroundConfigTests {
   @Test func reloadIgnoringCache() { #expect(c.requestCachePolicy == .reloadIgnoringLocalCacheData) }
   @Test func noURLCache() { #expect(c.urlCache == nil) }
   @Test func waitsForConnectivityNotSet() {
-    // Left at its default: background sessions ignore it and always wait.
+    // Preserves platform default: background URL sessions inherently wait for connectivity regardless of configuration.
     #expect(c.waitsForConnectivity == URLSessionConfiguration.background(withIdentifier: "x").waitsForConnectivity)
   }
 }

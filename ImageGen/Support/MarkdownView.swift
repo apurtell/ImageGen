@@ -1,12 +1,9 @@
 import SwiftUI
 
-/// Renders reply text as Markdown blocks (D§4.12). Inline styling comes from
-/// `AttributedString(markdown:)`; links open in Safari through the environment's `openURL`.
+/// Declarative renderer transforming parsed markdown AST blocks into stylized SwiftUI views.
 ///
-/// `MessageRow` uses it for reply text. It is a SwiftUI view, so it runs on the main actor (see the
-/// primer, *SwiftUI*). `init` parses the text with `MarkdownBlocks.parse`, and `body` only maps blocks
-/// to views. SwiftUI makes the view struct again each time the parent's `body` runs, so the parse
-/// runs again too; it is one linear pass, cheap for a reply.
+/// Dispatches block nodes to tailored view hierarchies for headings, paragraphs, indented list items,
+/// horizontally scrollable code containers, and blockquotes with inline attributed string styling.
 struct MarkdownView: View {
   let blocks: [MarkdownBlock]
 
@@ -20,7 +17,7 @@ struct MarkdownView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      // Blocks have no identity of their own. The index is enough: one text's blocks never reorder.
+      // Positionally identified block sequence.
       ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
         view(for: block)
       }
@@ -29,7 +26,7 @@ struct MarkdownView: View {
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
-  /// `@ViewBuilder` (a result builder) lets each `switch` case produce a different view type.
+  /// Generates the appropriate visual representation for an individual AST block node.
   @ViewBuilder
   private func view(for block: MarkdownBlock) -> some View {
     switch block {
@@ -48,7 +45,7 @@ struct MarkdownView: View {
       }
       .padding(.leading, CGFloat(depth) * 18)
     case .code(_, let text):
-      // Scrolls sideways, so long code lines keep their shape instead of wrapping.
+      // Horizontal scrolling container preserving monospace line indentation and wrapping.
       ScrollView(.horizontal, showsIndicators: false) {
         Text(text)
           .font(.system(.callout, design: .monospaced))
@@ -63,14 +60,14 @@ struct MarkdownView: View {
         Text(Self.inline(text))
           .foregroundStyle(.secondary)
       }
-      .fixedSize(horizontal: false, vertical: true)  // Full text height, so the bar matches the text.
+      .fixedSize(horizontal: false, vertical: true)
     }
   }
 
-  /// Inline Markdown only (emphasis, code, links), with line breaks kept.
+  /// Parses inline markdown styling while preserving whitespace and newline semantics.
   static func inline(_ text: String) -> AttributedString {
     let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-    return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)  // Invalid: plain.
+    return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
   }
 
   private static func headingFont(_ level: Int) -> Font {

@@ -1,24 +1,23 @@
 #if DEBUG
 import UIKit
 
-/// Draws the mock's images: a gradient whose hue comes from the prompt, with the prompt and the
-/// settings written on it.
+/// Generates deterministic synthetic test images featuring prompt-derived background gradients
+/// overlaid with descriptive diagnostic metadata and settings captions.
 ///
-/// Users: `MockGeminiURLProtocol` (the mock's responses), `DemoSeeder` (seeded images and uploads) and
-/// `DebugHooks` (the pasteboard image). The same prompt always gives the same hue, so screenshots are
-/// stable across runs. It uses UIKit drawing, which is safe off the main thread; the mock calls it on
-/// the URL loading thread. No state.
+/// Shared across debug subsystems including `MockGeminiURLProtocol`, `DemoSeeder`, and `DebugHooks`.
+/// Deterministic prompt hashing ensures visual consistency across automated UI runs and snapshots.
+/// Render operations rely on thread-safe `UIGraphicsImageRenderer` primitives, enabling direct
+/// invocation from background URL loading threads.
 enum MockImageRenderer {
-  /// JPEG bytes at exactly `width` × `height` pixels. The scale is 1, so points equal pixels and the
-  /// image size matches the `MockImageSizes` table.
+  /// Renders and compresses a synthetic image to JPEG format matching the specified pixel dimensions.
+  /// A display scale of 1.0 ensures a 1:1 mapping between coordinate points and output pixels.
   static func jpeg(width: Int, height: Int, prompt: String, caption: String) -> Data {
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
     format.opaque = true
     let size = CGSize(width: width, height: height)
     let renderer = UIGraphicsImageRenderer(size: size, format: format)
-    // A djb2-style string hash. `&*` and `&+` are Swift's wrapping operators: they ignore overflow
-    // instead of stopping the app, which plain `*` and `+` would do.
+    // Derives a deterministic gradient hue using a djb2-style string hash with wrapping arithmetic.
     let hue = CGFloat(abs(prompt.unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) }) % 360) / 360
     let image = renderer.image { ctx in
       let colors = [
@@ -27,7 +26,7 @@ enum MockImageRenderer {
       ] as CFArray
       let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])!
       ctx.cgContext.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
-      // The text scales with the short side, so it stays readable on 512 px and on 4K images.
+      // Proportional font sizing maintains legibility across diverse dimension scales.
       let fontSize = max(14, min(size.width, size.height) / 14)
       let attributes: [NSAttributedString.Key: Any] = [
         .font: UIFont.systemFont(ofSize: fontSize, weight: .semibold), .foregroundColor: UIColor.white,

@@ -8,7 +8,7 @@ import Testing
 struct EditAndResendTests {
   typealias Rig = ChatScreenModelTests.Rig
 
-  /// A user turn with real uploads: originals and prepared files, as a send records them.
+  /// Constructs a user turn containing staged original and preprocessed attachment fixtures.
   func uploadTurn(_ r: Rig, count: Int, edge: Int = 2048, prompt: String = "combine these") async throws -> SendRecord {
     let staged = try (0..<count).map { i in
       try r.s.stage(original: ImageFactory.png(width: 40, height: 30, seed: i), width: 40, height: 30, edge: edge, seed: i)
@@ -18,7 +18,7 @@ struct EditAndResendTests {
     return record
   }
 
-  /// Records a send of the tray as it stands (what GenerationService.send does with the draft).
+  /// Persists a generation send record reflecting current tray items and draft contents.
   func recordTray(_ r: Rig) async throws -> SendRecord {
     let staged = r.model.tray.compactMap(\.staged)
     return try await r.s.store.createSend(
@@ -54,7 +54,7 @@ struct EditAndResendTests {
     let resend = try await recordTray(r)
     let uploads = try await r.s.store.uploadSources(messageID: resend.userMessageID)
     #expect(uploads.map(\.snapshot.imageID) == order)
-    // The original turn keeps its own images.
+    // Verifies original turn message assets remain intact and unaffected by cloned resend operations.
     #expect(try await r.s.store.uploadSources(messageID: turn.userMessageID).count == 3)
   }
 
@@ -71,7 +71,7 @@ struct EditAndResendTests {
     let input = try #require(try await r.s.store.requestSnapshot(resend.requestID)?.inputs.first)
     #expect(input.preparedRelativePath.hasSuffix("-3072.jpg"))
 
-    // A clone made at the current setting is reused as is.
+    // Preprocessed files matching the current long edge setting are reused without redundant reprocessing.
     let current = try await uploadTurn(r, count: 1, edge: 3072, prompt: "current")
     r.model.tray = []
     r.model.composerText = ""
@@ -99,7 +99,7 @@ struct EditAndResendTests {
     #expect(r.model.pendingEdit?.userMessageID == turn.userMessageID)
     #expect(r.model.tray.isEmpty)
 
-    // Attachments alone are a draft too; confirming replaces them.
+    // Unsent staged attachments constitute draft state; confirmed replacement purges earlier staged files.
     r.model.composerText = ""
     await r.model.attach([.data(ImageFactory.png(seed: 9))], from: .photos)
     let draftItem = try #require(r.model.tray.first)

@@ -62,7 +62,7 @@ struct DataStoreTests {
     let a = try s.stage(seed: 1)
     let b = try s.stage(seed: 2)
     let c = try s.stage(seed: 3)
-    // The tray was reordered to b, c, a before sending.
+    // Verifies that attachment reordering in the tray is faithfully reflected in persistent records.
     let record = try await s.send(conv, prompt: "", attachments: [b, c, a])
     let history = try await s.store.selectorHistory(conv: conv)
     let user = try #require(history.first { $0.role == .user })
@@ -163,7 +163,7 @@ struct DataStoreTests {
     #expect(snap.taskIdentifier == 17)
     #expect(try await fresh.nonTerminalRequests().map(\.id) == [record.requestID])
 
-    // `.some(nil)` clears.
+    // Passing `.some(nil)` clears optional fields to null.
     try await fresh.updateRequest(record.requestID) {
       $0.taskIdentifier = .some(nil)
       $0.nextAttemptAt = .some(nil)
@@ -216,13 +216,13 @@ struct DataStoreTests {
     #expect(try await s.store.pinState(conv: conv).id == a.id)
     let pinned = try await s.send(conv, prompt: "use pin", selection: Selection(imageIDs: [a.id], reason: .pinned, clearPin: true))
     #expect(try await s.store.pinState(conv: conv).id == nil)
-    // The reused upload is recorded as its prepared file.
+    // Reused attachments reference existing preprocessed files in storage.
     let inputs = try #require(try await s.store.requestSnapshot(pinned.requestID)?.inputs)
     #expect(inputs.map(\.imageID) == [a.id])
     #expect(inputs.first?.preparedRelativePath.contains("/prepared/") == true)
     _ = first
 
-    // A pin whose asset is gone reports exists: false.
+    // Dangling pin references to missing assets report non-existence cleanly.
     let ghost = UUID()
     try await s.store.setPin(conv, imageID: ghost)
     #expect(try await s.store.pinState(conv: conv) == (ghost, false))
@@ -255,7 +255,7 @@ struct DataStoreTests {
     #expect(history.map(\.role) == [.user, .model, .model])
     #expect(history.map(\.sequence) == [0, 1, 2])
 
-    // A regenerate of the regenerate still finds the user message.
+    // Recursive regeneration resolves back to the original root user message.
     let again = try #require(try await s.store.createRegenerate(sourceRequestID: regen.requestID, activityActionID: ActionID(raw: "beef")))
     #expect(again.userMessageID == original.userMessageID)
   }
@@ -291,7 +291,7 @@ struct DataStoreTests {
     #expect(!FileManager.default.fileExists(atPath: s.files.requestDir(live.requestID).path))
     #expect(try await s.store.requestSnapshot(live.requestID) == nil)
     await #expect(throws: DataStoreError.conversationNotFound(conv)) { try await s.store.selectorHistory(conv: conv) }
-    // The other chat is untouched.
+    // Unrelated conversations and assets remain isolated and unmodified.
     #expect(try await s.store.imageSnapshots(messageID: kept.userMessageID).count == 1)
     #expect(FileManager.default.fileExists(atPath: s.files.conversationDir(other).path))
   }
@@ -308,7 +308,7 @@ struct DataStoreTests {
     #expect(history.map(\.role) == [.model])
     #expect(try await s.store.requestSnapshot(record.requestID) != nil)
 
-    // Deleting the reply also deletes its (live) request.
+    // Cascade deletion removes associated in-flight generation requests.
     let replyResult = try await s.store.deleteMessage(record.replyMessageID)
     #expect(replyResult.liveRequestIDs == [record.requestID])
     #expect(try await s.store.requestSnapshot(record.requestID) == nil)
@@ -368,21 +368,21 @@ struct DataStoreTests {
       let preparedClone = s.files.stagingDir.appendingPathComponent("prepared/\(clone.uuidString)-2048.jpg")
       try s.files.cloneItem(at: prepared, to: preparedClone)
       #expect(try Data(contentsOf: preparedClone) == (try Data(contentsOf: prepared)))
-      // The originals stay where they are.
+      // Cloned assets do not mutate or relocate original source files.
       #expect(FileManager.default.fileExists(atPath: original.path))
     }
   }
 }
 
 extension DataStore {
-  /// Test access to a request's stored fields.
+  /// Synchronous test accessor executing a closure within the model context for a target request.
   func withRequest<T: Sendable>(_ id: UUID, _ body: (GenerationRequest) -> T) throws -> T {
     let d = FetchDescriptor<GenerationRequest>(predicate: #Predicate { $0.id == id })
     guard let r = try modelContext.fetch(d).first else { throw DataStoreError.requestNotFound(id) }
     return body(r)
   }
 
-  /// Test access to a conversation's stored fields.
+  /// Synchronous test accessor executing a closure within the model context for a target conversation.
   func withConversation<T: Sendable>(_ id: UUID, _ body: (Conversation) -> T) throws -> T {
     let d = FetchDescriptor<Conversation>(predicate: #Predicate { $0.id == id })
     guard let c = try modelContext.fetch(d).first else { throw DataStoreError.conversationNotFound(id) }
