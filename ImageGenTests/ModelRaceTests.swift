@@ -105,6 +105,17 @@ struct ModelRaceTests {
     #expect(await r.probe.action(named: "Rename chat").isEmpty)
   }
 
+  @Test func quickPillChangesKeepBoth() async throws {
+    let r = try await Rig()
+    async let model: Void = r.model.setModel("gemini-3-pro-image-preview", from: .pill)
+    async let aspect: Void = r.model.setAspect(.r1x1, from: .pill)
+    _ = await (model, aspect)
+    let stored = try await r.s.store.overrides(r.conv)
+    #expect(stored.modelID == "gemini-3-pro-image-preview")
+    #expect(stored.aspectRatio == .r1x1)
+    #expect(r.model.overrides == stored)
+  }
+
   // MARK: Settings
 
   @Test func cancellingReplaceKeyDuringValidationKeepsTheOldKey() async throws {

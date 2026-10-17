@@ -317,46 +317,61 @@ final class ChatScreenModel {
   var defaultModelItemLabel: String { "Default (\(ModelCatalog.descriptor(for: ModelCatalog.defaultModelID).shortName))" }
 
   func setModel(_ id: String?, from source: SettingSource) async {
-    var o = overrides
-    o.modelID = id
-    await changeSetting("model", old: modelPillLabel, new: id.map { ModelCatalog.descriptor(for: $0).shortName }, to: o, from: source) {
+    await changeSetting(
+      "model", label: { $0.modelPillLabel }, new: id.map { ModelCatalog.descriptor(for: $0).shortName }, from: source,
+      change: { $0.modelID = id }
+    ) {
       ModelCatalog.descriptor(for: $0.modelID).shortName + ($0.coercions.contains { $0.field == .model } ? " (coerced)" : "")
     }
   }
 
   func setAspect(_ ratio: AspectRatio?, from source: SettingSource) async {
-    var o = overrides
-    o.aspectRatio = ratio
-    await changeSetting("aspect ratio", old: aspectPillLabel, new: ratio?.rawValue, to: o, from: source) {
+    await changeSetting(
+      "aspect ratio", label: { $0.aspectPillLabel }, new: ratio?.rawValue, from: source, change: { $0.aspectRatio = ratio }
+    ) {
       ($0.aspectRatio?.rawValue ?? "omitted") + ($0.coercions.contains { $0.field == .aspectRatio } ? " (coerced)" : "")
     }
   }
 
   func setSize(_ size: ImageSize?, from source: SettingSource) async {
-    var o = overrides
-    o.imageSize = size
-    await changeSetting("resolution", old: sizePillLabel, new: size?.rawValue, to: o, from: source) {
+    await changeSetting("resolution", label: { $0.sizePillLabel }, new: size?.rawValue, from: source, change: { $0.imageSize = size }) {
       ($0.imageSize?.rawValue ?? "omitted") + ($0.coercions.contains { $0.field == .imageSize } ? " (coerced)" : "")
     }
   }
 
-  /// Saves the chat's overrides and logs the change as one Chat setting change action. The model's
-  /// `overrides` changes only after the save succeeds, so the pills never show a value the store
-  /// doesn't hold. Changes affect only future sends (D§3.5).
+  /// The latest setting change's save; each change waits for the one before it.
+  @ObservationIgnored private var settingSave: Task<Void, Never>?
+
+  /// Saves one change to the chat's overrides and logs it as one Chat setting change action. The
+  /// model's `overrides` changes only after the save succeeds, so the pills never show a value the
+  /// store doesn't hold. Changes affect only future sends (D§3.5).
+  ///
+  /// Changes run one after another, and each applies `change` to the overrides as they are when its
+  /// turn comes. Two pills changed quickly (model, then aspect ratio) would otherwise both start from
+  /// the overrides before either save, and the second save would undo the first change.
   private func changeSetting(
-    _ name: String, old: String, new: String?, to o: ChatOverrides, from source: SettingSource,
-    effectiveText: (EffectiveSettings) -> String
+    _ name: String, label: @escaping @MainActor (ChatScreenModel) -> String, new: String?, from source: SettingSource,
+    change: @escaping @MainActor (inout ChatOverrides) -> Void,
+    effectiveText: @escaping @MainActor (EffectiveSettings) -> String
   ) async {
-    let action = services.log.begin(
-      "Chat setting change", origin: .user,
-      "chat \(Format.short(conversationID)) · \(name) \(old) → \(new ?? "Default") · \(source.rawValue)")
-    do {
-      try await services.store.setOverrides(conversationID, o)
-      overrides = o
-      services.log.result(action, .success, "saved · effective \(effectiveText(effective))")
-    } catch {
-      services.log.result(action, .failed, "\(error.localizedDescription)")
+    let previous = settingSave
+    let save = Task { @MainActor in
+      await previous?.value
+      var o = self.overrides
+      change(&o)
+      let action = self.services.log.begin(
+        "Chat setting change", origin: .user,
+        "chat \(Format.short(self.conversationID)) · \(name) \(label(self)) → \(new ?? "Default") · \(source.rawValue)")
+      do {
+        try await self.services.store.setOverrides(self.conversationID, o)
+        self.overrides = o
+        self.services.log.result(action, .success, "saved · effective \(effectiveText(self.effective))")
+      } catch {
+        self.services.log.result(action, .failed, "\(error.localizedDescription)")
+      }
     }
+    settingSave = save
+    await save.value
   }
 
   // MARK: Generation

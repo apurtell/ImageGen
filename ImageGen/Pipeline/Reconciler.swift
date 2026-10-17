@@ -102,6 +102,7 @@ struct Reconciler: Sendable {
       }
       return d
     }
+    let handedToService = Set(pending.compactMap(\.activityActionID))
     var closed = 0
     // Deepest first: a child gets its own Result before its parent's Result would close it as
     // "parent finished first".
@@ -112,6 +113,9 @@ struct Reconciler: Sendable {
         if entry.actionID == top { log.step(top, "following req \(Format.short(request)) after a relaunch") }
         continue
       }
+      // An action that follows a request this pass handed to the service (re-parsed, or finished by a
+      // completion meanwhile) got its Result from the service, not from here.
+      if handedToService.contains(top) { continue }
       log.result(entry.actionID, .interrupted, "\(Self.closedReason)")
       closed += 1
     }

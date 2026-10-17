@@ -722,6 +722,17 @@ struct GenerationServiceTests {
     #expect(h.notifications.value.count == 1)
   }
 
+  @Test func failedPostIsLoggedAsNotPosted() async throws {
+    struct Refused: Error {}
+    let poster = NotificationPoster(activity: AppActivity(isActive: false), isEnabled: { true }, deliver: { _ in throw Refused() })
+    let outcome = await poster.post(ReplyNotification(conversationID: UUID(), title: "t", body: "b"))
+    guard case .failed = outcome else {
+      Issue.record("expected a failed post, got \(outcome)")
+      return
+    }
+    #expect(outcome.logText.hasPrefix("notification not posted:"))
+  }
+
   @Test func notificationSuppressedWhenToggleOff() async throws {
     let h = try H(active: false)
     h.notifyEnabled.withLock { $0 = false }

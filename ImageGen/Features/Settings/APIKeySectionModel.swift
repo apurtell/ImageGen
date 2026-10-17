@@ -95,7 +95,12 @@ final class APIKeySectionModel {
     // Snapshot, then check again (see the primer, *Patterns used in this project*): after the
     // `await`, show the result only if this is still the newest run and the same key is saved.
     // When the run changed, the newer operation has already set `validation`; returning keeps it.
-    guard run == validationRun, (try? keyStore.read()).flatMap({ $0 }) == key else { return }  // try?: an unreadable key counts as changed.
+    guard run == validationRun else { return }
+    guard (try? keyStore.read()).flatMap({ $0 }) == key else {  // try?: an unreadable key counts as changed.
+      // The key changed some other way: this result describes no saved key, so show none.
+      validation = .idle
+      return
+    }
     switch result {
     case .valid(let count, let flashListed):
       validation = .valid(

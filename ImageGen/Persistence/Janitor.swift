@@ -92,9 +92,14 @@ struct Janitor: Sendable {
         guard info.isTerminal, now.timeIntervalSince(info.finishedOrCreatedAt) > thresholds.requestAge else { continue }
       }
       // The re-check reads the store again, after the earlier awaits. No record now means the
-      // request was deleted meanwhile, so its folder can go.
-      if let id, let current = try? await store.janitorRequestInfo(id) {  // A store error counts as no record.
-        guard current.isTerminal, now.timeIntervalSince(current.finishedOrCreatedAt) > thresholds.requestAge else { continue }
+      // request was deleted meanwhile, so its folder can go. A store error keeps the folder: when
+      // in doubt, keep; the next launch's pass tries again.
+      if let id {
+        let current: JanitorSnapshot.RequestInfo?
+        do { current = try await store.janitorRequestInfo(id) } catch { continue }
+        if let current {
+          guard current.isTerminal, now.timeIntervalSince(current.finishedOrCreatedAt) > thresholds.requestAge else { continue }
+        }
       }
       remove(dir, counting: \.requests, into: &report)
     }

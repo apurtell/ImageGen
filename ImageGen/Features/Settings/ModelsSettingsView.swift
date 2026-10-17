@@ -100,7 +100,10 @@ struct ModelsSettingsView: View {
   private func add() async {
     addError = nil
     switch await model.addCustomModel(newID) {
-    case .added: newID = ""
+    case .added:
+      newID = ""
+      // A second Return during the check may have left "Checking the previous model…".
+      addError = nil
     case .invalid(let why), .rejected(let why): addError = why
     }
   }

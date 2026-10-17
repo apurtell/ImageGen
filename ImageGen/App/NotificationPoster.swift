@@ -12,11 +12,14 @@ struct ReplyNotification: Sendable, Equatable {
 enum NotificationOutcome: Sendable, Equatable {
   case posted(body: String)
   case suppressed(reason: String)
+  /// The notification system refused the request (the reply is saved either way).
+  case failed(reason: String)
 
   var logText: String {
     switch self {
     case .posted(let body): "notification posted: \(body)"
     case .suppressed(let reason): "notification not posted: \(reason)"
+    case .failed(let reason): "notification not posted: \(reason)"
     }
   }
 }
@@ -36,14 +39,19 @@ protocol NotificationPosting: Sendable {
 struct NotificationPoster: NotificationPosting {
   let activity: AppActivity
   let isEnabled: @Sendable () -> Bool
-  let deliver: @Sendable (ReplyNotification) async -> Void
+  let deliver: @Sendable (ReplyNotification) async throws -> Void
 
   func post(_ n: ReplyNotification) async -> NotificationOutcome {
     guard isEnabled() else { return .suppressed(reason: "turned off in Settings") }
     if activity.isActive && activity.visibleConversationID == n.conversationID {
       return .suppressed(reason: "chat is on screen")
     }
-    await deliver(n)
+    do {
+      try await deliver(n)
+    } catch {
+      // Logged as not posted, so the log never claims a banner that didn't appear.
+      return .failed(reason: error.localizedDescription)
+    }
     return .posted(body: n.body)
   }
 
@@ -67,7 +75,8 @@ struct NotificationPoster: NotificationPosting {
         content.userInfo = ["conversationID": n.conversationID.uuidString]
         // `trigger: nil` delivers it now.
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        try? await UNUserNotificationCenter.current().add(request)  // A failed post loses only the banner; the reply is saved.
+        // A failure reaches `post`, which logs it; the reply is saved either way.
+        try await UNUserNotificationCenter.current().add(request)
       })
   }
 

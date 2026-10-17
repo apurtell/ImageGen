@@ -771,7 +771,11 @@ actor GenerationService: GenerationServicing {
   /// response after a relaunch.
   private func handleCompleted(_ c: TransportCompletion, reparse: Bool) async {
     let id = c.requestID
-    guard let snap = try? await d.store.requestSnapshot(id) else {
+    // A store error is not a deletion: keep the response and its folder. The record stays live, so
+    // the next launch's Reconciler re-parses the saved response (its `.complete` marker exists).
+    let found: RequestSnapshot?
+    do { found = try await d.store.requestSnapshot(id) } catch { return }
+    guard let snap = found else {
       // The record was deleted (with its chat or message): discard the result and its files (best
       // effort; the Janitor removes anything left).
       try? FileManager.default.removeItem(at: d.files.requestDir(id))
@@ -814,7 +818,9 @@ actor GenerationService: GenerationServicing {
 
     // Close the attempt.
     let (attemptOutcome, attemptSummary) = Self.describeAttempt(c, userCancelled: userCancelled.contains(id))
-    if !isLate && !reparse { closeAttempt(snap, action: action, outcome: attemptOutcome, attemptSummary) }
+    // A re-parse closes the earlier process's Attempt with its real outcome (by name), instead of
+    // leaving it to the log's "parent finished first" backstop.
+    if !isLate { closeAttempt(snap, action: action, outcome: attemptOutcome, attemptSummary) }
     if !d.activity.isActive && !reparse { d.log.step(action, "delivered while the app was in the background") }
 
     // Who cancelled (D§4.6): the user, if the Stop record has the request; otherwise the system

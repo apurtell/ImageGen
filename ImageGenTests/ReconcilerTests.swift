@@ -106,6 +106,10 @@ struct ReconcilerTests {
     #expect(try await h2.snapshot(id).state == .succeeded)
     let tree = ActivityLogQuery.tree(send, in: await h2.probe.entries())
     #expect(tree.entries.last?.outcome == .success)
+    // The earlier process's Attempt ends with its real outcome, and nothing else ends it again.
+    let attempt = tree.entries.filter { $0.name == "Attempt 1" && $0.kind == .result }
+    #expect(attempt.map(\.outcome) == [.success])
+    #expect(!tree.entries.contains { $0.message == "parent finished first" || $0.message == Reconciler.closedReason })
   }
 
   @Test func storedParsingStateReparsed() async throws {
