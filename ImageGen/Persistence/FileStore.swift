@@ -140,7 +140,7 @@ struct FileStore: Sendable {
   }
 
   /// Copies a file; on APFS this is a clone, so it costs no space until one side changes.
-  /// Edit & Resend uses it to copy a message's images into the tray. An existing file at the
+  /// Edit and Resend uses it to copy a message's images into the tray. An existing file at the
   /// destination is replaced.
   func cloneItem(at from: URL, to: URL) throws {
     try Self.createDirectory(to.deletingLastPathComponent())

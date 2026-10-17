@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A message's long-press menu (D§3.6). A user message offers Copy Prompt, Edit & Resend and
+/// A message's long-press menu (D§3.6). A user message offers Copy Prompt, Edit and Resend and
 /// Delete; a reply offers Copy Text, Regenerate, Info and Delete. Regenerate, Info and Delete are
 /// here for every reply with a request record, whatever its card shows. The menu only reports the
 /// choice.
@@ -20,7 +20,7 @@ struct MessageActionsMenu: View {
         Button("Copy Prompt", systemImage: "doc.on.doc") { onCopy(message.text, .prompt) }
       }
       // MARK: M6 items
-      Button("Edit & Resend", systemImage: "pencil", action: onEditAndResend)
+      Button("Edit and Resend", systemImage: "pencil", action: onEditAndResend)
       Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
     } else {
       if !message.text.isEmpty {

@@ -8,7 +8,7 @@ enum DataStoreError: Error, Equatable {
   case messageNotFound(UUID)
 }
 
-/// An upload of a user message, as Edit & Resend clones it (M6). It carries what a tray item needs.
+/// An upload of a user message, as Edit and Resend clones it (M6). It carries what a tray item needs.
 struct UploadSource: Sendable, Equatable {
   let snapshot: InputSnapshot
   let byteCount: Int
@@ -345,14 +345,14 @@ actor DataStore: ModelActor {
     }
   }
 
-  /// A message's images in ordinal order (Edit & Resend clones them, M6).
+  /// A message's images in ordinal order (Edit and Resend clones them, M6).
   func imageSnapshots(messageID: UUID) throws -> [InputSnapshot] {
     guard let message = try fetchMessage(messageID) else { throw DataStoreError.messageNotFound(messageID) }
     let conv = message.conversation?.id ?? UUID()
     return message.orderedImages.map { Self.inputSnapshot($0, conversationID: conv) }
   }
 
-  /// A user message's uploads in ordinal order, with what a tray item needs (Edit & Resend, M6).
+  /// A user message's uploads in ordinal order, with what a tray item needs (Edit and Resend, M6).
   func uploadSources(messageID: UUID) throws -> [UploadSource] {
     guard let message = try fetchMessage(messageID) else { throw DataStoreError.messageNotFound(messageID) }
     let conv = message.conversation?.id ?? UUID()

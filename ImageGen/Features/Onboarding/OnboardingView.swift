@@ -65,7 +65,7 @@ struct OnboardingView: View {
           } label: {
             HStack {
               if model.phase == .validating { ProgressView() }
-              Text("Validate & Save").frame(maxWidth: .infinity)
+              Text("Validate and Save").frame(maxWidth: .infinity)
             }
             .padding(.vertical, 6)
           }
@@ -82,7 +82,7 @@ struct OnboardingView: View {
     }
   }
 
-  /// Validate & Save, or Retry. The model's `phase` shows the outcome when nothing is saved.
+  /// Validate and Save, or Retry. The model's `phase` shows the outcome when nothing is saved.
   private func validate() async {
     guard await model.validateAndSave() else { return }
     // The key is saved. A missing Flash model is a warning, not a failure: the alert's OK finishes.

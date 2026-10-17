@@ -19,7 +19,7 @@ enum AttachSource: String, Sendable {
 
 // The composer tray's data and logic: the value types for tray items, and the `ChatScreenModel`
 // extension that imports, prepares, reorders and removes them, and clones a sent message's uploads
-// for Edit & Resend. The views in `Composer/` read the tray and call these methods.
+// for Edit and Resend. The views in `Composer/` read the tray and call these methods.
 //
 // Concurrency: the extension runs on the main actor, like the rest of `ChatScreenModel`. Each tray
 // item gets its own task for import and preparation, so items progress in parallel. The slow file
@@ -118,7 +118,7 @@ struct TrayItem: Identifiable, Equatable, Sendable {
 }
 
 /// How one tray item's import and preparation ended, for its parent's Result. `removed` means the
-/// user removed the item (or Edit & Resend cleared the tray) before the task ended.
+/// user removed the item (or Edit and Resend cleared the tray) before the task ended.
 enum TrayItemOutcome: Sendable, Equatable {
   case prepared
   case reused
@@ -127,7 +127,7 @@ enum TrayItemOutcome: Sendable, Equatable {
   case removed
 }
 
-/// Attachments (D§3.5, D§4.8) and Edit & Resend (D§3.6): the tray, its imports and preparation,
+/// Attachments (D§3.5, D§4.8) and Edit and Resend (D§3.6): the tray, its imports and preparation,
 /// the budget caption, and cloning a sent message's uploads.
 extension ChatScreenModel {
   /// The shared maximum of input images for every model (D§4.8 step 6).
@@ -289,7 +289,7 @@ extension ChatScreenModel {
   /// Prepares a staged original as a Prepare attachment sub-action (D§4.8 step 3). An item removed
   /// meanwhile ends it `cancelled`, and its files are deleted.
   ///
-  /// Both an Attach and an Edit & Resend re-prepare call this. Exactly one Result is written for
+  /// Both an Attach and an Edit and Resend re-prepare call this. Exactly one Result is written for
   /// the Begin below, on each path.
   private func prepare(_ id: UUID, original: URL, parent: ActionID, edge: Int, described: String) async -> TrayItemOutcome {
     let log = services.log
@@ -377,7 +377,7 @@ extension ChatScreenModel {
     services.log.result(action, .success, "done")
   }
 
-  /// Empties the tray, deleting its staged files (Edit & Resend replacing the draft).
+  /// Empties the tray, deleting its staged files (Edit and Resend replacing the draft).
   private func clearTray() {
     for item in tray {
       trayTasks[item.id]?.cancel()
@@ -387,9 +387,9 @@ extension ChatScreenModel {
     tray = []
   }
 
-  // MARK: Edit & Resend
+  // MARK: Edit and Resend
 
-  /// Edit & Resend (D§3.6): loads the message text into the composer, clones its uploads into the
+  /// Edit and Resend (D§3.6): loads the message text into the composer, clones its uploads into the
   /// tray (re-preparing a clone made at another max long edge or missing its prepared file),
   /// restores the pin when the request used `.pinned` or `.latest`, and focuses the text field.
   /// A non-empty draft (text or tray) asks first. The Result follows every re-prepare.
@@ -418,7 +418,7 @@ extension ChatScreenModel {
     let edge = services.settings.maxUploadLongEdge
     let log = services.log
     let action = log.begin(
-      "Edit & Resend", origin: .user,
+      "Edit and Resend", origin: .user,
       "message \(Format.short(userMessageID)) · text \(info.text.count) characters · attachments to clone \(sources.count) · pin to restore \(restorable.map { "img \(Format.short($0))" } ?? "none")"
     )
     // The tray is read here, after the reads above, so items attached during those awaits are

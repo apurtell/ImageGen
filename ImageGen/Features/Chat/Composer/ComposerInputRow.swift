@@ -8,7 +8,7 @@ struct ComposerInputRow: View {
   /// `@Bindable` gives `$model.composerText`, a two-way binding for the text field.
   @Bindable var model: ChatScreenModel
   /// The text field's focus. `@FocusState` can belong only to a view, so the two `.onChange`
-  /// handlers below copy it to and from `model.isTextFieldFocused` (set by Edit & Resend).
+  /// handlers below copy it to and from `model.isTextFieldFocused` (set by Edit and Resend).
   @FocusState private var focused: Bool
   @State private var showPhotos = false
   @State private var showFiles = false

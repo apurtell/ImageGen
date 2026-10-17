@@ -485,7 +485,7 @@ final class ActivityLog: Sendable {
   /// An Attempt matches by prefix, because its name carries its number ("Attempt 2").
   static func categoryName(for name: String) -> String {
     switch name {
-    case "Send", "Regenerate", "Retry", "Cancel", "Edit & Resend", "Prepare request", "Parse", "Reconcile",
+    case "Send", "Regenerate", "Retry", "Cancel", "Edit and Resend", "Prepare request", "Parse", "Reconcile",
       "Late completion":
       "pipeline"
     case _ where name.hasPrefix("Attempt"), "Background events", "Models refresh", "Validate key", "Add custom model":

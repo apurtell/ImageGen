@@ -130,7 +130,7 @@ enum ReplyPresentation: Equatable {
     case .inputMissing:
       return Card(
         symbol: "photo.badge.exclamationmark", title: "An input image was deleted",
-        message: "Edit & Resend with new images.", buttons: [])
+        message: "Edit and Resend with new images.", buttons: [])
     case .emptyParts:
       return Card(symbol: "exclamationmark.triangle", title: "Nothing to send", message: message, buttons: [])
     case nil:

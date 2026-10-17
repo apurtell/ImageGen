@@ -158,7 +158,7 @@ private struct ReplaceKeyForm: View {
       } label: {
         HStack {
           if model.phase == .validating { ProgressView() }
-          Text("Validate & Save")
+          Text("Validate and Save")
         }
       }
       .buttonStyle(.borderless)

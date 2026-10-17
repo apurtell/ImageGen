@@ -71,9 +71,9 @@ final class ChatScreenModel {
   var composerText = "" {
     didSet { if !loadingDraft { scheduleDraftSave() } }
   }
-  /// Mirrors the text field's focus both ways (see `ComposerInputRow`); Edit & Resend sets it.
+  /// Mirrors the text field's focus both ways (see `ComposerInputRow`); Edit and Resend sets it.
   var isTextFieldFocused = false
-  /// Edit & Resend over a non-empty draft waits for confirmation (D§3.6). Non-nil shows the
+  /// Edit and Resend over a non-empty draft waits for confirmation (D§3.6). Non-nil shows the
   /// "Replace the current draft?" dialog; the dialog's button calls `editAndResend` again with
   /// `confirmed: true`.
   var pendingEdit: (userMessageID: UUID, requestID: UUID?)?

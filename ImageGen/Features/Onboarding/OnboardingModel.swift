@@ -57,7 +57,7 @@ final class OnboardingModel {
   /// False while a check runs, so a second tap cannot start a second check.
   var canValidate: Bool { !trimmedKey.isEmpty && phase != .validating }
 
-  /// Validate & Save. Returns true once the key is saved.
+  /// Validate and Save. Returns true once the key is saved.
   @discardableResult
   /// `@discardableResult`: callers may ignore the return value without a compiler warning.
   func validateAndSave() async -> Bool {

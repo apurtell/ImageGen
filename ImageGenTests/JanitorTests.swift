@@ -61,7 +61,7 @@ struct JanitorTests {
 
   @Test func movedFilesLookNewToTheFreshnessTest() async throws {
     let f = try Fixture()
-    // A month-old file (Edit & Resend clones keep the original's date) moved in by a send.
+    // A month-old file (Edit and Resend clones keep the original's date) moved in by a send.
     let staged = f.s.files.stagingURL(UUID(), ext: "jpg")
     try f.write(staged, age: 30 * 86400)
     let placed = f.s.files.imageURL(conv: UUID(), image: UUID(), ext: "jpg")

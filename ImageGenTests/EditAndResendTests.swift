@@ -76,7 +76,7 @@ struct EditAndResendTests {
     r.model.tray = []
     r.model.composerText = ""
     await r.model.editAndResend(userMessageID: current.userMessageID)
-    let tree = await r.probe.action(named: "Edit & Resend")
+    let tree = await r.probe.action(named: "Edit and Resend")
     #expect(tree.last?.message == "clones made 1 · clones re-prepared 0 · pin not restored")
     #expect(!tree.contains { $0.name == "Prepare attachment" })
   }
@@ -131,7 +131,7 @@ struct EditAndResendTests {
     let turn = try await uploadTurn(r, count: 2, edge: 2048)
     r.settings.maxUploadLongEdge = 3072
     await r.model.editAndResend(userMessageID: turn.userMessageID)
-    let tree = await r.probe.action(named: "Edit & Resend")
+    let tree = await r.probe.action(named: "Edit and Resend")
     let begin = try #require(tree.first)
     #expect(begin.message == "message \(Format.short(turn.userMessageID)) · text 13 characters · attachments to clone 2 · pin to restore none")
     let children = tree.filter { $0.name == "Prepare attachment" && $0.kind == .begin }
