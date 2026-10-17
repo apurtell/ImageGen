@@ -258,12 +258,10 @@ final class AppEnvironment {
     }
     if isBackground {
       // iOS can suspend the app a few seconds after this. A short background-task assertion keeps it
-      // running while the log reaches the disk.
+      // running while the log reaches the disk: `end` flushes the log before it ends the assertion.
       let tasks = backgroundTasks
-      let log = self.log
       Task {
         let token = await tasks.begin(name: "log-flush") {}
-        await log.flush(timeout: .seconds(1))
         await tasks.end(token)
       }
     }

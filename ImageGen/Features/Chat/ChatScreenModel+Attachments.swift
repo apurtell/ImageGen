@@ -255,7 +255,8 @@ extension ChatScreenModel {
       let present = update(id, { $0.state = .failed(reason) })
       return present ? .importFailed(reason) : .removed
     }
-    // A removal during the staging is found at the next `update`, after the inspection.
+    // Removed during the staging: no inspection; the staged file goes.
+    guard tray.contains(where: { $0.id == id }) else { return Self.discard([staged]) }
     let info: ImageInfo
     do {
       info = try await Task.detached { try ImageInspector.inspect(url: staged) }.value
@@ -404,6 +405,9 @@ extension ChatScreenModel {
       return
     }
     pendingEdit = nil
+    // The draft as the user agreed to replace it (or found empty). The reads below await, and the
+    // user can type or attach meanwhile; that newer draft is not replaced without asking again.
+    let draftAtCheck = (text: trimmedText, items: tray.map(\.id))
     // These reads are snapshots from `DataStore`, not records: records can't leave the store's actor.
     let store = services.store
     guard let info = try? await store.messageInfo(userMessageID), info.role == .user else { return }  // try?: a deleted message has nothing to edit
@@ -415,14 +419,17 @@ extension ChatScreenModel {
       else { nil }
     // The pin is restored only if its image still exists.
     let restorable: UUID? = if let restore, (try? await store.imageFile(restore)) != nil { restore } else { nil }  // try?: a missing image is not restorable
+    if (trimmedText, tray.map(\.id)) != draftAtCheck, !trimmedText.isEmpty || !tray.isEmpty {
+      pendingEdit = (userMessageID, requestID)
+      return
+    }
     let edge = services.settings.maxUploadLongEdge
     let log = services.log
     let action = log.begin(
       "Edit and Resend", origin: .user,
       "message \(Format.short(userMessageID)) · text \(info.text.count) characters · attachments to clone \(sources.count) · pin to restore \(restorable.map { "img \(Format.short($0))" } ?? "none")"
     )
-    // The tray is read here, after the reads above, so items attached during those awaits are
-    // replaced too. The user confirmed replacing the draft (or it was empty).
+    // The draft is the one the user agreed to replace (checked just above, with no `await` since).
     if !tray.isEmpty {
       log.step(action, "replaced the draft: \(tray.count) tray item\(tray.count == 1 ? "" : "s") removed")
       clearTray()

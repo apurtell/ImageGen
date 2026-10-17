@@ -242,8 +242,8 @@ final class SettingsModel {
   func clearThumbnailCache() async {
     let files = services.files
     let dir = files.thumbnailsDir
-    // The size before, for the log. This walk of the folder runs on the main thread.
-    let before = FileStore.usage(of: dir)
+    // The size before, for the log. The walk of the folder runs off the main thread.
+    let before = await Task.detached(priority: .utility) { FileStore.usage(of: dir) }.value
     let action = log.begin(
       "Clear thumbnail cache", origin: .user, "\(before.count) files · \(Format.mb(Int(before.bytes)))")
     // Memory first, so that a view does not draw a cached thumbnail whose file is gone.

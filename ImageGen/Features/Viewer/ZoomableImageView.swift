@@ -12,12 +12,13 @@ import UIKit
 /// UIKit `ZoomingScrollView`. A UIKit scroll view is used because it gives real pinch zoom, zoom to a
 /// rectangle, and bounce; SwiftUI has no built-in view that does all of this. `ImageViewer` makes one per page.
 ///
-/// Concurrency: the views and the coordinator run on the main actor. Each page has one load task.
-/// It awaits the thumbnail from the `ThumbnailService` actor, then runs the full decode in a
-/// detached task on a background thread. When SwiftUI removes the page (for example when the pager
-/// is rebuilt or the viewer closes), `dismantleUIView` cancels the load task, so a late decode result is
-/// not shown. Cancellation does not stop a decode that has already started; it finishes, and its
-/// result is dropped.
+/// Concurrency: the views and the coordinator run on the main actor. Each page loads its thumbnail
+/// from the `ThumbnailService` actor at once. Only the current page asks for the full decode
+/// (D§3.7: one full-resolution decode at a time; the pages beside it keep their thumbnails). The
+/// `FullDecoder` actor runs the decodes one at a time, on its own thread, and skips a request whose
+/// page stopped being current while it waited. It keeps the last image it decoded, so the pager's
+/// rebuild after a rotation shows that image again without a second decode. A decode that has started
+/// can't be stopped; when its page is gone by then, its result is dropped.
 struct ZoomableImageView: UIViewRepresentable {
   let image: ViewerImage
   let thumbnails: ThumbnailService
@@ -26,12 +27,13 @@ struct ZoomableImageView: UIViewRepresentable {
   let onSingleTap: () -> Void
   let onDismiss: () -> Void
 
-  /// Called once per page. The load starts here, so it runs once for the life of the UIKit view.
+  /// Called once per page. The thumbnail load starts here, so it runs once for the life of the UIKit view.
   func makeUIView(context: Context) -> ZoomingScrollView {
     let view = ZoomingScrollView(pixelSize: CGSize(width: image.item.pixelWidth, height: image.item.pixelHeight))
     view.onSingleTap = onSingleTap
     view.onDismiss = onDismiss
-    context.coordinator.load(image, into: view, thumbnails: thumbnails)
+    context.coordinator.loadThumbnail(image, into: view, thumbnails: thumbnails)
+    context.coordinator.setCurrent(isCurrent, image, view: view)
     return view
   }
 
@@ -40,42 +42,80 @@ struct ZoomableImageView: UIViewRepresentable {
     view.onSingleTap = onSingleTap
     view.onDismiss = onDismiss
     if !isCurrent { view.resetZoom() }
+    context.coordinator.setCurrent(isCurrent, image, view: view)
   }
 
-  /// SwiftUI calls this when it removes the UIKit view. It is the one place that stops the load.
+  /// SwiftUI calls this when it removes the UIKit view. It is the one place that stops the loads.
   static func dismantleUIView(_ view: ZoomingScrollView, coordinator: Coordinator) {
-    coordinator.task?.cancel()
+    coordinator.thumbnailTask?.cancel()
+    coordinator.fullTask?.cancel()
   }
 
   func makeCoordinator() -> Coordinator { Coordinator() }
 
-  /// Holds the load task, so that `dismantleUIView` can cancel it.
+  /// Holds the page's load tasks, so that `dismantleUIView` and a change of page can cancel them.
   @MainActor
   final class Coordinator {
-    var task: Task<Void, Never>?
+    var thumbnailTask: Task<Void, Never>?
+    var fullTask: Task<Void, Never>?
+    private var hasFull = false
 
-    func load(_ image: ViewerImage, into view: ZoomingScrollView, thumbnails: ThumbnailService) {
-      // Plain `Sendable` values, copied before the tasks, so the detached task needs nothing from
-      // the main actor.
+    func loadThumbnail(_ image: ViewerImage, into view: ZoomingScrollView, thumbnails: ThumbnailService) {
+      // Plain `Sendable` values, copied before the task.
       let url = image.item.url
       let id = image.item.id
-      // `Task {}` inherits the main actor, so the `view?.show` calls run on the main thread.
+      // `Task {}` inherits the main actor, so `view?.show` runs on the main thread.
       // `[weak view]`: the task does not keep a removed page's view alive; `view?` is then nil.
-      task = Task { [weak view] in
-        if let thumb = await thumbnails.thumbnail(for: url, id: id, px: ThumbnailService.bubbleSize) {
-          view?.show(UIImage(cgImage: thumb), isFull: false)
-        }
-        // Checked before the costly decode, so a page removed during the thumbnail load decodes nothing.
-        guard !Task.isCancelled else { return }
-        // `Task.detached` has no actor, so the decode runs off the main thread. It is a separate
-        // task: cancelling this one does not cancel it.
-        let full = await Task.detached(priority: .userInitiated) { FullDecode.decode(url: url, id: id) }.value
-        // Checked again after the `await`: the page may be gone, and its result must not be shown.
+      thumbnailTask = Task { [weak view] in
+        guard let thumb = await thumbnails.thumbnail(for: url, id: id, px: ThumbnailService.bubbleSize) else { return }
+        view?.show(UIImage(cgImage: thumb), isFull: false)  // Ignored once the full image is showing.
+      }
+    }
+
+    /// The current page asks for its full decode once; a page that stops being current withdraws a
+    /// request that hasn't finished, so the decoder skips it if it hasn't started.
+    func setCurrent(_ isCurrent: Bool, _ image: ViewerImage, view: ZoomingScrollView) {
+      guard !hasFull else { return }
+      if !isCurrent {
+        fullTask?.cancel()
+        fullTask = nil
+        return
+      }
+      guard fullTask == nil else { return }
+      let url = image.item.url
+      let id = image.item.id
+      fullTask = Task { [weak view, weak self] in
+        let full = await FullDecoder.shared.decode(url: url, id: id)
+        // Checked after the `await`: the page may be gone or no longer current.
         guard !Task.isCancelled, let full else { return }
+        self?.hasFull = true
         view?.show(full, isFull: true)
       }
     }
   }
+}
+
+/// Runs the viewer's full-resolution decodes one at a time (D§3.7). An actor runs one call at a time
+/// on its own executor, off the main thread; `decode` never awaits, so each decode runs to the end
+/// before the next starts. It keeps the last decoded image, which the pager's rebuild after a
+/// rotation asks for again.
+actor FullDecoder {
+  static let shared = FullDecoder()
+  private var last: (id: UUID, image: UIImage)?
+
+  /// nil when the caller's task was cancelled while it waited (its page is gone or no longer
+  /// current), or when the file can't be decoded.
+  func decode(url: URL, id: UUID) -> UIImage? {
+    if let last, last.id == id { return last.image }
+    // The caller's cancellation is visible here: an actor method runs in the caller's task.
+    guard !Task.isCancelled else { return nil }
+    let image = FullDecode.decode(url: url, id: id)
+    last = image.map { (id, $0) }
+    return image
+  }
+
+  /// Releases the kept image (about 67 MB for a 4K image) when the viewer closes.
+  func clear() { last = nil }
 }
 
 /// The full-resolution decode (D§3.7), off the main actor, with the stored orientation applied.

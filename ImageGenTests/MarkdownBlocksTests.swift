@@ -34,6 +34,26 @@ struct MarkdownBlocksTests {
     ])
   }
 
+  @Test func looseListKeepsNestingAcrossBlankLines() {
+    let text = """
+      - fruit
+
+        - apple
+
+      - bread
+
+      Then a paragraph.
+
+        - indented again
+      """
+    #expect(MarkdownBlocks.parse(text) == [
+      .listItem(depth: 0, number: nil, text: "fruit"), .listItem(depth: 1, number: nil, text: "apple"),
+      .listItem(depth: 0, number: nil, text: "bread"), .paragraph("Then a paragraph."),
+      // A paragraph ended the list, so a new list starts at depth 0 whatever its indent.
+      .listItem(depth: 0, number: nil, text: "indented again"),
+    ])
+  }
+
   @Test func listContinuationLine() {
     #expect(MarkdownBlocks.parse("* item one\n  continues here\n* item two") == [
       .listItem(depth: 0, number: nil, text: "item one\ncontinues here"), .listItem(depth: 0, number: nil, text: "item two"),

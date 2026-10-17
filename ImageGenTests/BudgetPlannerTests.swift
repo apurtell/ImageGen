@@ -92,7 +92,7 @@ struct BudgetPlannerTests {
     #expect(shrunk.url.pathExtension == "jpg")
     #expect((shrunk.pixelWidth, shrunk.pixelHeight) == (1536, 1152))
     #expect(!(try ImageInspector.inspect(url: shrunk.url)).hasAlpha)
-    #expect(shrunk.url.lastPathComponent == prepared.url.lastPathComponent.replacingOccurrences(of: "-2048.png", with: "-1536.jpg"))
+    #expect(shrunk.url.lastPathComponent == prepared.url.lastPathComponent.replacingOccurrences(of: "-2048.png", with: "-s1536.jpg"))
     #expect(shrunk.longEdgeSetting == 2048)
   }
 }

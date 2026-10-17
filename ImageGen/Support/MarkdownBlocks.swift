@@ -48,11 +48,11 @@ enum MarkdownBlocks {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
       i += 1
 
-      // A blank line also ends the list, so nesting starts again after it.
+      // A blank line ends a paragraph, but not a list: in a "loose" list, items are separated by
+      // blank lines and keep their nesting. Any other kind of block ends the list (below).
       if trimmed.isEmpty {
         flushAll()
         lastWasListItem = false
-        listIndents = []
         continue
       }
 
@@ -61,6 +61,7 @@ enum MarkdownBlocks {
       if let fence = fenceMarker(trimmed) {
         flushAll()
         lastWasListItem = false
+        listIndents = []
         let info = trimmed.dropFirst(fence.count).trimmingCharacters(in: .whitespaces)
         var body: [String] = []
         while i < lines.count {
@@ -76,6 +77,7 @@ enum MarkdownBlocks {
       if let (level, content) = heading(line) {
         flushAll()
         lastWasListItem = false
+        listIndents = []
         blocks.append(.heading(level: level, text: stripImages(content)))
         continue
       }
@@ -83,6 +85,7 @@ enum MarkdownBlocks {
       if let content = quoteContent(line) {
         flushParagraph()
         lastWasListItem = false
+        listIndents = []
         quote.append(content)
         continue
       }
@@ -107,6 +110,7 @@ enum MarkdownBlocks {
         quote.append(trimmed)
         continue
       }
+      listIndents = []
       paragraph.append(trimmed)
     }
     flushAll()

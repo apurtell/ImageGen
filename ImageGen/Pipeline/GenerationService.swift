@@ -367,7 +367,10 @@ actor GenerationService: GenerationServicing {
     preparing?.cancel()
     // Also when preparing: its task may have been created a moment ago.
     await d.transport.cancel(requestID: requestID)
-    if let action { d.log.result(action, .success, preparing != nil ? "preparation cancelled" : "task cancelled") }
+    // A request still `preparing` counts as a preparation even before it registers here (a Stop in
+    // the moment between its record and its registration).
+    let wasPreparing = preparing != nil || snap?.state == .preparing
+    if let action { d.log.result(action, .success, wasPreparing ? "preparation cancelled" : "task cancelled") }
   }
 
   /// Re-creates in the foreground every retry task created while the app was inactive, which the

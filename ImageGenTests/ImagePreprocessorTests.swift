@@ -84,6 +84,41 @@ struct ImagePreprocessorTests {
     #expect(p.longEdgeSetting == edge)
   }
 
+  @Test func shrunkFileSurvivesALaterPrepareAtTheSameEdge() async throws {
+    let root = TestFileRoot()
+    let source = root.file("big.jpg")
+    try ImagePreprocessor.write(ImageFactory.cgImage(width: 4000, height: 3000, seed: 7), to: source, type: .jpeg, quality: 0.8)
+    let id = UUID()
+    let dir = root.directory("prepared")
+    let prepared = try await ImagePreprocessor.prepare(source: source, maxLongEdge: 2048, destinationDir: dir, id: id)
+    // The budget step shrinks it to a 1536 px long edge; an older request records that file.
+    let shrunk = try await ImagePreprocessor.shrink(prepared, factor: 0.75)
+    #expect(max(shrunk.pixelWidth, shrunk.pixelHeight) == 1536)
+    #expect(shrunk.url.lastPathComponent == "\(id.uuidString)-s1536.jpg")
+    let before = try Data(contentsOf: shrunk.url)
+    // Later the max long edge is set to 1536 and the same upload is prepared again.
+    let again = try await ImagePreprocessor.prepare(source: source, maxLongEdge: 1536, destinationDir: dir, id: id)
+    #expect(again.url != shrunk.url)
+    #expect(try Data(contentsOf: shrunk.url) == before)
+    // A shrink of a shrunk file is named from the same stem.
+    let twice = try await ImagePreprocessor.shrink(shrunk, factor: 0.75)
+    #expect(twice.url.lastPathComponent == "\(id.uuidString)-s1152.jpg")
+    #expect(ImagePreprocessor.stem(of: twice.url) == id.uuidString)
+  }
+
+  @Test func cancelledPreparationWritesNothing() async throws {
+    let root = TestFileRoot()
+    let dir = root.directory("prepared")
+    let result = await Task {
+      // The tray item was removed: its task is cancelled before the work gets far.
+      withUnsafeCurrentTask { $0?.cancel() }
+      return try await ImagePreprocessor.prepare(
+        source: try FixtureLoader.url("Images/sample.heic"), maxLongEdge: 2048, destinationDir: dir, id: UUID())
+    }.result
+    #expect(throws: CancellationError.self) { try result.get() }
+    #expect((try FileManager.default.contentsOfDirectory(atPath: dir.path)).isEmpty)
+  }
+
   @Test func neverUpscales() async throws {
     let root = TestFileRoot()
     let p = try await prepare(try FixtureLoader.url("Images/tiny_16x9.png"), edge: 4096, root: root)

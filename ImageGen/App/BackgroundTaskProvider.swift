@@ -82,11 +82,4 @@ final class UIApplicationBackgroundTaskProvider: BackgroundTaskProviding {
     guard ended.withLock({ $0.insert(id).inserted }) else { return }
     UIApplication.shared.endBackgroundTask(UIBackgroundTaskIdentifier(rawValue: id))
   }
-
-  /// Flushes the log under a short assertion of its own, when the scene goes to the background.
-  /// (`end` does the flush.)
-  func flushInBackground() async {
-    let token = await begin(name: "log-flush") {}
-    await end(token)
-  }
 }

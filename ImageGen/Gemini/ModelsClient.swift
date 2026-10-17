@@ -95,8 +95,10 @@ struct ModelsClient: Sendable {
     let response: URLResponse
     do {
       (data, response) = try await session.data(for: request)
+    } catch let error as URLError where error.code == .cancelled {
+      // The caller's task was cancelled: that's not a network failure, so it isn't reported as one.
+      throw CancellationError()
     } catch let error as URLError {
-      // A cancelled call also arrives here, as `URLError.cancelled`.
       throw ModelsClientError.unreachable(Format.urlError(error.code))
     }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0

@@ -37,7 +37,11 @@ enum ImagePreprocessor {
     // Output type (D§4.8): HEIC/HEIF is always JPEG; a PNG or WebP with alpha stays PNG; all else is JPEG.
     let heif = isHEIF(info.utType)
     let keepPNG = !heif && info.hasAlpha && (info.utType == UTType.png.identifier || info.utType == UTType.webP.identifier)
+    // Cancellation is checked between the steps (a tray item removed meanwhile cancels its task):
+    // a step that has started runs to its end, but nothing more is decoded, encoded or written.
+    try Task.checkCancellation()
     let image = try downscale(src, to: min(maxLongEdge, info.longEdge))
+    try Task.checkCancellation()
     let url = destinationDir.appendingPathComponent("\(id.uuidString)-\(maxLongEdge).\(keepPNG ? "png" : "jpg")")
     if keepPNG {
       try write(image, to: url, type: .png, quality: nil)
@@ -62,8 +66,11 @@ enum ImagePreprocessor {
     let edge = max(1, Int((Double(info.longEdge) * factor).rounded(.down)))
     let image = try downscale(src, to: edge)
     let keepPNG = !flattenAlpha && input.mimeType == "image/png"
+    // `-s<edge>`, not `-<edge>`: `prepare` names its files `<id>-<setting>` in the same folder, so a
+    // later setting equal to this edge would otherwise overwrite this file, which an older request's
+    // record may point to (Regenerate would then send different bytes).
     let url = input.url.deletingLastPathComponent().appendingPathComponent(
-      "\(stem(of: input.url))-\(edge).\(keepPNG ? "png" : "jpg")")
+      "\(stem(of: input.url))-s\(edge).\(keepPNG ? "png" : "jpg")")
     if keepPNG {
       try write(image, to: url, type: .png, quality: nil)
     } else {
@@ -146,12 +153,13 @@ enum ImagePreprocessor {
       longEdgeSetting: longEdgeSetting)
   }
 
-  /// `<id>-2048.jpg` → `<id>`; anything else keeps its name without the extension.
-  private static func stem(of url: URL) -> String {
+  /// `<id>-2048.jpg` (prepared) or `<id>-s1536.jpg` (shrunk) → `<id>`; anything else keeps its name
+  /// without the extension. A shrink of a shrunk file is named from the same stem.
+  static func stem(of url: URL) -> String {
     let name = url.deletingPathExtension().lastPathComponent
-    if let dash = name.lastIndex(of: "-"), Int(name[name.index(after: dash)...]) != nil {
-      return String(name[..<dash])
-    }
-    return name
+    guard let dash = name.lastIndex(of: "-") else { return name }
+    var suffix = name[name.index(after: dash)...]
+    if suffix.first == "s" { suffix = suffix.dropFirst() }
+    return !suffix.isEmpty && Int(suffix) != nil ? String(name[..<dash]) : name
   }
 }

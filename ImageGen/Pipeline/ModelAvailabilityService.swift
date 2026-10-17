@@ -166,6 +166,7 @@ final class ModelAvailabilityService {
     case ModelsClientError.notFound(let message): "not found: \(message)"
     case ModelsClientError.http(let status, let message): "HTTP \(status): \(message)"
     case ModelsClientError.malformed: "unexpected response"
+    case is CancellationError: "cancelled"
     default: error.localizedDescription
     }
   }

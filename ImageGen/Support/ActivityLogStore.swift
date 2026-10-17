@@ -47,6 +47,9 @@ actor ActivityLogStore {
   private var handle: FileHandle?
   /// The offset where the next line goes: the file's length while `handle` is open.
   private var fileSize: UInt64 = 0
+  /// After a failed rotation (a full disk, for example), the size at which to try again: another
+  /// quarter of the limit later, not on every write, because each try reads and rewrites the file.
+  private var rotationRetryAbove: UInt64 = 0
   /// The number of the newest line. Numbers start at 1 when the file loads, so they are valid only in
   /// this process. Rotation and Clear keep the numbers of the lines they keep.
   private var lastSequence = 0
@@ -200,7 +203,7 @@ actor ActivityLogStore {
     index(entry, sequence: lastSequence, offset: offset)
     mirror(entry, rendered.publicText, rendered.privateText)
     // After the index update, so the rewrite keeps this entry and knows its action's state.
-    if fileSize > UInt64(limits.rotateAbove) { rotate() }
+    if fileSize > max(UInt64(limits.rotateAbove), rotationRetryAbove) { rotate() }
   }
 
   /// Records one line in the sparse table and the action index. `write` and `rebuild` both use it,
@@ -403,7 +406,11 @@ actor ActivityLogStore {
     }
     let openIDs = Set(records.values.filter(\.isOpen).map(\.id))
     let openBegins = lines[..<windowStart].filter { $0.entry.kind == .begin && openIDs.contains($0.entry.actionID) }
-    replaceFile(with: Array(openBegins) + Array(lines[windowStart...]), appending: [])
+    if replaceFile(with: Array(openBegins) + Array(lines[windowStart...]), appending: []) {
+      rotationRetryAbove = 0
+    } else {
+      rotationRetryAbove = fileSize + UInt64(limits.rotateAbove / 4)
+    }
   }
 
   /// Handles the Clear control message. The stream is ordered, so every entry sent before it is
@@ -436,7 +443,9 @@ actor ActivityLogStore {
   /// class when it is created. Backup exclusion is set again after the swap, because the flag doesn't
   /// survive a replace (D§4.13 Storage and writing). On failure the old file and index stay. The
   /// numbers taken for `appending` are then unused, and `index` records the gap at the next write.
-  private func replaceFile(with kept: [Line], appending: [ActivityEntry]) {
+  /// Returns false when the file couldn't be replaced (the old file then stays, unchanged).
+  @discardableResult
+  private func replaceFile(with kept: [Line], appending: [ActivityEntry]) -> Bool {
     let temp = fileURL.deletingLastPathComponent().appendingPathComponent(".activity-\(UUID().uuidString).tmp")
     var data = Data()
     var lines: [Line] = []
@@ -467,12 +476,13 @@ actor ActivityLogStore {
       try? FileManager.default.removeItem(at: temp)
       Log.store.error("activity log: rewrite failed: \(error.localizedDescription, privacy: .public)")
       openForAppend()
-      return
+      return false
     }
     rebuild(from: lines)
     openForAppend()
     // Mirror the appended entries only once they are in the file, so the mirror matches the file.
     for (entry, _) in appended { mirror(entry, entry.message, "") }
+    return true
   }
 
   // MARK: Files

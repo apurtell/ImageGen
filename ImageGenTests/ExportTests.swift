@@ -99,13 +99,13 @@ struct ExportTests {
     #expect(ImageFile.utType(forMime: "image/webp") == .webP)
   }
 
-  @Test func pasteboardHoldsOriginalBytesOnlyOneType() throws {
+  @Test func pasteboardHoldsOriginalBytesOnlyOneType() async throws {
     let probe = ActivityLogProbe(root: TestFileRoot())
     let pasteboard = UIPasteboard.withUniqueName()
     defer { UIPasteboard.remove(withName: pasteboard.name) }
     let data = ImageFactory.png()
     let item = try exportItem(in: probe.root, data: data, mime: "image/png", ext: "png")
-    #expect(PasteboardWriter(pasteboard: pasteboard, log: probe.log).copy(item))
+    #expect(await PasteboardWriter(pasteboard: pasteboard, log: probe.log).copy(item))
     #expect(pasteboard.numberOfItems == 1)
     #expect(pasteboard.types == ["public.png"])
     #expect(pasteboard.data(forPasteboardType: "public.png") == data)
@@ -164,7 +164,7 @@ struct ExportTests {
     let data = ImageFactory.jpeg()
     let item = try exportItem(in: probe.root, data: data, mime: "image/jpeg", ext: "jpg")
     let model = ImageExportModel(log: probe.log, photoLibrary: FakePhotoLibrary(status: .authorized), pasteboard: pasteboard)
-    model.copy(item)
+    await model.copy(item)
     #expect(pasteboard.data(forPasteboardType: "public.jpeg") == data)
     let tree = await probe.action(named: "Copy")
     #expect(tree.first?.message == "image · \(item.logDescription)")

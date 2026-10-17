@@ -57,7 +57,7 @@ final class ImageExportModel {
     case .photos: Task { await saveToPhotos(item) }
     case .files: saveToFiles(item)
     case .share: beginShare(item)
-    case .copy: copy(item)
+    case .copy: Task { await self.copy(item) }
     }
   }
 
@@ -149,8 +149,8 @@ final class ImageExportModel {
   // MARK: Copy
 
   /// `PasteboardWriter` logs the Copy and returns whether it succeeded.
-  func copy(_ item: ExportItem) {
-    if pasteboard.copy(item) { show("Copied") }
+  func copy(_ item: ExportItem) async {
+    if await pasteboard.copy(item) { show("Copied") }
   }
 
   // MARK: Toast

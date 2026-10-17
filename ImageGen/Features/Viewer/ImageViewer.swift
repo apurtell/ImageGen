@@ -69,7 +69,8 @@ struct ImageViewer: View {
         // A page TabView keeps a stale container frame after a live rotation (a 10 pt strip on
         // iOS 26.5), so it's rebuilt for each size; the selection is kept in `current`.
         // A new `.id` makes SwiftUI discard the old pages and build new ones. Each old page's
-        // decode task is cancelled (`dismantleUIView`), and each new page loads its image again.
+        // load is cancelled (`dismantleUIView`); the new current page gets its full image from the
+        // `FullDecoder`, which kept it, so a rotation doesn't decode it again.
         .id("\(Int(geo.size.width))x\(Int(geo.size.height))")
     }
     .ignoresSafeArea()
@@ -97,6 +98,8 @@ struct ImageViewer: View {
     // viewer goes away.
     .modifier(ImageExportPresenter(model: exporter, toastOffset: 64))
     .sheet(item: $info) { ViewerInfoSheet(image: $0) }
+    // The decoder's kept image is for this viewer only; closing the viewer releases it.
+    .onDisappear { Task { await FullDecoder.shared.clear() } }
     .preferredColorScheme(.dark)
   }
 
