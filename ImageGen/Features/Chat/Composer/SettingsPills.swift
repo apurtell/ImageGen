@@ -7,6 +7,7 @@ import SwiftUI
 /// can differ from the override when the model coerces it.
 struct SettingsPills: View {
   let model: ChatScreenModel
+  @Environment(\.colorScheme) private var colorScheme
 
   var body: some View {
     // Wraps whole pills to a new row at large text sizes, instead of breaking their labels.
@@ -61,16 +62,20 @@ struct SettingsPills: View {
       .accessibilityLabel("Resolution \(model.sizePillLabel)")
       .menuOrder(.fixed)
     }
+    // A menu's label takes the button tint (the accent color) over its own foreground style; the
+    // primary tint makes the labels black on light and white on dark, legible over any image.
+    .tint(.primary)
   }
 
   private func pill(_ text: String, dot: Bool, caution: Bool) -> some View {
     HStack(spacing: 4) {
       if dot { Circle().fill(Color.accentColor).frame(width: 6, height: 6) }
-      Text(text).font(.footnote.weight(.medium)).lineLimit(1).fixedSize()
+      // Black on light, white on dark (`.primary`), not the accent color: legible over any image.
+      Text(text).font(.footnote.weight(.semibold)).foregroundStyle(.primary).lineLimit(1).fixedSize()
       if caution { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange) }
-      Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
+      Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.primary)
     }
     .padding(.horizontal, 10).padding(.vertical, 6)
-    .glassEffect(.regular.interactive(), in: .capsule)
+    .glassEffect(.composerControl(colorScheme).interactive(), in: .capsule)
   }
 }

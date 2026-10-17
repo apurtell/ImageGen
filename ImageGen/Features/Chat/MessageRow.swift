@@ -48,13 +48,26 @@ struct MessageRow: View {
       }
     }
     .contextMenu {
-      MessageActionsMenu(
-        message: message, request: request,
-        regenerateUnavailableReason: request.flatMap(actions.regenerateUnavailableReason),
-        onCopy: actions.copy, onRegenerate: { if let r = request { actions.regenerate(r.id) } },
-        onInfo: { if let r = request { actions.showInfo(r) } }, onEditAndResend: { actions.editAndResend(message.id) },
-        onDelete: { actions.deleteMessage(message) })
+      MessageSection(message: message, request: request, actions: actions)
     }
+  }
+}
+
+/// The message's own actions (D§3.6, "Message section"). The row's long-press menu shows them, and so
+/// does each image's menu, below the image actions: an image's menu replaces the row's (the inner
+/// `contextMenu` wins), so without this an image-only reply would offer no Regenerate, Info or Delete.
+struct MessageSection: View {
+  let message: Message
+  let request: GenerationRequest?
+  let actions: MessageRowActions
+
+  var body: some View {
+    MessageActionsMenu(
+      message: message, request: request,
+      regenerateUnavailableReason: request.flatMap(actions.regenerateUnavailableReason),
+      onCopy: actions.copy, onRegenerate: { if let r = request { actions.regenerate(r.id) } },
+      onInfo: { if let r = request { actions.showInfo(r) } }, onEditAndResend: { actions.editAndResend(message.id) },
+      onDelete: { actions.deleteMessage(message) })
   }
 }
 
@@ -99,6 +112,7 @@ struct UserBubble: View {
                   ImageContextMenu(
                 onEditFromHere: { actions.pin(asset.id) }, onExport: { actions.export(asset, $0) },
                 onView: { actions.view(asset.id) })
+                  Section { MessageSection(message: message, request: request, actions: actions) }
                 }
             }
           }
@@ -214,6 +228,7 @@ struct ModelReplyView: View {
               ImageContextMenu(
                 onEditFromHere: { actions.pin(asset.id) }, onExport: { actions.export(asset, $0) },
                 onView: { actions.view(asset.id) })
+              Section { MessageSection(message: message, request: request, actions: actions) }
             } preview: {
               ImageThumbnailView(asset: asset)
             }

@@ -6,6 +6,18 @@ import SwiftUI
 /// its methods, and keep only presentation state of their own (which picker is open, focus). A
 /// plain `let model` is enough to read an `@Observable` object and redraw on its changes; only a
 /// view that needs a two-way `$` binding to a property uses `@Bindable` (`ComposerInputRow`).
+extension Glass {
+  /// Glass for the composer's small controls (pills, chips), tinted nearly solid white (light
+  /// appearance) or black (dark), so their labels stay legible over an image scrolling under the
+  /// composer (M10: clear glass was hard to read there). Opacity can't do this: it has no effect on
+  /// glass inside a `GlassEffectContainer`, so the tint makes the glass itself more solid. The caller
+  /// passes its `colorScheme`: a dynamic system color in a glass tint keeps the appearance it had when
+  /// first drawn, so it wouldn't follow a switch between light and dark.
+  static func composerControl(_ scheme: ColorScheme) -> Glass {
+    .regular.tint(scheme == .dark ? Color.black.opacity(0.8) : Color.white.opacity(0.85))
+  }
+}
+
 struct ComposerView: View {
   let model: ChatScreenModel
 

@@ -8,6 +8,7 @@ import SwiftUI
 struct ContextChips: View {
   let model: ChatScreenModel
   @Environment(\.modelContext) private var context
+  @Environment(\.colorScheme) private var colorScheme
 
   private func asset(_ id: UUID?) -> ImageAsset? {
     guard let id else { return nil }
@@ -31,14 +32,14 @@ struct ContextChips: View {
       }
       .padding(.horizontal, 10).padding(.vertical, 6)
       // Dimmed through its content: opacity on a glass view inside a GlassEffectContainer has no effect.
-      .glassEffect()
+      .glassEffect(.composerControl(colorScheme))
     } else if model.showsImplicitChip {
       HStack(spacing: 8) {
         SquareThumbnail(asset: asset(model.implicitBaseID), size: 28, corner: 6)
         Text("Editing latest image").font(.footnote)
       }
       .padding(.horizontal, 10).padding(.vertical, 6)
-      .glassEffect()
+      .glassEffect(.composerControl(colorScheme))
       .accessibilityElement(children: .combine)
     }
   }

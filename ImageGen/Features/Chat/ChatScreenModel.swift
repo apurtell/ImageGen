@@ -36,6 +36,7 @@ struct ChatServices {
 enum SettingSource: String {
   case pill
   case chatSettings = "Chat settings…"
+  case editFromHere = "Edit from here"
 }
 
 /// The chat screen's model (D§3.4, D§3.5): composer text, pills, chips, send enablement and every
@@ -95,6 +96,8 @@ final class ChatScreenModel {
   /// Bumped on each send (haptic impact) and on each reply completed while visible (haptic success).
   /// They are counters, not flags, because `.sensoryFeedback` plays on every change of its trigger.
   private(set) var sendCount = 0
+  /// Bumped on each Edit from here (haptic selection, D§3.6).
+  private(set) var pinCount = 0
   private(set) var completedWhileVisible = 0
   /// The attachment tray, in send order (D§3.5); its files live in `Staging/`. `TrayItem` is a
   /// struct, so a view always draws a consistent copy; only this model changes the array.
@@ -507,8 +510,30 @@ final class ChatScreenModel {
       services.log.result(action, .success, "done")
     } catch {
       services.log.result(action, .failed, "\(error.localizedDescription)")
+      await reload()
+      return
     }
+    pinCount += 1
+    await adoptSettings(ofImage: imageID)
     await reload()
+    // The chip and pills change at the bottom of the screen, often far from the image the user
+    // long-pressed; the toast says what happened where the user is looking at the composer.
+    showToast("Editing from this image · \(aspectPillLabel) · \(sizePillLabel)")
+  }
+
+  /// Edit from here continues from an image as it was made: the aspect ratio and resolution pills
+  /// take the values its request recorded (D§3.6). A value equal to the global default becomes
+  /// Default (no override). The model pill stays. An upload has no recorded values and changes nothing.
+  private func adoptSettings(ofImage imageID: UUID) async {
+    guard let made = try? await services.store.generatedSettings(ofImage: imageID) else { return }  // try?: a failed read leaves the pills as they are.
+    if let ratio = made.aspectRatio {
+      let override = ratio == defaults.aspectRatio ? nil : ratio
+      if override != overrides.aspectRatio { await setAspect(override, from: .editFromHere) }
+    }
+    if let size = made.imageSize {
+      let override = size == defaults.imageSize ? nil : size
+      if override != overrides.imageSize { await setSize(override, from: .editFromHere) }
+    }
   }
 
   func unpin() async {

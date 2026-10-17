@@ -203,6 +203,28 @@ struct ChatScreenModelTests {
     #expect(selection.imageIDs == [image])
   }
 
+  @Test func editFromHereTakesTheImagesAspectAndSize() async throws {
+    let r = try await Rig()
+    // The image was made at 16:9 · 2K (the global defaults); the chat has since moved to 9:16 · 4K.
+    let (_, image) = try await r.imageTurn()
+    await r.model.setAspect(.r9x16, from: .pill)
+    await r.model.setSize(.s4K, from: .pill)
+    await r.model.pin(image)
+    #expect(r.model.pinnedImageID == image)
+    #expect(r.model.overrides.aspectRatio == nil && r.model.overrides.imageSize == nil)
+    #expect(r.model.aspectPillLabel == "16:9" && r.model.sizePillLabel == "2K")
+    let changes = await r.probe.entries().filter { $0.name == "Chat setting change" && $0.kind == .begin }
+    #expect(changes.filter { $0.message.hasSuffix("Edit from here") }.count == 2)
+  }
+
+  @Test func editFromHereWithoutRecordedSettingsLeavesThePills() async throws {
+    let r = try await Rig()
+    await r.model.setAspect(.r9x16, from: .pill)
+    // An image with no model request behind it (an upload, or a record since deleted).
+    await r.model.pin(UUID())
+    #expect(r.model.overrides.aspectRatio == .r9x16)
+  }
+
   @Test func pinChipDimmedWithAttachments() async throws {
     let r = try await Rig()
     let (_, image) = try await r.imageTurn()

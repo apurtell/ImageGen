@@ -436,6 +436,15 @@ actor DataStore: ModelActor {
     return (a.relativePath, a.mimeType, a.pixelWidth, a.pixelHeight)
   }
 
+  /// The aspect ratio and resolution a model's image was made with: its request's recorded values
+  /// (Edit from here sets the pills to them). Nil for an upload, or when the record is gone.
+  func generatedSettings(ofImage id: UUID) throws -> (aspectRatio: AspectRatio?, imageSize: ImageSize?)? {
+    guard let asset = try fetchAsset(id), let message = asset.message, message.messageRole == .model,
+      let requestID = message.requestID, let request = try fetchRequest(requestID)
+    else { return nil }
+    return (request.aspectRatio.flatMap(AspectRatio.init(rawValue:)), request.imageSize.flatMap(ImageSize.init(rawValue:)))
+  }
+
   /// Number of images in a chat (for the delete confirmation).
   func imageCount(conv id: UUID) throws -> Int {
     try fetchConversation(id).messages.reduce(0) { $0 + $1.images.count }

@@ -137,6 +137,7 @@ struct ChatView: View {
     .sheet(item: $infoRequest) { ReplyInfoSheet(request: $0) }
     .sheet(item: $details) { DetailsSheet(text: $0.text) }
     .sensoryFeedback(.impact, trigger: model.sendCount)
+    .sensoryFeedback(.selection, trigger: model.pinCount)
     .sensoryFeedback(.selection, trigger: model.isEditingTitle) { _, editing in editing }
     .sensoryFeedback(.success, trigger: model.completedWhileVisible)
     // Lifecycle: `.task` runs `onAppear` each time the screen appears (and cancels it when the
