@@ -1,11 +1,26 @@
 import Foundation
 
 // Shared vocabulary for the Gemini wire format (D§2.4, D§2.5). Raw values are the exact API strings.
+//
+// Every layer uses these types: the screens show them, the database stores them, and the request
+// body sends them. Swift note: `enum Name: String` gives each case a *raw value*, here the API
+// string. `Codable` stores a case as that string, and `Name(rawValue:)` reads one back, or returns
+// nil for an unknown string. So a stored value and the value on the wire are always the same text.
+//
+// Coercion: `GenerationSettingsResolver` (in `Pipeline/`) changes a requested aspect ratio or size to
+// one the model supports, from the `ModelCapability` table below (D§2.5). These types only describe
+// the values; they do not coerce.
+//
+// Everything here is an immutable value or a static constant, so all of it is `Sendable` and needs
+// no lock.
 
+/// The four sections of the composer's aspect-ratio menu (D§3.5).
 enum AspectGroup: String, Sendable, Codable, CaseIterable {
   case landscape, square, portrait, extreme
 }
 
+/// All 14 aspect ratios the API accepts. The case names start with `r` because a Swift name cannot
+/// start with a digit. `CaseIterable` gives `allCases`, in declaration order.
 enum AspectRatio: String, Sendable, Codable, CaseIterable {
   case r1x1 = "1:1"
   case r1x4 = "1:4"
@@ -32,7 +47,8 @@ enum AspectRatio: String, Sendable, Codable, CaseIterable {
     }
   }
 
-  /// Width divided by height.
+  /// Width divided by height. `SizeClass` (in `Imaging/`) uses it to check an output image's shape.
+  /// The raw values are fixed `W:H` strings, so the two sides always exist.
   var ratio: Double {
     let sides = rawValue.split(separator: ":").compactMap { Double($0) }
     return sides[0] / sides[1]
@@ -42,12 +58,19 @@ enum AspectRatio: String, Sendable, Codable, CaseIterable {
   static let standard: [AspectRatio] = allCases.filter { $0.group != .extreme }
 }
 
+/// The output size class. The raw values are the exact API strings: `"512"` (never `"512px"`), and
+/// `K` in uppercase (D§2.4).
+///
+/// Declaration order matters: it is smallest to largest. `GenerationSettingsResolver` uses the order
+/// of `allCases` to find the nearest supported size.
 enum ImageSize: String, Sendable, Codable, CaseIterable {
   case s512 = "512"
   case s1K = "1K"
   case s2K = "2K"
   case s4K = "4K"
 
+  /// The expected pixel count, in millions. `SizeClass` compares an output image with it to find the
+  /// size class that the model actually returned.
   var nominalMegapixels: Double {
     switch self {
     case .s512: 0.262
@@ -67,6 +90,7 @@ enum ImageSize: String, Sendable, Codable, CaseIterable {
   }
 }
 
+/// The pipe's threshold set (D§2.4). The API also has `OFF`, which the app does not offer.
 enum SafetyThreshold: String, Sendable, Codable, CaseIterable {
   case blockNone = "BLOCK_NONE"
   case blockOnlyHigh = "BLOCK_ONLY_HIGH"
@@ -83,7 +107,9 @@ enum SafetyThreshold: String, Sendable, Codable, CaseIterable {
   }
 }
 
-/// In the pipe's order, which is also the wire order.
+/// In the pipe's order, which is also the wire order. Array order in the body is significant, so do not
+/// reorder the cases. `civicIntegrity` is deprecated in the API; the app sends it and falls back once
+/// without it when the API rejects it (D§2.4).
 enum HarmCategory: String, Sendable, Codable, CaseIterable {
   case harassment = "HARM_CATEGORY_HARASSMENT"
   case hateSpeech = "HARM_CATEGORY_HATE_SPEECH"
@@ -101,6 +127,12 @@ enum SelectionReason: String, Sendable, Codable, CaseIterable {
   case noImage = "none"
 }
 
+/// The life cycle of one request (D§4.3, D§4.6). The database stores the raw value.
+///
+/// A *live* state means that the pipeline still owns the request and can change it. A *terminal* state
+/// is final: the pipeline does not change it again, and the Janitor can clean up the request's folder.
+/// The `switch` statements list every case with no `default`, so a new case does not compile until it
+/// is put in one group.
 enum RequestState: String, Sendable, Codable, CaseIterable {
   case preparing, inFlight, retryScheduled, parsing, succeeded, refused, failed, cancelled, interrupted
 
@@ -114,20 +146,29 @@ enum RequestState: String, Sendable, Codable, CaseIterable {
   var isLive: Bool { !isTerminal }
 }
 
+/// What one model accepts (D§2.5). `GenerationSettingsResolver` coerces the settings to it, and the
+/// composer menus show only these values.
 struct ModelCapability: Sendable, Equatable {
   var aspectRatios: [AspectRatio]
   /// Empty means the `imageSize` key is omitted.
   var imageSizes: [ImageSize]
+  /// False means the body has no `imageConfig` at all. Every catalog model sends it today.
   var sendsImageConfig: Bool
   /// Soft tray-warning threshold (D§2.5); 14 means no soft warning.
   var highFidelityInputLimit: Int
 }
 
+/// One model as the app shows and uses it: a catalog entry or a custom ID.
 struct ModelDescriptor: Sendable, Equatable, Identifiable {
+  /// How Settings and the model menu treat the model (D§2.5).
   enum Role: Sendable, Equatable {
+    /// Flash: always enabled, and the fallback for any model that is not available.
     case defaultMandatory
+    /// The user can turn it off in Settings › Models.
     case optional(enabledByDefault: Bool)
+    /// The preview alias: offered only after `models.list` lists it.
     case legacyIfListed
+    /// An ID the user typed. Its capabilities are unknown, so it gets `customCapability`.
     case custom
   }
 
@@ -138,9 +179,12 @@ struct ModelDescriptor: Sendable, Equatable, Identifiable {
   var role: Role
 }
 
+/// The static table of known models (D§2.5). A model's availability for a key is a separate,
+/// runtime check (`ModelAvailabilityService`); this table only says what each model accepts.
 enum ModelCatalog {
   static let defaultModelID = "gemini-3.1-flash-image"
 
+  /// Shared by 3 Pro and its preview alias. 5 is the lower of the two documented input limits.
   private static let proCapability = ModelCapability(
     aspectRatios: AspectRatio.standard, imageSizes: [.s1K, .s2K, .s4K],
     sendsImageConfig: true, highFidelityInputLimit: 5)
@@ -182,6 +226,8 @@ enum ModelCatalog {
 
   static let builtInIDs: Set<String> = Set(builtIns.map(\.id))
 
+  /// For an unknown model: every ratio and every size but 512, and no soft input warning (14 is the
+  /// hard cap). An API error for an unsupported value is shown as the API returns it.
   static let customCapability = ModelCapability(
     aspectRatios: AspectRatio.allCases, imageSizes: [.s1K, .s2K, .s4K],
     sendsImageConfig: true, highFidelityInputLimit: 14)

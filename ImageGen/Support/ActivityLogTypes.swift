@@ -2,8 +2,14 @@ import Foundation
 
 // Activity-log vocabulary (D§4.13). Behavior arrives in M2. Lives in Support/ because every layer
 // logs and Support/ must not depend on Pipeline/.
+//
+// Every type here is a `Sendable` value, so an entry can travel from any caller, through the
+// facade's stream, to the store's actor. `ActivityEntry`'s `Codable` code defines the JSON shape of
+// each line of `activity.jsonl`.
 
 /// Four lowercase hex digits. Encoded as a bare string.
+/// The custom `init(from:)` and `encode(to:)` write `"a1b2"`, not the default `{"raw":"a1b2"}`.
+/// `ActivityLog.actionID(counter:)` makes them.
 struct ActionID: Sendable, Codable, Hashable, CustomStringConvertible {
   let raw: String
 
@@ -21,6 +27,7 @@ struct ActionID: Sendable, Codable, Hashable, CustomStringConvertible {
   var description: String { raw }
 }
 
+/// Every action has exactly one begin and one result; steps are optional (D§4.13 Pairing).
 enum ActivityKind: String, Sendable, Codable { case begin, step, result }
 
 enum ActivityOrigin: String, Sendable, Codable { case user, system }
@@ -28,6 +35,8 @@ enum ActivityOrigin: String, Sendable, Codable { case user, system }
 /// No `empty` case on purpose: an empty reply's Send ends `failed` (D§4.13 Outcomes).
 enum ActivityOutcome: String, Sendable, Codable { case success, failed, refused, cancelled, interrupted }
 
+/// One line of the log file. `name` is on every line: the facade sets it on a begin, and the store
+/// fills it in on steps and results from its index.
 struct ActivityEntry: Sendable, Codable, Equatable {
   /// ISO 8601 with milliseconds in the file.
   var timestamp: Date
@@ -63,10 +72,12 @@ struct ActivityEntry: Sendable, Codable, Equatable {
     self.message = message
   }
 
+  // `Codable` is written out by hand for the timestamp: `JSONEncoder`'s built-in ISO 8601 has no
+  // milliseconds. A bad timestamp throws, so readers skip that line.
   init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     let stamp = try c.decode(String.self, forKey: .timestamp)
-    guard let date = try? Date(stamp, strategy: Self.timestampStyle) else {
+    guard let date = try? Date(stamp, strategy: Self.timestampStyle) else {  // Becomes the error below.
       throw DecodingError.dataCorruptedError(
         forKey: .timestamp, in: c, debugDescription: "not ISO 8601 with milliseconds: \(stamp)")
     }
@@ -99,8 +110,11 @@ struct ActivityEntry: Sendable, Codable, Equatable {
 }
 
 /// Published by `changes()` (M2).
+/// The store computes it from its index after each write. `DeveloperMenuModel` uses it to enable the
+/// menu's items, and the viewer to see that new entries exist.
 struct ActivityLogStatus: Sendable, Equatable {
   var lastSequence: Int
+  /// What Last Action and Last Error would show; nil when there is none.
   var lastActionID: ActionID?
   var lastErrorID: ActionID?
 }

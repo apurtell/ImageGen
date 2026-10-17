@@ -3,6 +3,9 @@ import SwiftUI
 /// The attachment tray (D§3.5): 56 pt thumbnails in send order, each with ✕, a spinner while
 /// importing or preparing, ⚠︎ on failure (tap for the reason and Remove), and a long-press menu;
 /// then the caption with the count and budget, or why Send is blocked.
+///
+/// The tray draws `model.tray` and nothing else: each item's state (importing, preparing, ready,
+/// failed) changes there, from the item's task, and SwiftUI redraws the thumbnail.
 struct AttachmentTray: View {
   let model: ChatScreenModel
 
@@ -11,6 +14,8 @@ struct AttachmentTray: View {
       VStack(alignment: .leading, spacing: 4) {
         ScrollView(.horizontal, showsIndicators: false) {
           HStack(spacing: 10) {
+            // Identified by the item's ID, so a thumbnail keeps its `@State` (its loaded image)
+            // when the items are reordered or one before it is removed.
             ForEach(Array(model.tray.enumerated()), id: \.element.id) { index, item in
               TrayThumbnail(model: model, item: item, index: index, count: model.tray.count)
             }
@@ -25,6 +30,8 @@ struct AttachmentTray: View {
   }
 }
 
+/// One tray item. `item` is a copy of the tray's value, taken at this redraw; the actions pass its
+/// ID back to the model, which looks the item up again, so a stale copy can't change the wrong item.
 private struct TrayThumbnail: View {
   let model: ChatScreenModel
   let item: TrayItem
@@ -85,6 +92,8 @@ private struct TrayThumbnail: View {
     } message: {
       Text(item.failure ?? "")
     }
+    // The thumbnail comes from the staged original, so it can show while the item still prepares.
+    // `originalURL` is nil while importing; the task runs again when the import sets it.
     .task(id: item.originalURL) {
       guard let url = item.originalURL else { return }
       image = await model.services.thumbnails.thumbnail(for: url, id: item.id, px: 168)

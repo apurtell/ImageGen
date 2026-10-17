@@ -1,8 +1,15 @@
 import SwiftUI
 
 /// Connect Gemini (D§3.2).
+///
+/// The form that `RootView` shows in place of the chat list while `needsOnboarding` is set (no key
+/// in the Keychain). The view draws `OnboardingModel.phase`; the model does the checks, the saving
+/// and the logging. `onFinished` clears `needsOnboarding`, and the root then shows the chat list.
+/// It runs on the main actor; each button starts one `Task`.
 struct OnboardingView: View {
+  /// `@State` keeps one model for the life of this screen.
   @State var model: OnboardingModel
+  /// Called once the key is saved (after the Flash warning, when there is one).
   let onFinished: () -> Void
   @State private var showFlashWarning = false
 
@@ -17,6 +24,7 @@ struct OnboardingView: View {
             .font(.callout.monospaced())
             .textSelection(.enabled)
           HStack {
+            // The reveal toggle swaps a secure field for a plain one. Both bind to the same text.
             Group {
               if model.reveal {
                 TextField("API key", text: $model.keyText)
@@ -74,8 +82,10 @@ struct OnboardingView: View {
     }
   }
 
+  /// Validate & Save, or Retry. The model's `phase` shows the outcome when nothing is saved.
   private func validate() async {
     guard await model.validateAndSave() else { return }
+    // The key is saved. A missing Flash model is a warning, not a failure: the alert's OK finishes.
     if case .saved(let warn) = model.phase, warn {
       showFlashWarning = true
     } else {

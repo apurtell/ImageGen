@@ -6,13 +6,21 @@ import UniformTypeIdentifiers
 /// A stored original, exported as is (D§4.9). `transferRepresentation` is static, so it declares
 /// one representation per type the app stores, each gated on the instance's type: exactly one
 /// applies, and it carries the real type and the original bytes.
+///
+/// `Transferable` is the system protocol for data that can leave the app (share sheet, drag, Files).
+/// The share sheet uses it through `ActivityShareSheet`. Save to Files uses `ImageFileDocument` below.
+/// It is a plain `Sendable` value, so any thread can use it.
 struct ImageFile: Transferable, Sendable, Equatable {
   let url: URL
   let utType: UTType
   let suggestedName: String
 
+  /// The AVIF type. If the system does not know `public.avif`, this declares it.
   static let avif = UTType("public.avif") ?? UTType(importedAs: "public.avif")
 
+  // The body is a result builder: each line declares one representation, and the builder collects
+  // them. `allowAccessingOriginalFile: false` makes the system copy the file, so the receiver
+  // never gets our stored original.
   static var transferRepresentation: some TransferRepresentation {
     FileRepresentation(exportedContentType: .jpeg) { SentTransferredFile($0.url, allowAccessingOriginalFile: false) }
       .exportingCondition { $0.utType == .jpeg }
@@ -54,7 +62,8 @@ struct ImageFile: Transferable, Sendable, Equatable {
   }
 }
 
-/// An image to export, with what the log states about it (D§4.13).
+/// An image to export, with what the log states about it (D§4.13). The chat screen builds it from a
+/// stored `ImageAsset`'s fields, for itself and for the viewer; every export action takes one.
 struct ExportItem: Sendable, Equatable, Identifiable {
   let id: UUID
   let url: URL
@@ -87,8 +96,10 @@ struct ImageFileDocument: FileDocument {
 
   init(file: ImageFile) { self.file = file }
 
+  // Required by `FileDocument`, but the app never opens a document; it only exports.
   init(configuration: ReadConfiguration) throws { throw CocoaError(.featureUnsupported) }
 
+  /// `.immediate` reads the file's bytes now, so the exporter gets the bytes even if the file changes later.
   func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
     let wrapper = try FileWrapper(url: file.url, options: .immediate)
     wrapper.preferredFilename = file.suggestedName

@@ -1,6 +1,10 @@
 import SwiftUI
 
 /// "Chat settings…": the same three choices as the pills (D§3.4).
+///
+/// Each `Picker` binds to the model with `Binding(get:set:)`: it reads the override, and a choice
+/// starts a `Task` that saves it, because a binding's setter can't `await`. The picker shows the
+/// new value when the save completes and `overrides` changes. The nil tag is "Default".
 struct ChatSettingsSheet: View {
   let model: ChatScreenModel
   @Environment(\.dismiss) private var dismiss

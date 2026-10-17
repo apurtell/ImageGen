@@ -1,6 +1,8 @@
 import Foundation
 
 /// The activity log's conventions (D§4.13 Messages).
+/// Callers use these to build `ActivityMessage` text, so every message spells sizes, durations and
+/// IDs the same way. Pure functions, callable from any thread or actor.
 enum Format {
   /// "1.3 MB": megabytes (2^20) with one decimal.
   static func mb(_ bytes: Int) -> String {
@@ -8,6 +10,7 @@ enum Format {
   }
 
   /// "14.2 s"
+  /// `Duration` stores whole seconds plus attoseconds (10^-18 s).
   static func seconds(_ d: Duration) -> String {
     let c = d.components
     return String(format: "%.1f s", Double(c.seconds) + Double(c.attoseconds) / 1e18)
@@ -36,7 +39,8 @@ enum Format {
     "\(width)×\(height) \(type(mimeType)) \(mb(bytes))"
   }
 
-  /// A readable `URLError` code name.
+  /// A readable `URLError` code name. The type has no name text of its own; a code not listed here
+  /// shows its number.
   static func urlError(_ code: URLError.Code) -> String {
     switch code {
     case .timedOut: "timedOut"

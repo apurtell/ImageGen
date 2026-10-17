@@ -1,8 +1,14 @@
 import SwiftUI
 
 /// The + menu, the PasteButton, the text field, and Send or Stop (D§3.5).
+///
+/// Send and Stop start a `Task` for the model's `async` method, so the tap returns at once; the
+/// model's `isStarting` and `liveRequest` then decide which button shows and whether it is enabled.
 struct ComposerInputRow: View {
+  /// `@Bindable` gives `$model.composerText`, a two-way binding for the text field.
   @Bindable var model: ChatScreenModel
+  /// The text field's focus. `@FocusState` can belong only to a view, so the two `.onChange`
+  /// handlers below copy it to and from `model.isTextFieldFocused` (set by Edit & Resend).
   @FocusState private var focused: Bool
   @State private var showPhotos = false
   @State private var showFiles = false
@@ -35,6 +41,7 @@ struct ComposerInputRow: View {
         .padding(.horizontal, 12).padding(.vertical, 8)
         .glassEffect(in: .rect(cornerRadius: 18))
 
+      // While a request is live, Send turns into Stop (D§3.5).
       if model.liveRequest != nil {
         Button {
           Task { await model.stop() }

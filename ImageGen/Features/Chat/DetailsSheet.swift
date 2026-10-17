@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 
 /// The redacted JSON or error body, monospaced and selectable, with Copy (D§3.4).
+/// The text is already redacted when it is stored; this sheet shows it as is.
 struct DetailsSheet: View {
   let text: String
   @Environment(\.dismiss) private var dismiss

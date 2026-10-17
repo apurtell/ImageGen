@@ -4,9 +4,13 @@ import UniformTypeIdentifiers
 
 /// An image from the pasteboard (D§4.8 step 1). Plain `Data` is avoided: its representation is
 /// generic data, which may not match image pasteboard items.
+///
+/// `Transferable` is the system's protocol for values that move through paste, drag and share.
+/// The representations are tried in order; each one takes the item's bytes unchanged.
 struct PastedImage: Transferable, Sendable {
   let data: Data
 
+  /// A result builder: the lines below are a list of representations, not statements.
   static var transferRepresentation: some TransferRepresentation {
     DataRepresentation(importedContentType: .png) { PastedImage(data: $0) }
     DataRepresentation(importedContentType: .jpeg) { PastedImage(data: $0) }
@@ -29,6 +33,8 @@ struct ComposerPasteButton: View {
   let model: ChatScreenModel
 
   var body: some View {
+    // The system's PasteButton reads the pasteboard only on the user's tap, so the app shows no
+    // paste permission prompt. The task states `@MainActor` explicitly, because `attach` runs there.
     PasteButton(payloadType: PastedImage.self) { images in
       let candidates = images.map { AttachmentCandidate.data($0.data) }
       Task { @MainActor in await model.attach(candidates, from: .paste) }
@@ -40,7 +46,9 @@ struct ComposerPasteButton: View {
 }
 
 /// Keeps `hasImages` current. `UIPasteboard.hasImages` doesn't prompt; it's re-checked when the
-/// app becomes active and when the pasteboard changes.
+/// app becomes active and when the pasteboard changes. Another app can change the pasteboard while
+/// this app is in the background, and the change notification doesn't arrive then, so the check
+/// on `.active` is needed too.
 struct PasteboardImageWatcher: ViewModifier {
   @Binding var hasImages: Bool
   @Environment(\.scenePhase) private var scenePhase

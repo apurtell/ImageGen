@@ -1,14 +1,14 @@
 import Foundation
 import SwiftData
 
+/// The errors `DataStore` throws when a caller names a record that does not exist (any more).
 enum DataStoreError: Error, Equatable {
   case conversationNotFound(UUID)
   case requestNotFound(UUID)
   case messageNotFound(UUID)
 }
 
-/// What the Janitor needs from the store (D§4.4).
-/// An upload of a user message, as Edit & Resend clones it (M6).
+/// An upload of a user message, as Edit & Resend clones it (M6). It carries what a tray item needs.
 struct UploadSource: Sendable, Equatable {
   let snapshot: InputSnapshot
   let byteCount: Int
@@ -17,6 +17,8 @@ struct UploadSource: Sendable, Equatable {
   let originalFilename: String?
 }
 
+/// What the Janitor needs from the store (D§4.4): every file path that a record references, and the age
+/// and state of every request. The Janitor reads it once, after it lists the folders on disk.
 struct JanitorSnapshot: Sendable {
   struct RequestInfo: Sendable {
     let isTerminal: Bool
@@ -30,13 +32,26 @@ struct JanitorSnapshot: Sendable {
   let requests: [UUID: RequestInfo]
 }
 
-/// All background writes to SwiftData (D§5). Its API takes and returns UUIDs and Sendable snapshots;
-/// model objects never leave the actor. It conforms to `ModelActor` by hand rather than through
-/// `@ModelActor`, because the macro's generated initializer can't also take the `FileStore`.
+/// All background writes to SwiftData (D§5), and the reads that go with them. It sits in the storage
+/// layer. `GenerationService`, the screen models and the Janitor call it; it calls SwiftData and `FileStore`.
+///
+/// Concurrency model. `DataStore` is an actor with its own `ModelContext` (see the primer, *SwiftData* and
+/// *Actors*). Its API takes and returns UUIDs and `Sendable` snapshots; model objects never leave the
+/// actor, because a record belongs to the context that fetched it. No method awaits inside, so each
+/// method runs as one step: no other call to the store starts until it returns, and no caller can
+/// see a half-done change. The design depends on this. For example, `createSend` moves the staged
+/// files and saves their records in one step, so the Janitor's snapshot sees both or neither.
+/// Do not add an `await` inside a method without rechecking every caller that relies on this.
+///
+/// It conforms to `ModelActor` by hand rather than through `@ModelActor`, because the macro's
+/// generated initializer can't also take the `FileStore`.
 actor DataStore: ModelActor {
+  // `ModelActor` requires these two. `nonisolated` lets SwiftData read them without an `await`; they
+  // never change. The serial executor runs every method of this actor on the one `ModelContext`.
   nonisolated let modelExecutor: any ModelExecutor
   nonisolated let modelContainer: ModelContainer
   private let files: FileStore
+  /// The time source for `createdAt` and `updatedAt`; tests supply a fixed clock.
   private let clock: @Sendable () -> Date
 
   init(container: ModelContainer, files: FileStore, clock: @escaping @Sendable () -> Date = { Date() }) {
@@ -86,10 +101,14 @@ actor DataStore: ModelActor {
   }
 
   /// Deletes the chat, its images and its request folders. The caller cancels `liveRequestIDs`.
+  /// The cascade delete rules (in `SchemaV1`) remove the chat's messages, images and requests.
   func deleteConversation(_ id: UUID) throws -> DeletionResult {
     let conversation = try fetchConversation(id)
+    // Read the IDs before the delete: after it, the relationships are empty.
     let live = conversation.requests.filter { $0.requestState.isLive }.map(\.id)
     let requestIDs = conversation.requests.map(\.id)
+    // Records first, then files. A failure between the two leaves only unreferenced files, which
+    // the Janitor removes. The other order could leave records that point to missing files.
     modelContext.delete(conversation)
     try modelContext.save()
     var result = files.removeConversationFiles(id, requestIDs: requestIDs)
@@ -101,10 +120,11 @@ actor DataStore: ModelActor {
     try fetchConversation(id).messages.count
   }
 
-  /// Deletes a chat with no messages; returns whether it did.
+  /// Deletes a chat with no messages; returns whether it did. The check and the delete are one step,
+  /// so a send cannot add a message between them.
   @discardableResult
   func deleteIfEmpty(_ id: UUID) throws -> Bool {
-    guard let conversation = try? fetchConversation(id), conversation.messages.isEmpty else { return false }
+    guard let conversation = try? fetchConversation(id), conversation.messages.isEmpty else { return false }  // A missing chat has nothing to delete.
     _ = try deleteConversation(id)
     return true
   }
@@ -142,7 +162,9 @@ actor DataStore: ModelActor {
   // MARK: Sends
 
   /// Records a send: the user message and its images (staged files moved into `Images/<conv>/`),
-  /// the reply placeholder and the request (D§4.3).
+  /// the reply placeholder and the request (D§4.3). The file moves and the save are one step of the
+  /// actor. The Janitor depends on this: it lists `Images/` before it asks for its snapshot, so any file
+  /// it lists that a send moved is already referenced in that snapshot.
   func createSend(_ draft: SendRecordInput) throws -> SendRecord {
     let conversation = try fetchConversation(draft.conversationID)
     let now = clock()
@@ -150,6 +172,8 @@ actor DataStore: ModelActor {
     let requestID = UUID()
 
     // Move the staged files first; a failure leaves no records (the Janitor removes moved orphans).
+    // `moveStaged` also marks each moved file as modified now, so the Janitor's freshness rule spares
+    // it while this method runs.
     var assets: [ImageAsset] = []
     for (ordinal, a) in draft.attachments.enumerated() {
       let ext = Self.fileExtension(of: a.originalURL, mimeType: a.originalMimeType)
@@ -184,6 +208,7 @@ actor DataStore: ModelActor {
       inputs = []
     }
 
+    // The user message and its reply placeholder take two consecutive sequence numbers.
     let sequence = conversation.nextSequence
     var parts = assets.map { MessagePart(kind: .image, text: nil, imageID: $0.id) }
     if !draft.promptText.isEmpty { parts.append(MessagePart(kind: .text, text: draft.promptText, imageID: nil)) }
@@ -194,6 +219,7 @@ actor DataStore: ModelActor {
       promptText: draft.promptText, inputs: inputs, selectionReason: draft.selection.reason,
       activityActionID: draft.activityActionID, now: now)
 
+    // Insert the records, then link them. The changes stay in this context until `save()` below.
     modelContext.insert(user)
     modelContext.insert(reply)
     modelContext.insert(request)
@@ -223,7 +249,7 @@ actor DataStore: ModelActor {
   }
 
   /// A new reply from a request's recorded settings and inputs, verbatim (D§6). nil if any input
-  /// file is missing.
+  /// file is missing. It creates no user message; the new request's `sourceRequestID` records the lineage.
   func createRegenerate(sourceRequestID: UUID, activityActionID: ActionID) throws -> SendRecord? {
     guard let source = try fetchRequest(sourceRequestID), let conversation = source.conversation else {
       throw DataStoreError.requestNotFound(sourceRequestID)
@@ -259,6 +285,8 @@ actor DataStore: ModelActor {
   }
 
   /// Applies the fields the closure sets; nil fields are unchanged.
+  /// The closure gets an `inout` patch: it changes the caller's copy in place. The closure runs on the
+  /// actor, but it sees only the patch, never the record. That keeps the record inside the actor.
   func updateRequest(_ id: UUID, _ mutate: @Sendable (inout RequestPatch) -> Void) throws {
     guard let r = try fetchRequest(id) else { throw DataStoreError.requestNotFound(id) }
     var patch = RequestPatch()
@@ -267,6 +295,8 @@ actor DataStore: ModelActor {
     try modelContext.save()
   }
 
+  /// Every request that is not terminal, oldest first (the Reconciler reads these at launch).
+  /// `#Predicate` is a macro: SwiftData turns the closure into a database query, not a Swift loop.
   func nonTerminalRequests() throws -> [RequestSnapshot] {
     let live = RequestState.allCases.filter(\.isLive).map(\.rawValue)
     let requests = try modelContext.fetch(
@@ -276,7 +306,8 @@ actor DataStore: ModelActor {
   }
 
   /// Fills the reply: its parts, its images (ordinal = index among the image parts, D§4.3), the
-  /// request's notices and outcome fields.
+  /// request's notices and outcome fields. The caller has already moved the image files into
+  /// `Images/<conv>/`; until this save, only the Janitor's freshness rule protects them.
   func completeReply(
     requestID: UUID, parts: [MessagePart], images: [ReplyImage], notices: [String], outcomeFields: RequestPatch
   ) throws {
@@ -413,7 +444,8 @@ actor DataStore: ModelActor {
   // MARK: Deletion
 
   /// Deletes one message and its image files. Deleting a user message keeps its replies; deleting
-  /// a reply also deletes the request that produced it.
+  /// a reply also deletes the request that produced it. As in `deleteConversation`, it saves the
+  /// records first and removes the files after.
   func deleteMessage(_ id: UUID) throws -> DeletionResult {
     guard let message = try fetchMessage(id) else { throw DataStoreError.messageNotFound(id) }
     var result = DeletionResult()
@@ -432,6 +464,7 @@ actor DataStore: ModelActor {
     message.conversation?.updatedAt = clock()
     modelContext.delete(message)
     try modelContext.save()
+    // Remove each path once, in case two fields name the same file.
     paths = Array(Set(paths))
     for path in paths { files.remove(files.url(relative: path), into: &result) }
     for r in requestDirs { files.remove(files.requestDir(r), into: &result) }
@@ -443,6 +476,7 @@ actor DataStore: ModelActor {
     (try modelContext.fetchCount(FetchDescriptor<Conversation>()), try modelContext.fetchCount(FetchDescriptor<ImageAsset>()))
   }
 
+  /// Deletes every chat, one at a time, and adds up the results.
   func deleteAll() throws -> DeletionResult {
     var total = DeletionResult()
     for conversation in try modelContext.fetch(FetchDescriptor<Conversation>()) {
@@ -458,6 +492,7 @@ actor DataStore: ModelActor {
 
   // MARK: Janitor
 
+  /// The referenced paths and request states, read in one step (D§4.4).
   func janitorSnapshot() throws -> JanitorSnapshot {
     var paths = Set<String>()
     for asset in try modelContext.fetch(FetchDescriptor<ImageAsset>()) {
@@ -479,6 +514,9 @@ actor DataStore: ModelActor {
   }
 
   // MARK: Helpers
+
+  // Each fetch returns a record of this actor's context. Records stay inside the actor; the public
+  // methods above return only IDs and snapshots.
 
   private func fetchConversation(_ id: UUID) throws -> Conversation {
     var d = FetchDescriptor<Conversation>(predicate: #Predicate { $0.id == id })
@@ -505,7 +543,8 @@ actor DataStore: ModelActor {
     return try modelContext.fetch(d).first
   }
 
-  /// Follows regenerate lineage back to the send that had a user message.
+  /// Follows regenerate lineage back to the send that had a user message. The hop limit stops a
+  /// damaged store with a lineage cycle from looping forever; the fallback is the request's reply.
   private func originalUserMessageID(of request: GenerationRequest) throws -> UUID {
     var current: GenerationRequest? = request
     var hops = 0
@@ -517,6 +556,7 @@ actor DataStore: ModelActor {
     return request.replyMessageID
   }
 
+  /// Copies a request's fields, and its input images, into a `Sendable` value that can leave the actor.
   private func snapshot(_ r: GenerationRequest) throws -> RequestSnapshot {
     let conv = r.conversation?.id ?? UUID()
     let assets = try r.inputs.compactMap { try fetchAsset($0.imageID) }.map { Self.inputSnapshot($0, conversationID: conv) }
@@ -548,6 +588,8 @@ actor DataStore: ModelActor {
     url.pathExtension.isEmpty ? MimeTypes.fileExtension(for: mimeType) : url.pathExtension.lowercased()
   }
 
+  /// Copies the patch's non-nil fields to the record. `clearOutcome` runs first, so a patch can clear
+  /// the old outcome and set new fields in one call. The caller saves.
   private func apply(_ p: RequestPatch, to r: GenerationRequest) {
     if p.clearOutcome {
       r.httpStatus = nil

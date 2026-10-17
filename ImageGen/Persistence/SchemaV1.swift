@@ -2,7 +2,18 @@ import Foundation
 import SwiftData
 
 /// The SwiftData schema (D§4.3). Enums are stored as raw `String`s and ordered or structured
-/// payloads as JSON `Data`, wrapped by typed accessors.
+/// payloads as JSON `Data`, wrapped by typed accessors. JSON avoids SwiftData's quirks with
+/// composite `Codable` types.
+///
+/// Four records: a `Conversation` (a chat) owns its `Message`s and `GenerationRequest`s, and a
+/// `Message` owns its `ImageAsset`s. The cascade delete rules remove the owned records with their
+/// owner. Requests and messages refer to each other, and requests to their input images, by UUID only.
+///
+/// Concurrency model. `@Model` makes each class a stored record (see the primer, *SwiftData*). The
+/// classes are `nonisolated` and not `Sendable`: a record is used only inside the `ModelContext` that
+/// fetched it. `DataStore` does all writes in its own context. The views only read records, with
+/// `@Query` on the main actor's context, and see each change after `DataStore` saves it.
+/// The schema is versioned from day one, so a later `SchemaV2` can migrate from it (`ImageGenMigrationPlan`).
 enum SchemaV1: VersionedSchema {
   static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
 
@@ -10,7 +21,10 @@ enum SchemaV1: VersionedSchema {
     [Conversation.self, Message.self, ImageAsset.self, GenerationRequest.self]
   }
 
+  /// A chat. `nextSequence` is the next free `Message.sequence`; `DataStore` advances it on each send
+  /// and regenerate.
   @Model nonisolated final class Conversation {
+    // `#Unique` and `#Index` are macros that declare a unique constraint and an index in the database.
     #Unique<Conversation>([\.id])
 
     var id: UUID
@@ -24,10 +38,13 @@ enum SchemaV1: VersionedSchema {
     var aspectRatioOverride: String?
     /// nil = Settings default.
     var imageSizeOverride: String?
+    /// The image the user pinned for reuse in later sends; nil = none.
     var pinnedImageID: UUID?
+    /// The composer's unsent text, kept across launches.
     var draftText: String
     var nextSequence: Int
 
+    // `inverse` names the other side of the link, so SwiftData keeps both sides in step.
     @Relationship(deleteRule: .cascade, inverse: \Message.conversation)
     var messages: [Message] = []
 
@@ -47,6 +64,8 @@ enum SchemaV1: VersionedSchema {
     static let untitled = "New Chat"
   }
 
+  /// One bubble in the transcript: a user prompt or a model reply. A reply's state is its request's
+  /// state, and is not stored here.
   @Model nonisolated final class Message {
     #Unique<Message>([\.id])
     #Index<Message>([\.sequence])
@@ -83,6 +102,7 @@ enum SchemaV1: VersionedSchema {
 
     var messageRole: Role { Role(rawValue: role) ?? .user }
 
+    /// The typed view of `partsData`. Each read decodes the JSON, so callers read it once.
     var parts: [MessagePart] {
       get { JSONCoding.decode([MessagePart].self, from: partsData) ?? [] }
       set { partsData = JSONCoding.encode(newValue) }
@@ -91,6 +111,8 @@ enum SchemaV1: VersionedSchema {
     var orderedImages: [ImageAsset] { images.sorted { $0.ordinal < $1.ordinal } }
   }
 
+  /// One stored image: an upload or a model output. The original file is never changed. An upload
+  /// also has a prepared (API-ready) file, described by the `prepared*` fields.
   @Model nonisolated final class ImageAsset {
     #Unique<ImageAsset>([\.id])
 
@@ -135,7 +157,7 @@ enum SchemaV1: VersionedSchema {
 
     var imageOrigin: ImageOrigin { ImageOrigin(rawValue: origin) ?? .files }
 
-    /// The prepared file as a `RequestInput`, when there is one.
+    /// The prepared file as a `RequestInput`, when there is one. A partly set group of fields gives nil.
     var preparedInput: RequestInput? {
       guard let path = preparedRelativePath, let mime = preparedMimeType, let bytes = preparedByteCount,
         let w = preparedPixelWidth, let h = preparedPixelHeight
@@ -143,6 +165,7 @@ enum SchemaV1: VersionedSchema {
       return RequestInput(imageID: id, preparedRelativePath: path, mimeType: mime, byteCount: bytes, pixelWidth: w, pixelHeight: h)
     }
 
+    /// Sets or clears all the `prepared*` fields together, so they always describe one file.
     func setPrepared(_ input: RequestInput?, longEdgeSetting: Int?) {
       preparedRelativePath = input?.preparedRelativePath
       preparedMimeType = input?.mimeType
@@ -153,6 +176,9 @@ enum SchemaV1: VersionedSchema {
     }
   }
 
+  /// One request to the service, across all its attempts. It records the settings and inputs as sent,
+  /// so Regenerate can repeat it exactly, and the outcome of the latest attempt. `GenerationService`
+  /// is the only writer of its state (through `DataStore`).
   @Model nonisolated final class GenerationRequest {
     #Unique<GenerationRequest>([\.id])
     #Index<GenerationRequest>([\.state])
@@ -177,6 +203,7 @@ enum SchemaV1: VersionedSchema {
     var inputsData: Data
     /// `attachments`, `pinned`, `latest` or `none`.
     var selectionReason: String
+    /// The raw `RequestState`; read and write it through `requestState`.
     var state: String
     /// Every attempt, automatic or manual.
     var attempt: Int
@@ -241,6 +268,7 @@ enum SchemaV1: VersionedSchema {
       self.activityActionID = activityActionID?.raw
     }
 
+    // An unknown stored value reads as `failed`, a terminal state, so a damaged record is never resumed.
     var requestState: RequestState {
       get { RequestState(rawValue: state) ?? .failed }
       set { state = newValue.rawValue }
@@ -272,6 +300,7 @@ enum SchemaV1: VersionedSchema {
   }
 }
 
+// The rest of the app uses the short names. A later schema version moves these aliases to its own classes.
 typealias Conversation = SchemaV1.Conversation
 typealias Message = SchemaV1.Message
 typealias ImageAsset = SchemaV1.ImageAsset
@@ -280,10 +309,11 @@ typealias GenerationRequest = SchemaV1.GenerationRequest
 /// JSON for the stored payloads. Encoding these value types can't fail.
 enum JSONCoding {
   static func encode<T: Encodable>(_ value: T) -> Data {
-    (try? JSONEncoder().encode(value)) ?? Data("[]".utf8)
+    (try? JSONEncoder().encode(value)) ?? Data("[]".utf8)  // Cannot fail for these types; "[]" is a safe empty list.
   }
 
+  /// nil for damaged data; the accessors above then use an empty list.
   static func decode<T: Decodable>(_ type: T.Type, from data: Data) -> T? {
-    try? JSONDecoder().decode(type, from: data)
+    try? JSONDecoder().decode(type, from: data)  // Damaged data reads as nil, not as a crash.
   }
 }

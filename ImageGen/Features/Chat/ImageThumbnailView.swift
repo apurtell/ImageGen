@@ -2,6 +2,9 @@ import SwiftUI
 
 /// An image loaded through `ThumbnailService`, with a placeholder frame sized from the stored pixel
 /// dimensions so the layout doesn't jump (D§3.4, D§8).
+///
+/// The view takes plain values (ID, path, size), not the record, so it works for any image.
+/// `ThumbnailService` decodes off the main actor and caches; this view only awaits the result.
 struct ImageThumbnailView: View {
   /// Optional: a context menu's preview renders outside the view hierarchy and doesn't inherit it.
   @Environment(AppEnvironment.self) private var environment: AppEnvironment?
@@ -12,6 +15,7 @@ struct ImageThumbnailView: View {
   let pixelHeight: Int
   var px = ThumbnailService.bubbleSize
   var contentMode: ContentMode = .fit
+  /// The decoded thumbnail; nil shows the placeholder.
   @State private var image: CGImage?
 
   var aspect: CGFloat { pixelHeight > 0 ? CGFloat(pixelWidth) / CGFloat(pixelHeight) : 1 }
@@ -29,6 +33,8 @@ struct ImageThumbnailView: View {
       }
     }
     .aspectRatio(aspect, contentMode: contentMode)
+    // Loads when the view appears and again if the image or size changes. A row that scrolls out
+    // of the lazy stack cancels its load.
     .task(id: "\(imageID)-\(px)") {
       image = await env.thumbnails.thumbnail(for: env.files.url(relative: relativePath), id: imageID, px: px)
     }

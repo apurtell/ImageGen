@@ -2,9 +2,13 @@ import SwiftUI
 
 /// `3.1 Flash · 16:9 · 2K · 2752×1536`, with ⚠︎ when the size class or ratio isn't what was asked
 /// for (D§3.4, R3 and R4).
+///
+/// This line is how the app checks reports R3 and R4: the requested values come from the request
+/// record, the pixel size from the first output image. `SizeClass` judges the size by pixel count.
 struct ReplyMetadataLine: View {
   let request: GenerationRequest
 
+  /// The line and its warnings, as plain values, so tests can check them without a view.
   static func text(modelID: String, aspect: String?, size: String?, width: Int?, height: Int?) -> (line: String, warnings: [String]) {
     var parts = [ModelCatalog.descriptor(for: modelID).shortName]
     if let aspect { parts.append(aspect) }

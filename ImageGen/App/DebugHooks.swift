@@ -1,9 +1,15 @@
 #if DEBUG
+// `#if DEBUG` is a compile-time condition: this branch exists only in Debug builds, and the `#else`
+// branch only in Release builds. The project's lint requires `#if DEBUG` as this file's first code line.
 import UIKit
 import UniformTypeIdentifiers
 
 /// The single entry point from non-DEBUG code into DebugSupport/ (plan §2.6). The Release branch
 /// below has no-op stubs with the same signatures.
+///
+/// App code calls only these functions, never `LaunchOptions`, `DemoSeeder` or `MockGeminiURLProtocol`
+/// directly; the lint enforces that. Each function reads the launch arguments that UI tests and demo
+/// runs pass (for example `-UITestMockGemini 1`), through `LaunchOptions.read()`.
 enum DebugHooks {
   /// `-ResetStore 1`: deletes the store, the files and `Logs/` before the log is created.
   static func resetBeforeLaunchIfRequested(root: URL, cachesRoot: URL) {
@@ -12,6 +18,9 @@ enum DebugHooks {
   }
 
   /// `-UITestMockGemini 1`: generation and models calls answered in code, with "mock-key".
+  ///
+  /// A background session cannot use a custom `URLProtocol`, so mock mode uses an ephemeral
+  /// configuration; the transport then holds delayed retries itself (D§4.6, Retries).
   static func mockEnvironment() -> MockEnvironment? {
     let options = LaunchOptions.read()
     guard options.mockGemini else { return nil }
@@ -30,8 +39,11 @@ enum DebugHooks {
   static var skipNotificationPrompt: Bool { LaunchOptions.read().skipNotificationPrompt }
 
   /// After launch: seeds demo data (`-SeedDemoData 1`), then returns where `-Scene` asks to go.
+  /// `RootView` calls it from its `.task` when it first appears, and applies the route it returns.
   static func prepareLaunch(_ env: AppEnvironment) async -> LaunchRoute? {
     let options = LaunchOptions.read()
+    // Seed keys (names of demo chats, saved in `UserDefaults` by an earlier seeding) map to chat IDs,
+    // so `-Scene chat:<key>` can name the chat to open.
     var keys: [String: UUID] = DemoSeeder.storedKeys()
     if options.seedDemoData {
       keys = await DemoSeeder.seedIfEmpty(store: env.store, files: env.files)
@@ -57,6 +69,7 @@ enum DebugHooks {
 #else
 import Foundation
 
+// Release build: the same names, doing nothing, so callers need no `#if` of their own.
 enum DebugHooks {
   static func resetBeforeLaunchIfRequested(root: URL, cachesRoot: URL) {}
   static func mockEnvironment() -> MockEnvironment? { nil }

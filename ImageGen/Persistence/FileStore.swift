@@ -1,7 +1,14 @@
 import Foundation
 
 /// The file layout under `Application Support/ImageGen/` (D§4.4). Paths stored in the model are
-/// relative to `root`. Thumbnails live under a separate caches root.
+/// relative to `root`, because the app's container path can change between installs. Thumbnails
+/// live under a separate caches root, which the system may clear.
+///
+/// It sits in the storage layer. `DataStore`, the Janitor, the pipeline and the screen models use it to
+/// build paths and to move, copy and remove files. It holds only two URLs, so it is a `Sendable` value
+/// that every actor keeps its own copy of. Its methods do synchronous file I/O on the caller's thread.
+/// No lock protects the files: the code that shares them (a send, a delete, the Janitor) avoids races
+/// by the order of its steps and by tolerating a file that another task moved or removed first.
 struct FileStore: Sendable {
   let root: URL
   let thumbnailsDir: URL
@@ -11,12 +18,15 @@ struct FileStore: Sendable {
     self.thumbnailsDir = cachesRoot.appendingPathComponent("Thumbnails", isDirectory: true)
   }
 
+  /// The data-protection class for every folder the app makes: readable after the first unlock
+  /// since the device started, so a background relaunch can write (see the primer, *Data protection*).
   static let protection = FileProtectionType.completeUntilFirstUserAuthentication
 
   // MARK: Layout
 
   var imagesDir: URL { root.appendingPathComponent("Images", isDirectory: true) }
   var requestsDir: URL { root.appendingPathComponent("Requests", isDirectory: true) }
+  /// Composer attachments not yet sent, for this launch only.
   var stagingDir: URL { root.appendingPathComponent("Staging", isDirectory: true) }
   /// Earlier launches' `Staging/` folders, each renamed here at launch for the Janitor to remove.
   var retiredStagingDir: URL { root.appendingPathComponent("StagingRetired", isDirectory: true) }
@@ -35,7 +45,8 @@ struct FileStore: Sendable {
     url(relative: imageRelativePath(conv: conv, image: image, ext: ext))
   }
 
-  /// `Images/<conv>/prepared/<image>-<edge>.<ext>`
+  /// `Images/<conv>/prepared/<image>-<edge>.<ext>`. `edge` is the `maxUploadLongEdge` setting the
+  /// file was made at, so a change of the setting gives a new name.
   func preparedRelativePath(conv: UUID, image: UUID, edge: Int, ext: String) -> String {
     "Images/\(conv.uuidString)/prepared/\(image.uuidString)-\(edge).\(ext)"
   }
@@ -43,6 +54,9 @@ struct FileStore: Sendable {
   func preparedURL(conv: UUID, image: UUID, edge: Int, ext: String) -> URL {
     url(relative: preparedRelativePath(conv: conv, image: image, edge: edge, ext: ext))
   }
+
+  // A request's folder: the request body, and each attempt's response and parsed output (D§4.4).
+  // The Janitor never removes the folder of a request that is not terminal.
 
   func requestDir(_ request: UUID) -> URL {
     requestsDir.appendingPathComponent(request.uuidString, isDirectory: true)
@@ -56,6 +70,8 @@ struct FileStore: Sendable {
     requestDir(request).appendingPathComponent("response-\(attempt).part")
   }
 
+  /// The marker that the transport wrote the delegate's completion for this attempt; it holds the
+  /// HTTP status (D§4.7).
   func completeMarkerURL(_ request: UUID, attempt: Int) -> URL {
     requestDir(request).appendingPathComponent("response-\(attempt).complete")
   }
@@ -94,7 +110,8 @@ struct FileStore: Sendable {
 
   /// Moves a staged file into place (a rename on the same volume) and marks it modified now: a
   /// rename or clone keeps the source's date, and the Janitor spares only recently modified files
-  /// that no record references yet.
+  /// that no record references yet. `createSend` uses it for attachments and `GenerationService` for
+  /// parsed output images. An existing file at the destination is replaced.
   func moveStaged(_ from: URL, to: URL) throws {
     let dir = to.deletingLastPathComponent()
     try Self.createDirectory(dir)
@@ -102,7 +119,8 @@ struct FileStore: Sendable {
     do {
       try FileManager.default.moveItem(at: from, to: to)
     } catch {
-      // The Janitor removed the (empty) folder between the two steps: make it again, once.
+      // The Janitor can run at the same time and `rmdir` an empty chat folder. If it removed the
+      // (empty) folder between the two steps, make it again, once. Any other failure is real.
       guard FileManager.default.fileExists(atPath: from.path), !FileManager.default.fileExists(atPath: dir.path) else { throw error }
       try Self.createDirectory(dir)
       try FileManager.default.moveItem(at: from, to: to)
@@ -111,16 +129,19 @@ struct FileStore: Sendable {
   }
 
   /// Renames this launch's `Staging/` (anything in it belongs to an earlier process: trays aren't
-  /// kept across launches) into `StagingRetired/`, before any screen can stage a file. The Janitor
-  /// later removes only retired folders, so it can never take a file this launch staged.
+  /// kept across launches) into `StagingRetired/<uuid>/`, before any screen can stage a file. The
+  /// Janitor later removes only retired folders, so it can never take a file this launch staged.
+  /// `AppEnvironment` calls it at launch.
   func retireStaging() {
     guard FileManager.default.fileExists(atPath: stagingDir.path) else { return }
     // On failure the files stay in Staging/; the next launch retires them.
-    try? Self.createDirectory(retiredStagingDir)
-    try? FileManager.default.moveItem(at: stagingDir, to: retiredStagingDir.appendingPathComponent(UUID().uuidString))
+    try? Self.createDirectory(retiredStagingDir)  // If this fails, the move below fails too; see above.
+    try? FileManager.default.moveItem(at: stagingDir, to: retiredStagingDir.appendingPathComponent(UUID().uuidString))  // The next launch retries.
   }
 
   /// Copies a file; on APFS this is a clone, so it costs no space until one side changes.
+  /// Edit & Resend uses it to copy a message's images into the tray. An existing file at the
+  /// destination is replaced.
   func cloneItem(at from: URL, to: URL) throws {
     try Self.createDirectory(to.deletingLastPathComponent())
     if FileManager.default.fileExists(atPath: to.path) { try FileManager.default.removeItem(at: to) }
@@ -136,7 +157,9 @@ struct FileStore: Sendable {
     return result
   }
 
-  /// Removes a file or folder, counting the regular files and bytes it held.
+  /// Removes a file or folder, counting the regular files and bytes it held. It adds to `result`
+  /// (an `inout` parameter: the caller's value, changed in place), so one result can collect many
+  /// removals. It never throws: a failure is counted in `result`.
   func remove(_ url: URL, into result: inout DeletionResult) {
     guard FileManager.default.fileExists(atPath: url.path) else { return }
     let (count, bytes) = Self.usage(of: url)
@@ -152,6 +175,7 @@ struct FileStore: Sendable {
     }
   }
 
+  /// Bytes on disk for each area, for the storage section of Settings.
   struct Sizes: Sendable, Equatable {
     var images: Int64 = 0
     var requests: Int64 = 0
@@ -172,7 +196,7 @@ struct FileStore: Sendable {
     var isDir: ObjCBool = false
     guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return (0, 0) }
     if !isDir.boolValue {
-      let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+      let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0  // An unreadable size counts as 0.
       return (1, Int64(size))
     }
     var count = 0
@@ -180,7 +204,7 @@ struct FileStore: Sendable {
     let keys: [URLResourceKey] = [.isRegularFileKey, .fileSizeKey]
     if let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: keys) {
       for case let file as URL in e {
-        guard let v = try? file.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { continue }
+        guard let v = try? file.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { continue }  // Skip; a count only.
         count += 1
         bytes += Int64(v.fileSize ?? 0)
       }

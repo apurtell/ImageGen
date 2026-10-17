@@ -2,6 +2,7 @@ import CoreGraphics
 
 /// The viewer's zoom rules (D§3.7). The image view is sized in image pixels as points, so a zoom
 /// scale of 1 shows one image pixel per point.
+/// Pure functions with no UIKit state, used by `ZoomingScrollView` and tested on their own.
 enum ZoomMath {
   /// The scale that fits the whole image in the bounds.
   static func fitScale(image: CGSize, bounds: CGSize) -> CGFloat {
@@ -10,6 +11,8 @@ enum ZoomMath {
   }
 
   /// The larger of 1:1 pixels × 2 and 4× the fit scale.
+  /// One image pixel per screen pixel is a zoom scale of 1 / `screenScale`; twice that is
+  /// 2 / `screenScale`.
   static func maxScale(fit: CGFloat, screenScale: CGFloat) -> CGFloat {
     max(2 / max(screenScale, 1), 4 * fit)
   }

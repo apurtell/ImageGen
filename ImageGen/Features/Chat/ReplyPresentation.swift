@@ -2,7 +2,13 @@ import Foundation
 
 /// What a request record looks like in the transcript (D§3.4): the single source for card glyphs,
 /// titles, message lines and buttons. Pure, so `ReplyPresentationTests` can check every row.
+///
+/// The views (`ModelReplyView`, `PendingReplyCard`) copy a request record's fields into `Input`,
+/// call `make`, and draw the result. The logic has no SwiftUI and no records in it, so it has no
+/// threading concerns: it is a function from values to a value. Each case is an enum case with
+/// associated values: a pending reply carries its label, a card carries its contents.
 enum ReplyPresentation: Equatable {
+  /// A request in progress: the pending card, with the line under the timer, or nil for none.
   case pending(label: String?)
   case card(Card)
   /// A success renders the reply's parts; nothing to present here.
@@ -24,6 +30,8 @@ enum ReplyPresentation: Equatable {
     var buttons: [Button]
   }
 
+  /// The request fields that decide the presentation, as plain values. `now` is a field (not a
+  /// clock read) so that the countdown is testable and `PendingReplyCard` can pass its timeline date.
   struct Input: Equatable {
     var state: RequestState
     var httpStatus: Int?
@@ -46,14 +54,19 @@ enum ReplyPresentation: Equatable {
 
   static let pupNote = "This API account is limited by Google; retrying won't help."
 
+  /// The presentation for one request. The `switch` covers every `RequestState`; the compiler
+  /// rejects a new state that this function doesn't handle.
   static func make(_ i: Input) -> ReplyPresentation {
     switch i.state {
     case .preparing:
       return .pending(label: "Preparing images…")
     case .inFlight, .parsing, .retryScheduled:
+      // `isNetworkUnavailable` already includes "in the foreground" (see `showsWaitingForNetwork`).
+      // Parsing needs no network, so it never waits for one.
       if i.isNetworkUnavailable && i.state != .parsing { return .pending(label: "Waiting for network") }
       guard i.state == .retryScheduled else { return .pending(label: nil) }
       let attempt = "attempt \(i.autoRetriesUsed + 1)/\(i.maxAutoRetries + 1)"
+      // iOS may defer a retry created in the background, so it gets no countdown (D§6, Retry policy).
       if i.nextAttemptCreatedInBackground || i.nextAttemptAt == nil { return .pending(label: "Retry scheduled (\(attempt))") }
       let seconds = max(0, Int(ceil(i.nextAttemptAt!.timeIntervalSince(i.now))))
       return .pending(label: "Retrying in \(seconds) s (\(attempt))")
@@ -83,6 +96,8 @@ enum ReplyPresentation: Equatable {
     }
   }
 
+  /// A failed request's card. Failures the app found itself carry a `LocalErrorStatus` and are
+  /// matched first; the rest are HTTP errors from the service, matched by status code.
   private static func failed(_ i: Input) -> Card {
     let message = i.errorMessage.flatMap { $0.isEmpty ? nil : $0 }
     switch i.errorStatus.flatMap(LocalErrorStatus.init(rawValue:)) {
@@ -103,6 +118,8 @@ enum ReplyPresentation: Equatable {
         symbol: "doc.questionmark", title: "Unexpected response", message: "The server didn't return a Gemini response.",
         buttons: [.retry, .details])
     case .tooLarge:
+      // The stored message starts "Images too large to send together (N MB)."; the title is that
+      // part up to and including ")".
       let title = message.flatMap { m in m.range(of: ")").map { String(m[..<$0.upperBound]) } }
         ?? "Images too large to send together"
       return Card(symbol: "photo.stack", title: title, message: "Remove some or lower the max size in Settings.", buttons: [])
@@ -121,6 +138,7 @@ enum ReplyPresentation: Equatable {
     }
     let code = i.httpStatus ?? 0
     let status = i.errorStatus.map { " \($0)" } ?? ""
+    // The service reports a bad key as 400 with this reason in the body, not always as 401 or 403.
     let keyInvalid = i.details?.contains("API_KEY_INVALID") == true
     switch code {
     case 401, 403:
@@ -146,7 +164,8 @@ enum ReplyPresentation: Equatable {
   }
 }
 
-/// The chat list's status for a chat (D§3.3), from its latest request.
+/// The chat list's status for a chat (D§3.3), from its latest request. It is here, next to the
+/// reply cards, so that both screens judge "needs attention" from the same states.
 enum ChatRowStatus: Equatable {
   case none
   case inFlight

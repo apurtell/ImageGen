@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// An image's long-press menu (D§3.6): Edit from here, the exports (original bytes, D§4.9), View.
+/// The menu only reports the choice; the caller's closures do the work.
 struct ImageContextMenu: View {
   let onEditFromHere: () -> Void
   let onExport: (ImageExportAction) -> Void

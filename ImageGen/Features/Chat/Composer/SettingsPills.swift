@@ -1,6 +1,10 @@
 import SwiftUI
 
 /// The Model, Aspect and Resolution pills (D§3.5): an accent dot on an override, ⚠︎ on coercion.
+///
+/// Each item starts a `Task` that saves the override; the pill's label changes when the save
+/// completes and the model's `overrides` changes. The checkmark marks the effective value, which
+/// can differ from the override when the model coerces it.
 struct SettingsPills: View {
   let model: ChatScreenModel
 
@@ -39,6 +43,7 @@ struct SettingsPills: View {
       .menuOrder(.fixed)
 
       Menu {
+        // Some models take no size parameter.
         if model.sizes.isEmpty {
           Text("Fixed by this model")
         } else {

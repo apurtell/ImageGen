@@ -4,6 +4,9 @@ import Synchronization
 
 // Touches the iOS 26 APIs the app depends on, so a missing or renamed one fails the build early
 // (risk P8). Nothing uses it. Delete in M9.
+//
+// What each declaration probes: the Liquid Glass views and `safeAreaBar`; `Mutex` in a `Sendable`
+// class; the `@concurrent` attribute; a SwiftData `@Model` record; and a `@ModelActor` store.
 
 private struct PlatformProbeView: View {
   var body: some View {

@@ -1,6 +1,8 @@
 import Foundation
 
 /// Whether the API honored the requested size and aspect ratio (D§3.4, R3 and R4). Pure.
+/// The reply's metadata line uses it to show a "returned …" warning when the output differs from the
+/// request. It has no state, so any thread can call it.
 enum SizeClass {
   static let sizeTolerance = 1.5
   static let aspectTolerance = 0.03
@@ -12,6 +14,7 @@ enum SizeClass {
   /// The size class with the nearest nominal megapixels (by ratio). Pixel count, not the long edge,
   /// because extreme ratios have long edges outside the usual range (1:8 at 1K is 384×3072).
   static func classify(width: Int, height: Int) -> ImageSize {
+    // Compare by the log of the ratio, so "twice as large" and "half as large" count as the same distance.
     let mp = megapixels(width: width, height: height)
     return ImageSize.allCases.min { abs(log(mp / $0.nominalMegapixels)) < abs(log(mp / $1.nominalMegapixels)) }!
   }

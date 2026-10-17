@@ -2,6 +2,10 @@ import Foundation
 
 /// Resolves the settings a request is sent with (D§2.5): the chat's overrides over the global
 /// defaults, coerced to what the model supports. Pure; the caller logs any coercions.
+///
+/// A case-less `enum` used as a namespace. `ChatScreenModel` calls it on the main actor, for the
+/// settings pill and at tap time; the result goes into the `SendDraft` and is recorded on the request.
+/// `catalog` is a seam for tests.
 enum GenerationSettingsResolver {
   static func resolve(
     _ o: ChatOverrides, _ d: GenerationDefaults,
@@ -77,6 +81,8 @@ enum GenerationSettingsResolver {
   }
 
   /// The nearest supported size, preferring the larger on a tie.
+  /// The `!` unwraps stop the app if they find nil. They can't: every size is in `allCases`, and
+  /// the caller passes this only a non-empty list.
   private static func nearestSize(to requested: ImageSize, in supported: [ImageSize]) -> ImageSize {
     let order = ImageSize.allCases
     let target = order.firstIndex(of: requested)!

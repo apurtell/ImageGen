@@ -2,13 +2,16 @@ import SwiftData
 import SwiftUI
 
 /// The pin chip (with ✕) and the informational "Editing latest image" chip (no ✕) (D§3.5).
+///
+/// Which chip shows comes from the model (`showsPinChip`, `showsImplicitChip`), so the rule lives in
+/// one place. The thumbnail's record is fetched here from the main context by ID.
 struct ContextChips: View {
   let model: ChatScreenModel
   @Environment(\.modelContext) private var context
 
   private func asset(_ id: UUID?) -> ImageAsset? {
     guard let id else { return nil }
-    return try? context.fetch(FetchDescriptor<ImageAsset>(predicate: #Predicate { $0.id == id })).first
+    return try? context.fetch(FetchDescriptor<ImageAsset>(predicate: #Predicate { $0.id == id })).first  // try?: a failed fetch shows the placeholder
   }
 
   var body: some View {

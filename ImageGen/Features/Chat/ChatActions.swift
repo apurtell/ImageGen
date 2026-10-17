@@ -1,6 +1,11 @@
 import Foundation
 
 /// Chat-level actions shared by the chat list and the chat screen, each logged (D§4.13).
+///
+/// A small struct of references that the screen models build when they need it; it has no state of
+/// its own. It runs on the main actor and awaits `DataStore` and `GenerationService`, so other code
+/// can change the chat between its reads and its writes. Each action therefore lets the store make
+/// the final decision in one step (for example `deleteIfEmpty`), and acts on what the store reports.
 @MainActor
 struct ChatActions {
   let store: DataStore
@@ -21,14 +26,16 @@ struct ChatActions {
     }
   }
 
+  /// Renames a chat; an empty name reverts to the automatic title (the store decides).
+  /// `\(private: …)` marks the titles as private in the activity log.
   func rename(_ id: UUID, to name: String) async {
-    let old = (try? await store.conversationTitle(id)) ?? ""
+    let old = (try? await store.conversationTitle(id)) ?? ""  // try?: the old title is for the log only
     let action = log.begin(
       "Rename chat", origin: .user,
       "chat \(Format.short(id)) · \(private: Self.quoted(old)) → \(private: Self.quoted(name.trimmingCharacters(in: .whitespacesAndNewlines)))")
     do {
       try await store.rename(id, to: name)
-      let now = (try? await store.conversationTitle(id)) ?? ""
+      let now = (try? await store.conversationTitle(id)) ?? ""  // try?: the new title is for the log only
       log.result(action, .success, "done · title now \(private: Self.quoted(now))")
     } catch {
       log.result(action, .failed, "\(error.localizedDescription)")
@@ -36,8 +43,11 @@ struct ChatActions {
   }
 
   /// Deletes a chat left with no messages (D§3.3). Logged only when there's something to delete.
+  ///
+  /// The count is a quick check that avoids an empty log action. A send can record a message after
+  /// that check, so `deleteIfEmpty` checks again in the same step as the delete, and wins.
   func discardIfEmpty(_ id: UUID) async {
-    guard (try? await store.messageCount(conv: id)) == 0 else { return }
+    guard (try? await store.messageCount(conv: id)) == 0 else { return }  // try?: a chat already gone needs no discard
     let action = log.begin("Delete empty chat", origin: .system, "chat \(Format.short(id)) · left with no messages")
     do {
       let deleted = try await store.deleteIfEmpty(id)
@@ -48,10 +58,11 @@ struct ChatActions {
   }
 
   /// Cancels the chat's live request first, then deletes it and its files.
+  /// On success it removes the chat from the navigation path, which closes its screen.
   func deleteChat(_ id: UUID) async {
-    let title = (try? await store.conversationTitle(id)) ?? ""
-    let images = (try? await store.imageCount(conv: id)) ?? 0
-    let live = try? await store.liveRequest(conv: id)
+    let title = (try? await store.conversationTitle(id)) ?? ""  // try?: the title is for the log only
+    let images = (try? await store.imageCount(conv: id)) ?? 0  // try?: the count is for the log only
+    let live = try? await store.liveRequest(conv: id)  // try?: read as "no live request"; the delete reports any
     let action = log.begin(
       "Delete chat", origin: .user,
       "chat \(Format.short(id)) · \(private: Self.quoted(title)) · \(images) image\(images == 1 ? "" : "s") · \(live == nil ? "no live request" : "1 live request to cancel")")

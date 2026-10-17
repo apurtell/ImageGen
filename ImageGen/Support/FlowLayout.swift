@@ -2,9 +2,17 @@ import SwiftUI
 
 /// Lays subviews out left to right at their ideal size, wrapping to a new row when one doesn't
 /// fit (the composer pills at large text sizes).
+///
+/// `Layout` is SwiftUI's protocol for a custom container. SwiftUI first calls `sizeThatFits` to ask
+/// how big the container is for a proposed size, then `placeSubviews` to put each child inside the
+/// final bounds. Both compute the rows the same way, from each subview's ideal size (the
+/// `.unspecified` proposal). `cache: inout ()` means no cache: the rows are computed again in each
+/// call, which is cheap for a few pills. Layout runs on the main actor. Used by `SettingsPills`.
 struct FlowLayout: Layout {
   var spacing: CGFloat = 8
 
+  /// A nil proposed width (no limit) gives one row. The reported width is the widest row, never more
+  /// than the proposal.
   func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
     let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
     let width = rows.map(\.width).max() ?? 0
@@ -12,6 +20,7 @@ struct FlowLayout: Layout {
     return CGSize(width: proposal.width.map { min($0, width) } ?? width, height: height)
   }
 
+  /// Places each subview at its ideal size, centered vertically in its row.
   func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
     var y = bounds.minY
     for row in rows(width: bounds.width, subviews: subviews) {
@@ -32,6 +41,8 @@ struct FlowLayout: Layout {
     var height: CGFloat = 0
   }
 
+  /// Fills each row greedily until the next subview doesn't fit. A row always takes its first
+  /// subview, so a subview wider than `width` gets a row of its own (and extends past the edge).
   private func rows(width: CGFloat, subviews: Subviews) -> [Row] {
     var rows: [Row] = []
     var current = Row()

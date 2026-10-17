@@ -1,5 +1,6 @@
 import Foundation
 
+/// One block of reply text. An enum with associated values: each case carries its own data.
 enum MarkdownBlock: Sendable, Equatable {
   case heading(level: Int, text: String)
   case paragraph(String)
@@ -12,6 +13,10 @@ enum MarkdownBlock: Sendable, Equatable {
 /// A small block parser for reply text (D§4.12): ATX headings, `-`/`*`/`+`/`1.` lists with nesting,
 /// fenced code, block quotes and paragraphs. Inline styling is left to
 /// `AttributedString(markdown:)`; Markdown images are dropped. Pure.
+///
+/// `MarkdownView` calls `parse`. It reads the text line by line in one pass. Its state is the open
+/// paragraph, the open quote and the indents of the open list levels. A blank line ends every open
+/// block. Pure, so any thread or actor can call it.
 enum MarkdownBlocks {
   static func parse(_ text: String) -> [MarkdownBlock] {
     var blocks: [MarkdownBlock] = []
@@ -20,6 +25,7 @@ enum MarkdownBlocks {
     var listIndents: [Int] = []
     var lastWasListItem = false
 
+    // Local functions: they can change the variables of `parse` around them.
     func flushParagraph() {
       let joined = stripImages(paragraph.joined(separator: "\n")).trimmingCharacters(in: .whitespacesAndNewlines)
       if !joined.isEmpty { blocks.append(.paragraph(joined)) }
@@ -42,6 +48,7 @@ enum MarkdownBlocks {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
       i += 1
 
+      // A blank line also ends the list, so nesting starts again after it.
       if trimmed.isEmpty {
         flushAll()
         lastWasListItem = false
@@ -50,6 +57,7 @@ enum MarkdownBlocks {
       }
 
       // Fenced code: everything up to the closing fence (or the end) verbatim.
+      // The closing fence is any line that starts with the same marker.
       if let fence = fenceMarker(trimmed) {
         flushAll()
         lastWasListItem = false
@@ -81,6 +89,8 @@ enum MarkdownBlocks {
 
       if let (indent, number, content) = listItem(line) {
         flushAll()
+        // Close the levels deeper than this indent, then open a level if it is deeper than the
+        // open one. The depth is the number of open levels, less one.
         while let top = listIndents.last, indent < top { listIndents.removeLast() }
         if listIndents.isEmpty || indent > listIndents.last! { listIndents.append(indent) }
         blocks.append(.listItem(depth: listIndents.count - 1, number: number, text: stripImages(content)))
@@ -100,6 +110,7 @@ enum MarkdownBlocks {
       paragraph.append(trimmed)
     }
     flushAll()
+    // Drop headings and list items with no text, for example after `stripImages`.
     return blocks.filter {
       switch $0 {
       case .heading(_, let t), .listItem(_, _, let t): !t.trimmingCharacters(in: .whitespaces).isEmpty
@@ -135,6 +146,7 @@ enum MarkdownBlocks {
     return (hashes, content)
   }
 
+  /// `>` with up to 3 spaces of indent. One space after `>` is removed.
   private static func quoteContent(_ line: String) -> String? {
     let indent = line.prefix { $0 == " " }.count
     guard indent <= 3 else { return nil }

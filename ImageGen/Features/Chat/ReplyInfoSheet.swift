@@ -3,6 +3,9 @@ import SwiftUI
 
 /// A reply's Info (D§3.6): the recorded settings, how the input was chosen, timing and the
 /// response identifiers; for a refusal the `finishMessage`; the redacted JSON under Details.
+///
+/// It reads the `GenerationRequest` record directly, on the main actor, so it shows the record's
+/// current values while it is open. A refusal's `finishMessage` is stored as `errorMessage`.
 struct ReplyInfoSheet: View {
   let request: GenerationRequest
   @Environment(\.dismiss) private var dismiss
@@ -18,10 +21,12 @@ struct ReplyInfoSheet: View {
     }
   }
 
+  /// The input images that still exist; a deleted input has no thumbnail, but its "Sent" row stays.
   private var inputAssets: [ImageAsset] {
     request.inputs.compactMap { input in
+      // Copied to a local: the `#Predicate` macro can compare against a plain value only.
       let id = input.imageID
-      return try? context.fetch(FetchDescriptor<ImageAsset>(predicate: #Predicate { $0.id == id })).first
+      return try? context.fetch(FetchDescriptor<ImageAsset>(predicate: #Predicate { $0.id == id })).first  // try?: a failed fetch shows no thumbnail
     }
   }
 

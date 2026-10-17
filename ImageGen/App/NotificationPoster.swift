@@ -1,6 +1,7 @@
 import Foundation
 import UserNotifications
 
+/// The content of one local notification for a finished request.
 struct ReplyNotification: Sendable, Equatable {
   let conversationID: UUID
   let title: String
@@ -20,12 +21,18 @@ enum NotificationOutcome: Sendable, Equatable {
   }
 }
 
+/// The seam between `GenerationService` and the notification system, so tests can record posts.
 protocol NotificationPosting: Sendable {
   func post(_ notification: ReplyNotification) async -> NotificationOutcome
 }
 
 /// Posts a local notification for a finished request, unless the app is active with that chat on
 /// screen, or the Settings toggle is off (D§4.11).
+///
+/// `GenerationService` (an actor) calls `post` when a request reaches a terminal state. So the poster
+/// must not depend on the main actor: it reads `AppActivity` (a locked value) and reads the Settings
+/// toggle straight from `UserDefaults` through `isEnabled`. The struct holds only `Sendable` values and
+/// `@Sendable` closures, so it is `Sendable` itself.
 struct NotificationPoster: NotificationPosting {
   let activity: AppActivity
   let isEnabled: @Sendable () -> Bool
@@ -44,6 +51,7 @@ struct NotificationPoster: NotificationPosting {
   static func userNotifications(activity: AppActivity, settingsSuite: String?) -> NotificationPoster {
     NotificationPoster(
       activity: activity,
+      // A new `UserDefaults` for each call: the closure keeps only the suite name, which is `Sendable`.
       isEnabled: {
         let ud = settingsSuite.flatMap(UserDefaults.init(suiteName:)) ?? .standard
         return AppSettings.readNotifyOnBackgroundCompletion(ud)
@@ -53,10 +61,13 @@ struct NotificationPoster: NotificationPosting {
         content.title = n.title
         content.body = n.body
         content.sound = .default
+        // `threadIdentifier` groups notifications by chat; `userInfo` carries the chat for a tap
+        // (`AppDelegate` reads it).
         content.threadIdentifier = n.conversationID.uuidString
         content.userInfo = ["conversationID": n.conversationID.uuidString]
+        // `trigger: nil` delivers it now.
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        try? await UNUserNotificationCenter.current().add(request)
+        try? await UNUserNotificationCenter.current().add(request)  // A failed post loses only the banner; the reply is saved.
       })
   }
 

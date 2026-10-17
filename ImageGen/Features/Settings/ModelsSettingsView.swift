@@ -2,8 +2,13 @@ import SwiftUI
 
 /// Settings › Models (D§3.8): the fixed default, a toggle per other catalog model with its
 /// availability, custom IDs, and pull to refresh.
+///
+/// A page pushed inside the Settings sheet. It shares the sheet's `SettingsModel`, which logs each
+/// change, checks custom IDs with the service, and runs the models refresh. It runs on the main
+/// actor; Add, Check Now and pull to refresh each start one `Task` or async call.
 struct ModelsSettingsView: View {
   let model: SettingsModel
+  /// The Add field's text, and the message under it after a refused Add.
   @State private var newID = ""
   @State private var addError: String?
 
@@ -36,6 +41,7 @@ struct ModelsSettingsView: View {
         ForEach(model.settings.customModelIDs, id: \.self) { id in
           Text(id).font(.body.monospaced())
         }
+        // Swipe to delete. The model logs each removal.
         .onDelete { offsets in
           for i in offsets { model.removeCustomModel(model.settings.customModelIDs[i]) }
         }
@@ -44,7 +50,10 @@ struct ModelsSettingsView: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .font(.body.monospaced())
+            // Return can submit again while a check runs. The model refuses the second call, so
+            // there is one check at a time.
             .onSubmit { Task { await add() } }
+          // The spinner replaces Add while a check runs, so the button cannot start a second one.
           if model.isAddingModel {
             ProgressView()
           } else {
@@ -82,9 +91,12 @@ struct ModelsSettingsView: View {
     }
     .navigationTitle("Models")
     .navigationBarTitleDisplayMode(.inline)
+    // `.refreshable` adds pull to refresh; the spinner stays until the call returns.
     .refreshable { await model.refreshModels() }
   }
 
+  /// Add, or Return in the field. The field is cleared only after a successful add, so a refused ID
+  /// stays for the user to correct.
   private func add() async {
     addError = nil
     switch await model.addCustomModel(newID) {
