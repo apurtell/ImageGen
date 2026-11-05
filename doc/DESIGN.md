@@ -290,7 +290,8 @@ This screen appears when the Keychain has no key, at first launch or after the k
 - Trailing: the Developer menu (`hammer`, section 3.10), then the existing chat menu, which offers Rename, "Chat settings…" (the model, aspect and resolution overrides, the same as the pills) and Delete chat.
 
 **Transcript**
-- A `ScrollView` with a `LazyVStack`, `.defaultScrollAnchor(.bottom)`, and `.scrollDismissesKeyboard(.interactively)`.
+- A `ScrollView` with a `LazyVStack`, a bottom scroll anchor for the initial position, and `.scrollDismissesKeyboard(.interactively)`.
+- The view moves on its own only to follow the end of the transcript: a new last message, or the last rows growing while the bottom edge is in view. A row retried further up grows in place, the rows above it stay still, and it never pulls the view to the bottom. Height changes keep the bottom edge still only while following; otherwise they keep the top of the visible rows still.
 - On open and on a new message, it scrolls to the bottom. A "jump to latest" glass button appears when you're scrolled more than one screen up.
 
 **User message**

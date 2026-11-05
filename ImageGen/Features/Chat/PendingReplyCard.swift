@@ -32,8 +32,8 @@ struct PendingReplyCard: View {
             }
           }
         }
+        // Same geometry as the image that replaces it, so the row doesn't change height on completion.
         .aspectRatio(aspect, contentMode: .fit)
-        .frame(maxHeight: 360)
         .animation(.linear(duration: 0.5), value: context.date)
       }
       Button("Cancel", systemImage: "xmark.circle", role: .cancel, action: onCancel)

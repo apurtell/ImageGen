@@ -22,6 +22,11 @@ struct ChatView: View {
   @State private var exporter: ImageExportModel
   @State private var awayFromBottom = false
   @State private var settledLastID: UUID?
+  /// The transcript's bottom edge is in view, so tail growth should keep it there.
+  @State private var isAtBottom = true
+  /// A row above the tail was retried: it grows in place until the user scrolls or a new tail arrives.
+  @State private var holdingForRetry = false
+  @State private var isUserScrolling = false
 
   /// Presentation payload wrapper for arbitrary details text sheets.
   struct DetailsText: Identifiable {
@@ -125,9 +130,15 @@ struct ChatView: View {
     .onChange(of: signature) { _, _ in Task { await model.reload() } }
   }
 
+  /// Whether height changes should keep the bottom edge still. Otherwise the top of the visible rows stays still.
+  private var followsTail: Bool { isAtBottom && !holdingForRetry }
+
   /// Renders transcript messages within a lazily stacked scrolling view anchored to the latest message.
+  ///
+  /// The view only moves on its own to follow the tail: a new last message, or growth of the last rows while
+  /// the bottom edge is in view. A row retried further up changes height in place and leaves the position alone.
   private func transcript(_ proxy: ScrollViewProxy) -> some View {
-      ScrollView {
+    ScrollView {
       LazyVStack(spacing: 16) {
         ForEach(messages) { message in
           let request = message.requestID.flatMap { requestsByID[$0] }
@@ -137,19 +148,32 @@ struct ChatView: View {
           .id(message.id)
         }
       }
+      .scrollTargetLayout()
       .padding(.horizontal)
       .padding(.top, 8)
     }
-    .defaultScrollAnchor(.bottom)
+    .defaultScrollAnchor(.bottom, for: .initialOffset)
+    .defaultScrollAnchor(.bottom, for: .alignment)
+    .defaultScrollAnchor(followsTail ? .bottom : .top, for: .sizeChanges)
     .scrollDismissesKeyboard(.interactively)
     .onScrollGeometryChange(for: Bool.self) { geo in
       geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height > geo.containerSize.height
     } action: { _, away in
       awayFromBottom = away
     }
+    .onScrollGeometryChange(for: CGFloat.self) { geo in
+      geo.contentSize.height + geo.contentInsets.bottom - geo.visibleRect.maxY
+    } action: { _, distance in
+      isAtBottom = distance < 44
+    }
+    .onScrollPhaseChange { _, phase in
+      isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+      if phase == .interacting { holdingForRetry = false }
+    }
     .overlay(alignment: .bottomTrailing) {
       if awayFromBottom, let last = messages.last {
         Button {
+          holdingForRetry = false
           withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
         } label: {
           Image(systemName: "arrow.down").frame(width: 36, height: 36)
@@ -162,18 +186,28 @@ struct ChatView: View {
     .safeAreaBar(edge: .bottom) {
       ComposerView(model: model)
     }
-    .onChange(of: messages.count) { _, _ in
-      if let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
-    }
-    .task(id: "\(messages.last?.id.uuidString ?? "")|\(signature)") {
-      // Periodically re-align to bottom to accommodate delayed image layout and expansion.
-      let lastID = messages.last?.id
-      guard lastID != settledLastID || !awayFromBottom else { return }
+    .task(id: messages.last?.id) {
+      // A new last message scrolls to it. Skipped on first load, which starts at the bottom already.
+      guard let lastID = messages.last?.id, lastID != settledLastID else { return }
+      let isFirstLoad = settledLastID == nil
       settledLastID = lastID
-      for delay in [0.05, 0.35, 0.9] {
-        try? await Task.sleep(for: .seconds(delay))
-        if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) }
-      }
+      holdingForRetry = false
+      if !isFirstLoad { withAnimation { proxy.scrollTo(lastID, anchor: .bottom) } }
+      await settleAtBottom(proxy) { true }
+    }
+    .task(id: signature) {
+      // A request changing state can resize the last rows: stay with them if the bottom edge is in view.
+      guard followsTail else { return }
+      await settleAtBottom(proxy) { followsTail }
+    }
+  }
+
+  /// Re-aligns to the bottom a few times to absorb delayed image layout, leaving the position to any scroll the user starts.
+  private func settleAtBottom(_ proxy: ScrollViewProxy, while shouldContinue: () -> Bool) async {
+    for delay in [0.05, 0.35, 0.9] {
+      do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+      guard !isUserScrolling, shouldContinue(), let last = messages.last else { return }
+      proxy.scrollTo(last.id, anchor: .bottom)
     }
   }
 
@@ -214,7 +248,10 @@ struct ChatView: View {
     return MessageRowActions(
       copy: { text, kind in model.copy(text, kind: kind) },
       regenerate: { id in Task { await model.regenerate(requestID: id) } },
-      retry: { id in Task { await model.retry(requestID: id) } },
+      retry: { id in
+        if messages.last?.requestID != id { holdingForRetry = true }
+        Task { await model.retry(requestID: id) }
+      },
       cancel: { _ in Task { await model.stop() } },
       editRefused: { id in Task { await model.editRefused(requestID: id) } },
       editAndResend: { id in Task { await model.editAndResend(userMessageID: id) } },

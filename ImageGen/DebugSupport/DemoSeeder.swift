@@ -28,6 +28,7 @@ enum DemoSeeder {
       keys["uploads"] = try await s.uploads()
       keys["refused"] = try await s.refused()
       keys["lighthouse"] = try await s.lighthouse()
+      keys["refusals"] = try await s.refusals()
     } catch {
       Log.store.error("demo seed failed: \(error.localizedDescription, privacy: .public)")
     }
@@ -153,6 +154,29 @@ enum DemoSeeder {
         try await succeed(t.requestID, conv: conv, prompt: prompt, text: "Turn \(turn).", aspect: aspects[turn % aspects.count])
       }
       try await store.rename(conv, to: "Large chat (60 messages)")
+      return conv
+    }
+
+    /// Constructs a long chat with refused replies scattered through it, for checking Retry far from the bottom.
+    func refusals() async throws -> UUID {
+      let conv = try await store.createConversation()
+      for turn in 1...12 {
+        let prompt = "Scene \(turn): the same character"
+        let t = try await send(conv, prompt)
+        if turn % 3 == 0 {
+          try await store.updateRequest(t.requestID) { p in
+            p.state = .refused
+            p.attempt = 1
+            p.httpStatus = 200
+            p.refusalReason = "IMAGE_SAFETY"
+            p.errorMessage = "Mock: image blocked by safety filter"
+            p.completedAt = Date()
+          }
+        } else {
+          try await succeed(t.requestID, conv: conv, prompt: prompt, text: "Turn \(turn).")
+        }
+      }
+      try await store.rename(conv, to: "Scattered refusals")
       return conv
     }
 
