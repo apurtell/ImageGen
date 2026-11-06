@@ -22,6 +22,8 @@ final class SettingsModel {
     var navigator: Navigator
     /// Closure querying current system notification authorization status.
     var notificationStatus: @Sendable () async -> String
+    /// Optional cache of in-memory conversation screen models invalidated upon bulk deletion.
+    var chatModels: ChatModelCache?
   }
 
   /// Categorization of model availability based on cached catalog metadata.
@@ -190,7 +192,7 @@ final class SettingsModel {
     switch notificationStatus {
     case "authorized": "Allowed"
     case "provisional", "ephemeral": "Allowed quietly"
-    case "denied": "Off in system Settings"
+    case "denied": Platform.notificationsDeniedStatus
     default: "Not asked yet"
     }
   }
@@ -265,6 +267,8 @@ final class SettingsModel {
     }
     // Unwind navigation stack to root conversation list to prevent viewing invalid deleted sessions.
     services.navigator.path = []
+    services.chatModels?.removeAll()
+    Platform.closeViewer(ofConversation: nil)
     await services.thumbnails.removeFromMemory()
     show("All chats deleted")
     await refreshSizes()

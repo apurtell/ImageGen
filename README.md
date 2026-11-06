@@ -1,6 +1,6 @@
 # ImageGen
 
-ImageGen is a native iOS client for multimodal image generation and iterative editing powered by Google's Gemini REST API (`generateContent`). Using direct client-to-API communication with user managed API credentials, the application provides a conversational interface for text-to-image and image-to-image generation, persisting conversation state and generated media locally on device.
+ImageGen is a native iOS and macOS client for multimodal image generation and iterative editing powered by Google's Gemini REST API (`generateContent`). Using direct client-to-API communication with user managed API credentials, the application provides a conversational interface for text-to-image and image-to-image generation, persisting conversation state and generated media locally on device. The iOS and macOS apps are separate native targets (UIKit-free SwiftUI shared code plus per-platform code), not Catalyst.
 
 ## Capabilities
 
@@ -8,8 +8,8 @@ ImageGen is a native iOS client for multimodal image generation and iterative ed
 - **Iterative Image Editing**: Image-to-image workflows chain context from the most recent image synthesized in the chat. Any previous image can be designated as a new starting checkpoint via **Edit from here**.
 - **Multimodal Attachment Pipeline**: Supports importing up to 14 images per prompt across Photos, Files, and the system clipboard. The ingestion pipeline normalizes HEIC to JPEG, strips EXIF and GPS metadata, and rescales images to configurable dimension thresholds.
 - **Dimensional and Aspect Ratio Controls**: Aspect ratio (14 standard options) and output resolution (512, 1K, 2K, 4K) are governed by global defaults in Settings and can be overridden per conversation. Each dispatched request captures its exact operational parameters to guarantee deterministic re-execution upon **Regenerate**.
-- **Resilient Background Execution**: Dispatched requests run via an iOS background `URLSession` and background task assertions, ensuring uninterrupted execution across app suspension and process termination, with local push notifications delivered on completion.
-- **Bit-Identical Export Pipeline**: Export operations (Photos library, Files filesystem, share sheet, pasteboard) deliver the uncompressed byte streams returned by the Gemini API without intermediate re-encoding.
+- **Resilient Background Execution**: Dispatched requests run via a background `URLSession`. On iOS, background task assertions keep them running across app suspension and process termination; on macOS a `ProcessInfo` activity assertion prevents idle system sleep and App Nap from the moment a request is prepared until its reply arrives. Local notifications are delivered on completion.
+- **Bit-Identical Export Pipeline**: Export operations (Photos library or a save panel, Files filesystem, share sheet, pasteboard) deliver the uncompressed byte streams returned by the Gemini API without intermediate re-encoding.
 - **Structured Activity Logging**: Comprehensive activity instrumentation records request preparation parameters, transport phases, and terminal states in plain-text diagnostic logs, inspectable through an on device Developer menu without capturing sensitive credentials or binary image data.
 
 ## System Architecture
@@ -19,16 +19,17 @@ ImageGen is a native iOS client for multimodal image generation and iterative ed
 | Directory | Layer | Architectural Responsibility |
 |---|---|---|
 | `ImageGen/Features/` | Presentation | SwiftUI user interfaces and `@Observable` view models governing chat interaction, settings, media viewing, and developer utilities. |
-| `ImageGen/App/` | Composition Root | Application initialization, dependency injection (`AppEnvironment`), lifecycle monitoring, and UIKit event routing. |
+| `ImageGen/App/` | Composition Root | Application initialization, dependency injection (`AppEnvironment`), lifecycle monitoring, and lifecycle event routing. |
 | `ImageGen/Pipeline/` | Generation Pipeline | Request preparation, input arbitration, background assertion management, transient fault recovery, and outcome reconciliation (`GenerationService`). |
 | `ImageGen/Networking/` | Transport | Background HTTP communication via `URLSessionDownloadTask` and event stream demultiplexing. |
 | `ImageGen/Gemini/` | Protocol Translation | Serialization and deserialization of Gemini API JSON contracts, error payload extraction, and data sanitization. |
 | `ImageGen/Persistence/` | Persistence | SwiftData storage engine (`DataStore`) and on-disk payload management (`FileStore`), with automatic orphaned asset purging (`Janitor`). |
 | `ImageGen/Imaging/` | Image Processing | CoreGraphics and ImageIO operations for metadata stripping, downscaling, format normalization, and thumbnail caching. |
 | `ImageGen/Export/` | Export Services | System photo library writes, sandboxed document export, and pasteboard serialization. |
-| `ImageGen/Security/` | Security | Secure storage of Gemini API credentials in the iOS Keychain with device-locked protection attributes. |
+| `ImageGen/Security/` | Security | Secure storage of Gemini API credentials in the Keychain with device-locked protection attributes (the data protection keychain on macOS). |
 | `ImageGen/Support/` | Foundations | Activity logging pipeline, typography, formatting utilities, and synchronization primitives. |
-| `ImageGen/DebugSupport/` | Testing Support | In-memory mock transports and demo dataset seeders for automated tests and standalone simulator execution. |
+| `ImageGen/DebugSupport/` | Testing Support | In-memory mock transports and demo dataset seeders for automated tests and standalone mock-mode execution. Compiled in Debug only. |
+| `Platforms/iOS/`, `Platforms/macOS/` | Platform | Per-platform UI and system glue (navigation, toolbars, composer attachments, viewer, log view, share sheet, app entry point and delegate). Both directories define the same type and function names, so `ImageGen/` calls them without conditional compilation. `ImageGen/` never imports UIKit or AppKit (enforced by `scripts/lint.sh`). |
 
 ### Request Lifecycle
 
@@ -74,7 +75,7 @@ The application enforces Swift 6 complete concurrency checking, ensuring compile
 
 ### Security and Data Isolation
 
-- **Keychain Storage**: API credentials reside exclusively within the iOS Keychain using `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Credentials are never written to disk, included in logs, or exposed in URLs.
+- **Keychain Storage**: API credentials reside exclusively within the Keychain (the data protection keychain on macOS) using `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Credentials are never written to disk, included in logs, or exposed in URLs.
 - **Data Sanitization**: Diagnostic activity logs filter out API keys and binary base64 payloads prior to persistence.
 - **Metadata Stripping**: Media attachments are scrubbed of EXIF and GPS metadata prior to network dispatch.
 - **Self-Contained Dependency Graph**: The application contains no third-party tracking, analytics, or external binary dependencies, communicating exclusively with the Gemini API endpoint.
@@ -83,9 +84,9 @@ The application enforces Swift 6 complete concurrency checking, ensuring compile
 
 ### Prerequisites
 
-- macOS with **Xcode 26** or later, configured with the iOS 26 simulator runtime.
+- macOS 26 with **Xcode 26** or later, configured with the iOS 26 simulator runtime (the macOS app needs no simulator).
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.46 or later (`brew install xcodegen`). Project files are generated deterministically from `project.yml`.
-- An active Apple Developer Program team for on device installation.
+- An active Apple Developer Program team for on device installation and for running the macOS app, whose Keychain needs a signed build.
 - A Gemini API key obtained from Google AI Studio.
 
 Run the diagnostic script to verify the local toolchain:
@@ -114,7 +115,8 @@ scripts/run-sim.sh -UITestMockGemini 1 -SeedDemoData 1
 Execute unit and integration tests under the Swift Testing framework:
 
 ```bash
-scripts/test.sh
+scripts/test.sh        # iOS simulator
+scripts/test-mac.sh    # macOS
 ```
 
 Run static analysis checks for architectural rules and banned patterns:
@@ -134,6 +136,24 @@ Execute live integration verification against the production Gemini API:
 ```bash
 TEST_RUNNER_GEMINI_API_KEY="$GEMINI_API_KEY" scripts/live-smoke.sh
 ```
+
+### macOS App
+
+The macOS target (`ImageGenMac`, product name `ImageGen`, sandboxed) needs `DEVELOPMENT_TEAM` in `Config/Local.xcconfig`; the data protection keychain refuses unsigned binaries. The scripts pass `-allowProvisioningUpdates`.
+
+```bash
+scripts/gen.sh
+scripts/build-mac.sh              # Debug; --release for Release
+scripts/run-mac.sh -UITestMockGemini 1 -SkipNotificationPrompt 1 -SeedDemoData 1
+scripts/test-mac.sh               # tests hosted in the signed app
+```
+
+`run-mac.sh` quits any running copy, waits for it to exit, and opens the built Debug app through Launch Services, trying again for a few seconds if Launch Services is still tearing down the old instance. The Debug configuration has its own bundle ID (`<IMAGEGEN_BUNDLE_ID>.debug`) and so its own sandbox container (`~/Library/Containers/com.andrewpurtell.imagegen.debug`), keychain item and defaults, which makes `-ResetStore 1` safe: it can't reach a Release install's data.
+
+Two layout rules hold on the Mac, explained in `doc/DESIGN.md` section 3.11:
+
+- **The transcript's width doesn't depend on the scroll bar.** With "Show scroll bars: Always", a bar takes width while content overflows, and an image's height follows its width, so content can overflow only when the bar is absent. Left alone, the bar toggles on every layout pass and hangs the app. So the width is capped from the scroll view's outer frame with the bar's width always reserved. It's a cap and not a fixed width, because a fixed width would become the window's minimum width.
+- **The composer is an opaque system-background bar.** Its pills and chips sit directly on that background, outlined by a hairline capsule, instead of the glass they use on iOS.
 
 ### Physical Device Installation
 

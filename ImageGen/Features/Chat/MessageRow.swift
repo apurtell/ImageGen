@@ -19,6 +19,7 @@ struct MessageRowActions {
   var pin: (UUID) -> Void
   var view: (UUID) -> Void
   var export: (ImageAsset, ImageExportAction) -> Void
+  var exportItem: (ImageAsset) -> ExportItem
   var regenerateUnavailableReason: (GenerationRequest) -> String?
 }
 
@@ -40,7 +41,7 @@ struct MessageRow: View {
           userMessageExists: userMessageExists, actions: actions)
       }
     }
-    .contextMenu {
+    .messageRowMenu(isPrompt: message.messageRole == .user) {
       MessageSection(message: message, request: request, actions: actions)
     }
   }
@@ -95,6 +96,8 @@ struct UserBubble: View {
             ForEach(message.orderedImages) { asset in
               ImageThumbnailView(asset: asset, px: ThumbnailService.listSize, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .opensOnDoubleClick(name: "Attached image \((message.orderedImages.firstIndex(of: asset) ?? 0) + 1)") { actions.view(asset.id) }
+                .draggableImage(actions.exportItem(asset))
                 .contextMenu {
                   ImageContextMenu(
                 onEditFromHere: { actions.pin(asset.id) }, onExport: { actions.export(asset, $0) },
@@ -109,10 +112,12 @@ struct UserBubble: View {
           Text(message.text)
             .foregroundStyle(.white)
             .textSelection(.enabled)
+            .selectableTextMenu { MessageSection(message: message, request: request, actions: actions) }
         }
       }
       .padding(10)
-      .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16))
+      .background(Platform.promptBubbleFill, in: RoundedRectangle(cornerRadius: 16))
+      .marksPromptBubble()
       if let reused = reusedInput {
         HStack(spacing: 4) {
           if let asset = reused.asset { SquareThumbnail(asset: asset, size: 20, corner: 4) }
@@ -199,10 +204,15 @@ struct ModelReplyView: View {
       switch part.kind {
       case .text:
         MarkdownView(part.text ?? "")
+          .selectableTextMenu { MessageSection(message: message, request: request, actions: actions) }
       case .image:
         if let id = part.imageID, let asset = assets[id] {
-          ImageThumbnailView(asset: asset)
+          let thumbnail = ImageThumbnailView(asset: asset)
+          thumbnail
+            .replyImageSizing(aspect: thumbnail.aspect)
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            .opensOnDoubleClick(name: "Generated image") { actions.view(asset.id) }
+            .draggableImage(actions.exportItem(asset))
             .contextMenu {
               ImageContextMenu(
                 onEditFromHere: { actions.pin(asset.id) }, onExport: { actions.export(asset, $0) },

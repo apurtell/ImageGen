@@ -76,7 +76,7 @@ enum ReplyPresentation: Equatable {
       return .card(
         Card(
           symbol: "bolt.horizontal.circle", title: "Interrupted: the app was closed before the result arrived",
-          message: "iOS stopped the request (for example after a force-quit). Retry to send it again.", buttons: [.retry]))
+          message: Platform.interruptedRequestMessage, buttons: [.retry]))
     case .refused:
       let reason = i.refusalReason ?? "UNKNOWN"
       if reason == "PUP_LIMITED_DISABLED" {

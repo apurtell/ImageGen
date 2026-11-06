@@ -50,7 +50,7 @@ struct ReplyPresentationTests {
     Row(name: "too large", input: input(.failed, status: "TOO_LARGE", message: "Images too large to send together (23.4 MB). Remove some or lower the max size in Settings."), symbol: "photo.stack", title: "Images too large to send together (23.4 MB)", message: "Remove some or lower the max size in Settings.", buttons: []),
     Row(name: "disk full", input: input(.failed, status: "DISK_FULL"), symbol: "externaldrive.badge.exclamationmark", title: "Not enough storage to save the result", message: "Free some space, then retry.", buttons: [.retry]),
     Row(name: "cancelled", input: input(.cancelled), symbol: "stop.circle", title: "Cancelled", message: nil, buttons: [.retry]),
-    Row(name: "interrupted", input: input(.interrupted), symbol: "bolt.horizontal.circle", title: "Interrupted: the app was closed before the result arrived", message: "iOS stopped the request (for example after a force-quit). Retry to send it again.", buttons: [.retry]),
+    Row(name: "interrupted", input: input(.interrupted), symbol: "bolt.horizontal.circle", title: "Interrupted: the app was closed before the result arrived", message: Platform.interruptedRequestMessage, buttons: [.retry]),
   ]
 
   @Test(arguments: rows)
@@ -116,5 +116,24 @@ struct AutoTitleTests {
     let t = DataStore.automaticTitle(prompt)
     #expect(t == title)
     #expect(t.count <= 48)
+  }
+}
+
+struct ChatOnScreenTests {
+  private func post(_ activity: AppActivity, _ id: UUID) async -> NotificationOutcome {
+    await NotificationPoster(activity: activity, isEnabled: { true }, deliver: { _ in })
+      .post(ReplyNotification(conversationID: id, title: "t", body: "b"))
+  }
+
+  @Test func suppressedOnlyWhileTheChatCanBeSeen() async {
+    let id = UUID()
+    let activity = AppActivity(isActive: true, visibleConversationID: id)
+    #expect(await post(activity, id) == .suppressed(reason: "chat is on screen"))
+    // Window occlusion or minimization enables notifications despite active conversation selection.
+    activity.setChatWindowVisible(false)
+    #expect(await post(activity, id) == .posted(body: "b"))
+    activity.setChatWindowVisible(true)
+    activity.setActive(false)
+    #expect(await post(activity, id) == .posted(body: "b"))
   }
 }

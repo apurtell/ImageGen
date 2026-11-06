@@ -279,6 +279,31 @@ struct FileImportTests {
   }
 }
 
+extension FileImportTests {
+  @Test func symlinkIsCopiedAsTheFileItPointsTo() throws {
+    let root = TestFileRoot()
+    let target = root.url.appendingPathComponent("target.png")
+    let data = ImageFactory.png()
+    try data.write(to: target)
+    let link = root.url.appendingPathComponent("link.png")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+    let copy = try FileImport.copySecurityScoped(link, into: root.url.appendingPathComponent("Staging"), id: UUID())
+    // Verify copied content persists as an independent regular file after source deletion.
+    try FileManager.default.removeItem(at: target)
+    #expect((try FileManager.default.attributesOfItem(atPath: copy.path))[.type] as? FileAttributeType == .typeRegular)
+    #expect(try Data(contentsOf: copy) == data)
+  }
+
+  @Test func folderNamedLikeAnImageIsRejected() throws {
+    let root = TestFileRoot()
+    let folder = root.url.appendingPathComponent("folder.png", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    #expect(throws: FileImport.Unreadable.self) {
+      try FileImport.copySecurityScoped(folder, into: root.url.appendingPathComponent("Staging"), id: UUID())
+    }
+  }
+}
+
 struct PasteSupportTests {
   @Test(arguments: [("png", "public.png"), ("jpeg", "public.jpeg"), ("heic", "public.heic")])
   func detectsTypeAndStages(kind: String, identifier: String) throws {

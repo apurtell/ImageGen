@@ -13,13 +13,15 @@ struct SettingsPills: View {
         Button(model.defaultModelItemLabel) { Task { await model.setModel(nil, from: .pill) } }
         Divider()
         ForEach(model.menuModels) { m in
-          Button { Task { await model.setModel(m.id, from: .pill) } } label: {
-            if model.effective.modelID == m.id { Label(m.shortName, systemImage: "checkmark") } else { Text(m.shortName) }
+          MenuCheckItem(title: m.shortName, isSelected: model.effective.modelID == m.id) {
+            Task { await model.setModel(m.id, from: .pill) }
           }
         }
       } label: {
         pill(model.modelPillLabel, dot: model.modelOverridden, caution: model.isCoerced(.model))
       }
+      .chromelessMenu()
+      .tooltip(model.pillHelp(.model, overridden: model.modelOverridden))
       .accessibilityLabel("Model \(model.modelPillLabel)")
       .menuOrder(.fixed)
 
@@ -28,8 +30,8 @@ struct SettingsPills: View {
         ForEach(model.aspectSections, id: \.group) { section in
           Section(section.group.rawValue.capitalized) {
             ForEach(section.ratios, id: \.self) { r in
-              Button { Task { await model.setAspect(r, from: .pill) } } label: {
-                if model.effective.aspectRatio == r { Label(r.rawValue, systemImage: "checkmark") } else { Text(r.rawValue) }
+              MenuCheckItem(title: r.rawValue, isSelected: model.effective.aspectRatio == r) {
+                Task { await model.setAspect(r, from: .pill) }
               }
             }
           }
@@ -37,6 +39,8 @@ struct SettingsPills: View {
       } label: {
         pill(model.aspectPillLabel, dot: model.aspectOverridden, caution: model.isCoerced(.aspectRatio))
       }
+      .chromelessMenu()
+      .tooltip(model.pillHelp(.aspectRatio, overridden: model.aspectOverridden))
       .accessibilityLabel("Aspect ratio \(model.aspectPillLabel)")
       .menuOrder(.fixed)
 
@@ -48,14 +52,16 @@ struct SettingsPills: View {
           Button(model.defaultSizeItemLabel) { Task { await model.setSize(nil, from: .pill) } }
           Divider()
           ForEach(model.sizes, id: \.self) { s in
-            Button { Task { await model.setSize(s, from: .pill) } } label: {
-              if model.effective.imageSize == s { Label(s.displayName, systemImage: "checkmark") } else { Text(s.displayName) }
+            MenuCheckItem(title: s.displayName, isSelected: model.effective.imageSize == s) {
+              Task { await model.setSize(s, from: .pill) }
             }
           }
         }
       } label: {
         pill(model.sizePillLabel, dot: model.sizeOverridden, caution: model.isCoerced(.imageSize))
       }
+      .chromelessMenu()
+      .tooltip(model.pillHelp(.imageSize, overridden: model.sizeOverridden))
       .accessibilityLabel("Resolution \(model.sizePillLabel)")
       .menuOrder(.fixed)
     }
@@ -67,11 +73,12 @@ struct SettingsPills: View {
     HStack(spacing: 4) {
       if dot { Circle().fill(Color.accentColor).frame(width: 6, height: 6) }
       // Utilize high-contrast primary foreground styling to maintain legibility across varying backdrop imagery.
-      Text(text).font(.footnote.weight(.semibold)).foregroundStyle(.primary).lineLimit(1).fixedSize()
+      Text(text).font(Platform.composerControlFont.weight(.semibold)).foregroundStyle(.primary).lineLimit(1).fixedSize()
       if caution { Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange) }
       Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.primary)
     }
     .padding(.horizontal, 10).padding(.vertical, 6)
-    .glassEffect(.composerControl(colorScheme).interactive(), in: .capsule)
+    .pillHitShape()
+    .composerControlSurface(colorScheme, interactive: true)
   }
 }

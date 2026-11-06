@@ -3,10 +3,9 @@ import SwiftUI
 /// Presents sanitized diagnostic payloads or structured error representations in a selectable monospace view.
 struct DetailsSheet: View {
   let text: String
-  @Environment(\.dismiss) private var dismiss
 
   var body: some View {
-    NavigationStack {
+    SheetScaffold(title: "Details") {
       ScrollView {
         Text(text.isEmpty ? "No details" : text)
           .font(.system(.caption, design: .monospaced))
@@ -14,15 +13,10 @@ struct DetailsSheet: View {
           .frame(maxWidth: .infinity, alignment: .leading)
           .padding()
       }
-      .navigationTitle("Details")
-      .inlineNavigationTitle()
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-        ToolbarItem(placement: .leadingBar) {
-          Button("Copy", systemImage: "doc.on.doc") { SystemPasteboard.general.string = text }
-            .accessibilityLabel("Copy")
-        }
-      }
+    } action: {
+      Button("Copy", systemImage: "doc.on.doc") { SystemPasteboard.general.string = text }
+        .tooltip("Copy")
+        .accessibilityLabel("Copy")
     }
   }
 }

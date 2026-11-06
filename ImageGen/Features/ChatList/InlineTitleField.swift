@@ -24,11 +24,13 @@ struct InlineTitleField: View {
         Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.secondary)
       }
       .buttonStyle(.plain)
+      .tooltip("Cancel rename")
       .accessibilityLabel("Cancel rename")
       Button(action: onSave) {
         Image(systemName: "checkmark.circle.fill").font(.title3).foregroundStyle(.tint)
       }
       .buttonStyle(.plain)
+      .tooltip("Save title")
       .accessibilityLabel("Save title")
     }
   }

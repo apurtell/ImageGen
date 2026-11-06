@@ -46,7 +46,7 @@ struct MarkdownView: View {
       .padding(.leading, CGFloat(depth) * 18)
     case .code(_, let text):
       // Horizontal scrolling container preserving monospace line indentation and wrapping.
-      ScrollView(.horizontal, showsIndicators: false) {
+      ScrollView(.horizontal, showsIndicators: Platform.showsHorizontalScrollIndicators) {
         Text(text)
           .font(.system(.callout, design: .monospaced))
           .padding(10)

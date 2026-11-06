@@ -8,7 +8,7 @@ struct AttachmentTray: View {
   var body: some View {
     if !model.tray.isEmpty {
       VStack(alignment: .leading, spacing: 4) {
-        ScrollView(.horizontal, showsIndicators: false) {
+        ScrollView(.horizontal, showsIndicators: Platform.showsHorizontalScrollIndicators) {
           HStack(spacing: 10) {
             // Preserve child view state across list reordering and deletions via stable entity identifiers.
             ForEach(Array(model.tray.enumerated()), id: \.element.id) { index, item in
@@ -17,7 +17,7 @@ struct AttachmentTray: View {
           }
         }
         Text(model.trayCaption)
-          .font(.caption)
+          .font(Platform.trayCaptionFont)
           .foregroundStyle(model.trayCounts.failed > 0 ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
           .accessibilityLabel("Attachments: \(model.trayCaption)")
       }
@@ -53,6 +53,7 @@ private struct TrayThumbnail: View {
           Image(systemName: "exclamationmark.triangle.fill").font(.title3).foregroundStyle(.yellow)
         }
         .buttonStyle(.plain)
+        .tooltip("Couldn't prepare this image")
         .accessibilityLabel("Couldn't prepare this image")
       }
     }
@@ -71,6 +72,7 @@ private struct TrayThumbnail: View {
           .contentShape(Rectangle())
       }
       .buttonStyle(.plain)
+      .tooltip("Remove this image")
       .accessibilityLabel("Remove image \(index + 1)")
     }
     .contextMenu {

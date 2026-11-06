@@ -56,6 +56,7 @@ struct ChatScreenModelTests {
     let model: ChatScreenModel
 
     init(
+      keepsUnsentChats: Bool = false,
       prepareUpload: (@Sendable (URL, Int, URL, UUID) async throws -> PreparedImage)? = nil
     ) async throws {
       s = try InMemoryStore()
@@ -70,6 +71,7 @@ struct ChatScreenModelTests {
         navigator: navigator, thumbnails: ThumbnailService(directory: s.files.thumbnailsDir),
         copyToPasteboard: { _ in }, draftDebounce: .milliseconds(100))
       if let prepareUpload { services.prepareUpload = prepareUpload }
+      services.keepsUnsentChats = keepsUnsentChats
       model = ChatScreenModel(conversationID: conv, services: services)
       await model.load()
     }
@@ -92,6 +94,72 @@ struct ChatScreenModelTests {
       await model.reload()
       return (record, id)
     }
+  }
+
+  @Test func leavingAnEmptyChatDeletesItAndLeavesThePath() async throws {
+    let r = try await Rig()
+    await r.model.onDisappear()
+    #expect(r.navigator.path.isEmpty)
+    #expect((try? await r.s.store.conversationTitle(r.conv)) == nil)
+  }
+
+  @Test func leavingWithADraftDeletesTheChatByDefault() async throws {
+    let r = try await Rig()
+    r.model.composerText = "a lighthouse"
+    await r.model.onDisappear()
+    #expect((try? await r.s.store.conversationTitle(r.conv)) == nil)
+  }
+
+  @Test func leavingWithADraftKeepsTheChatWhereUnsentChatsSurvive() async throws {
+    let r = try await Rig(keepsUnsentChats: true)
+    r.model.composerText = "a lighthouse"
+    await r.model.onDisappear()
+    #expect(try await r.s.store.draftText(conv: r.conv) == "a lighthouse")
+    #expect(r.navigator.path == [r.conv])
+  }
+
+  @Test func leavingWithAttachmentsKeepsTheChatWhereUnsentChatsSurvive() async throws {
+    let r = try await Rig(keepsUnsentChats: true)
+    r.model.tray = [TrayItem(id: UUID(), origin: .paste, state: .importing, originalFilename: nil)]
+    await r.model.onDisappear()
+    #expect((try? await r.s.store.conversationTitle(r.conv)) != nil)
+    // Application termination clears attachment trays, permitting discard.
+    await r.model.saveForTermination()
+    #expect((try? await r.s.store.conversationTitle(r.conv)) == nil)
+  }
+
+  @Test func renamingElsewhereTellsTheNavigator() async throws {
+    let r = try await Rig()
+    let before = r.navigator.titleRevision
+    await r.model.services.actions.rename(r.conv, to: "Harbor")
+    #expect(r.navigator.titleRevision == before + 1)
+  }
+
+  @Test func composerFocusRequestDefaultsToTheChatOnScreen() async throws {
+    let r = try await Rig()
+    r.navigator.requestComposerFocus()
+    #expect(r.navigator.pendingComposerFocus == r.conv)
+    let other = UUID()
+    r.navigator.requestComposerFocus(for: other)
+    #expect(r.navigator.pendingComposerFocus == other)
+  }
+
+  @Test func chatModelCacheKeepsOneModelPerChat() async throws {
+    let r = try await Rig()
+    let cache = ChatModelCache()
+    let services = r.model.services
+    let first = cache.model(for: r.conv, services: services)
+    #expect(cache.model(for: r.conv, services: services) === first)
+    cache.remove(r.conv)
+    #expect(cache.model(for: r.conv, services: services) !== first)
+  }
+
+  @Test func programmaticComposerChangesAreCounted() async throws {
+    let r = try await Rig()
+    r.model.composerText = "typed"
+    #expect(r.model.programmaticTextEdits == 0)
+    await r.model.send()
+    #expect(r.model.programmaticTextEdits == 1)
   }
 
   @Test func sendEnablement() async throws {

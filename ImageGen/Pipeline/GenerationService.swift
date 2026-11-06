@@ -69,6 +69,10 @@ actor GenerationService: GenerationServicing {
     /// Invokes system completion callback following background URLSession wake delivery.
     var onBackgroundEventsFinished: @Sendable (_ sessionID: String, _ completionsHandled: Int) async -> Void
     var sessionDescription = "background session"
+    /// Controls whether background-scheduled retry tasks are recreated upon foreground application activation.
+    var recreatesInactiveRetries = true
+    /// Diagnostic telemetry message recorded when completion delivers while inactive.
+    var inactiveDeliveryNote = "delivered while the app was in the background"
     var shrink: @Sendable (PreparedImage, Int) async throws -> PreparedImage = BudgetPlanner.shrinkWithPreprocessor
     var budget = BudgetPlanner.budget
     var clock: @Sendable () -> Date = { Date() }
@@ -144,6 +148,8 @@ actor GenerationService: GenerationServicing {
   private var startedAt: [UUID: ContinuousClock.Instant] = [:]
   /// Cooperative cancellation registry preserving user stop requests across lifecycle transitions.
   private var userCancelled: Set<UUID> = []
+  /// Active inflight request identifiers tracked for process execution assertions.
+  private var liveRequests: Set<UUID> = []
   /// Active preparation instances tracking inflight preparation before network dispatch.
   private var preparations: [UUID: Preparation] = [:]
   /// Tally of background-delivered completions awaiting system completion acknowledgment.
@@ -331,7 +337,7 @@ actor GenerationService: GenerationServicing {
   }
 
   private func recreateBackgroundRetries() async {
-    guard let pending = try? await d.store.nonTerminalRequests() else { return }
+    guard d.recreatesInactiveRetries, let pending = try? await d.store.nonTerminalRequests() else { return }
     // Refresh snapshot state within the request-level lock to ensure synchronization against inbound transport completions.
     for snap in pending where snap.state == .retryScheduled && snap.nextAttemptCreatedInBackground {
       // Re-read API credentials from the Keychain for every task creation.
@@ -408,6 +414,8 @@ actor GenerationService: GenerationServicing {
       guard let snap = try? await d.store.requestSnapshot(requestID), snap.attempt == attempt,
         snap.state == .inFlight || snap.state == .retryScheduled
       else { return }
+      // Register adopted request as active for process execution assertions.
+      noteLive(requestID, true)
       try? await d.store.updateRequest(requestID) { p in
         p.taskIdentifier = .some(taskIdentifier)
         if began && snap.state == .retryScheduled { p.state = .inFlight }
@@ -564,6 +572,7 @@ actor GenerationService: GenerationServicing {
     conversationOf[id] = conversation
     startedAt[id] = started
     preparations[id] = preparation
+    noteLive(id, true)
     // Relinquish transient in-memory claim once persistent record state governs conversation concurrency.
     release(conversation, claim)
   }
@@ -592,7 +601,7 @@ actor GenerationService: GenerationServicing {
     // Track tasks initialized during background execution to facilitate foreground promotion upon activation.
     try await startAttempt(
       fresh, action: action, attempt: fresh.attempt + 1, bodyURL: bodyURL, bodySize: size, earliestBegin: earliestBegin,
-      apiKey: key, createdInBackground: earliestBegin != nil && !d.activity.isActive)
+      apiKey: key, createdInBackground: d.recreatesInactiveRetries && earliestBegin != nil && !d.activity.isActive)
   }
 
   /// Commits attempt metadata to persistent storage, initializes telemetry attempt tracking, and delegates execution to transport.
@@ -723,7 +732,7 @@ actor GenerationService: GenerationServicing {
     let (attemptOutcome, attemptSummary) = Self.describeAttempt(c, userCancelled: userCancelled.contains(id))
     // Conclude prior attempt activities during reparse passes to maintain diagnostic hierarchy.
     if !isLate { closeAttempt(snap, action: action, outcome: attemptOutcome, attemptSummary) }
-    if !d.activity.isActive && !reparse { d.log.step(action, "delivered while the app was in the background") }
+    if !d.activity.isActive && !reparse { d.log.step(action, "\(d.inactiveDeliveryNote)") }
 
     // Differentiate between user directed cancellation and system initiated aborts.
     if c.error == .cancelled {
@@ -1055,8 +1064,15 @@ actor GenerationService: GenerationServicing {
     do { return try await d.store.requestSnapshot(id) != nil } catch { return true }
   }
 
+  /// Synchronizes active request tracking and notifies the background task provider of cardinality changes.
+  private func noteLive(_ id: UUID, _ live: Bool) {
+    let changed = live ? liveRequests.insert(id).inserted : liveRequests.remove(id) != nil
+    if changed { d.backgroundTasks.liveRequestsChanged(count: liveRequests.count) }
+  }
+
   /// Clears in-memory lifecycle state for a concluded request.
   private func forget(_ id: UUID) {
+    noteLive(id, false)
     userCancelled.remove(id)
     actions[id] = nil
     lateActions[id] = nil

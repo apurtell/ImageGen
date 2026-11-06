@@ -23,6 +23,8 @@ final class ImageExportModel {
   /// Monotonic counter incremented upon successful persistence to trigger tactile sensory feedback.
   private(set) var savedCount = 0
   var showPhotosDenied = false
+  /// Error description presented via modal alert on platforms configured for explicit export error presentation.
+  var failureMessage: String?
   /// Item currently presented to the system document file exporter.
   var fileExport: ExportItem?
   /// Active share ticket driving modal activity sheet presentation.
@@ -58,7 +60,7 @@ final class ImageExportModel {
     case .denied:
       showPhotosDenied = true
     case .failed(let reason):
-      show("Couldn't save: \(reason)")
+      reportFailure("Couldn't save: \(reason)")
     }
   }
 
@@ -82,8 +84,8 @@ final class ImageExportModel {
     switch result {
     case .success:
       savedCount += 1
-      show("Saved to Files")
-    case .failure(let error): show("Couldn't save: \(error.localizedDescription)")
+      show(Platform.savedToFilesToast)
+    case .failure(let error): reportFailure("Couldn't save: \(error.localizedDescription)")
     case nil: break
     }
   }
@@ -124,6 +126,10 @@ final class ImageExportModel {
     if await pasteboard.copy(item) { show("Copied") }
   }
 
+  private func reportFailure(_ text: String) {
+    if Platform.showsExportFailuresAsAlerts { failureMessage = text } else { show(text) }
+  }
+
   /// Displays a transient informational toast message for a standard display duration.
   func show(_ text: String) {
     toast = text
@@ -145,29 +151,21 @@ struct ImageExportPresenter: ViewModifier {
 
   func body(content: Self.Content) -> some View {
     content
-      .fileExporter(
-        // Defer action completion until explicit onCompletion callback resolution.
-        isPresented: Binding(get: { model.fileExport != nil }, set: { if !$0 { model.fileExport = nil } }),
-        document: model.fileExport.map { ImageFileDocument(file: $0.file) }, contentType: model.fileExport?.utType ?? .jpeg,
-        defaultFilename: model.fileExport?.suggestedName,
-        onCompletion: { model.filesFinished($0) }
-      )
-      // Correlate activity sheet lifecycle callbacks with the associated share ticket.
-      .sheet(item: $model.share) { ticket in
-        ActivityShareSheet(file: ticket.item.file) { type, completed, error in
-          model.shareFinished(ticket, activityType: type, completed: completed, error: error)
-        }
-        .presentationDetents([.medium, .large])
-        .ignoresSafeArea()
-        .onDisappear { model.shareDisappeared(ticket) }
+      .saveFilePresentation(model)
+      // Correlate share lifecycle callbacks with the associated share ticket.
+      .sharePresentation(model)
+      .alert("Couldn't Save", isPresented: Binding(get: { model.failureMessage != nil }, set: { if !$0 { model.failureMessage = nil } })) {
+        Button("OK", role: .cancel) {}
+      } message: {
+        Text(model.failureMessage ?? "")
       }
       .alert("Photos access is off", isPresented: $model.showPhotosDenied) {
-        Button("Open Settings") {
-          if let url = Platform.settingsURL { Platform.open(url) }
+        Button(Platform.openSettingsTitle) {
+          if let url = Platform.photosSettingsURL { Platform.open(url) }
         }
         Button("Cancel", role: .cancel) {}
       } message: {
-        Text("Allow ImageGen to add photos in Settings to save images to your library.")
+        Text(Platform.photosDeniedMessage)
       }
       .toast(model.toast, alignment: toastAlignment, offset: toastOffset)
       .sensoryFeedback(.success, trigger: model.savedCount)

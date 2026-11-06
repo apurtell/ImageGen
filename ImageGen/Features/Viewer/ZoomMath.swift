@@ -27,4 +27,16 @@ enum ZoomMath {
   static func centeringInsets(content: CGSize, bounds: CGSize) -> (horizontal: CGFloat, vertical: CGFloat) {
     (max(0, (bounds.width - content.width) / 2), max(0, (bounds.height - content.height) / 2))
   }
+
+  /// Computes toggle target scale alternating between fitted bounds and 1:1 pixel or double-tap magnification.
+  static func toggleTarget(current: CGFloat, fit: CGFloat, actual: CGFloat, maxScale: CGFloat) -> CGFloat {
+    guard current <= fit * 1.001 else { return fit }
+    return min(actual > fit * 1.01 ? actual : fit * doubleTapFactor, maxScale)
+  }
+
+  /// Calculates stepped magnification offset bounded within valid scale intervals.
+  static func stepped(_ current: CGFloat, zoomingIn: Bool, fit: CGFloat, maxScale: CGFloat) -> CGFloat {
+    let next = zoomingIn ? current * 1.25 : current / 1.25
+    return min(max(next, fit), maxScale)
+  }
 }

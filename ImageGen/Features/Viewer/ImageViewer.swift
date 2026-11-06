@@ -14,7 +14,7 @@ struct ViewerImage: Identifiable, Equatable, Sendable {
     switch origin {
     case .model: "Generated"
     case .photos: "Photos"
-    case .files: "Files"
+    case .files: Platform.fileOriginName
     case .paste: "Pasted"
     }
   }
@@ -25,6 +25,8 @@ struct ViewerImage: Identifiable, Equatable, Sendable {
 struct ViewerRequest: Identifiable {
   let images: [ViewerImage]
   let startID: UUID
+  /// Identifier of the conversation context originating the image payload.
+  var conversationID: UUID?
   var id: UUID { startID }
 }
 
@@ -45,6 +47,8 @@ struct ImageViewer: View {
   /// Active image payload currently presented in the detailed inspection sheet.
   @State private var info: ViewerImage?
   @Environment(\.dismiss) private var dismiss
+  /// Environment router coordinating key events, menu dispatch, and window lifecycle on desktop hosts.
+  @Environment(\.viewerKeyRouter) private var router
 
   init(request: ViewerRequest, thumbnails: ThumbnailService, log: ActivityLog, onEditFromHere: @escaping (UUID) -> Void) {
     self.request = request
@@ -64,62 +68,89 @@ struct ImageViewer: View {
       pager
         // Recreate the paging hierarchy when geometry changes across interface orientation shifts,
         // preventing stale container frame calculations while relying on cache retention for decoded bitmaps.
-        .id("\(Int(geo.size.width))x\(Int(geo.size.height))")
+        .id(Platform.recreatesViewerOnResize ? "\(Int(geo.size.width))x\(Int(geo.size.height))" : "")
     }
     .ignoresSafeArea()
     .background(Color.black.ignoresSafeArea())
     .overlay(alignment: .top) {
-      if showsChrome { topBar.transition(.opacity) }
+      if showsChrome && !Platform.viewerUsesWindowToolbar { topBar.transition(.opacity) }
     }
-    .overlay(alignment: .bottom) {
-      if showsChrome, let image = currentImage {
-        ViewerToolbar(
-          onExport: { exporter.perform($0, image.item) },
-          // Stage the selected asset into the composer attachment context and dismiss the viewer.
-          onEditFromHere: {
-            onEditFromHere(image.id)
-            dismiss()
-          },
-          onInfo: { info = image }
-        )
-        .padding(.bottom, 8)
-        .transition(.opacity)
-      }
-    }
+    .modifier(
+      ViewerChrome(
+        image: currentImage, imageCount: request.images.count, isVisible: showsChrome,
+        onExport: export, onEditFromHere: editFromHere, onInfo: showInfo, onMove: move))
     .hidesStatusBar(!showsChrome)
     // Coordinate dismissal of secondary presentation sheets when dismissing the viewer hierarchy.
     .modifier(ImageExportPresenter(model: exporter, toastOffset: 64))
-    .sheet(item: $info) { ViewerInfoSheet(image: $0) }
+    .sheet(item: $info) { ViewerInfoSheet(image: $0).sheetSizing(minWidth: 380, minHeight: 360) }
+    .onAppear(perform: connectRouter)
+    .onChange(of: current) { _, _ in updateWindowTitle() }
     // Evict cached high-resolution decoded representations upon dismissing the viewer hierarchy.
     .onDisappear { Task { await FullDecoder.shared.clear() } }
     .preferredColorScheme(.dark)
   }
 
   private var pager: some View {
-    TabView(selection: $current) {
-      ForEach(request.images) { image in
-        // Notify the target page view of active selection status to reset zoom levels when paged out.
-        ZoomableImageView(
-          image: image, thumbnails: thumbnails, isCurrent: image.id == current,
-          onSingleTap: { withAnimation(.easeInOut(duration: 0.2)) { showsChrome.toggle() } },
-          onDismiss: { dismiss() }
-        )
-        .ignoresSafeArea()
-        .tag(image.id)
-      }
+    ViewerPager(images: request.images, selection: $current) { image in
+      // Notify the target page view of active selection status to reset zoom levels when paged out.
+      ZoomableImageView(
+        image: image, thumbnails: thumbnails, isCurrent: image.id == current,
+        onSingleTap: { withAnimation(.easeInOut(duration: 0.2)) { showsChrome.toggle() } },
+        onDismiss: { close() }
+      )
+      .ignoresSafeArea()
     }
-    .pagedTabStyle()
+  }
+
+  private func close() {
+    if let router { router.close() } else { dismiss() }
+  }
+
+  private func export(_ action: ImageExportAction) {
+    if let image = currentImage { exporter.perform(action, image.item) }
+  }
+
+  /// Stages the selected asset into the composer attachment context and dismisses the viewer.
+  private func editFromHere() {
+    guard let image = currentImage else { return }
+    onEditFromHere(image.id)
+    close()
+  }
+
+  private func showInfo() { info = currentImage }
+
+  private func move(by delta: Int) {
+    current = ViewerPaging.step(from: current, in: request.images.map(\.id), by: delta)
+  }
+
+  /// Binds viewer navigation and command actions to the hosting window controller.
+  private func connectRouter() {
+    guard let router else { return }
+    router.move = move(by:)
+    router.export = export
+    router.editFromHere = editFromHere
+    router.showInfo = showInfo
+    updateWindowTitle()
+  }
+
+  private func updateWindowTitle() {
+    router?.setTitle(currentImage?.item.suggestedName ?? "Image")
+    router?.setPosition(request.images.count > 1 ? "\(position) of \(request.images.count)" : "")
+    let ids = request.images.map(\.id)
+    router?.setPaging(ViewerPaging.canStep(from: current, in: ids, by: -1), ViewerPaging.canStep(from: current, in: ids, by: 1))
   }
 
   private var topBar: some View {
     HStack {
-      Button {
-        dismiss()
-      } label: {
-        Image(systemName: "xmark").font(.headline).foregroundStyle(.white).frame(width: 44, height: 44)
+      if Platform.viewerShowsCloseButton {
+        Button {
+          close()
+        } label: {
+          Image(systemName: "xmark").font(.headline).foregroundStyle(.white).frame(width: 44, height: 44)
+        }
+        .glassEffect(.regular.interactive(), in: .circle)
+        .accessibilityLabel("Close")
       }
-      .glassEffect(.regular.interactive(), in: .circle)
-      .accessibilityLabel("Close")
       Spacer()
       if request.images.count > 1 {
         Text("\(position) of \(request.images.count)")
@@ -130,6 +161,7 @@ struct ImageViewer: View {
       }
     }
     .padding(.horizontal)
+    .padding(.top, Platform.viewerShowsCloseButton ? 0 : 12)
   }
 }
 
@@ -137,10 +169,9 @@ struct ImageViewer: View {
 /// and model inference configurations.
 struct ViewerInfoSheet: View {
   let image: ViewerImage
-  @Environment(\.dismiss) private var dismiss
 
   var body: some View {
-    NavigationStack {
+    SheetScaffold(title: "Info") {
       List {
         LabeledContent("Pixel size", value: "\(image.item.pixelWidth)×\(image.item.pixelHeight)")
         LabeledContent("Type", value: image.item.mimeType)
@@ -153,11 +184,7 @@ struct ViewerInfoSheet: View {
         }
         LabeledContent("File name", value: image.item.suggestedName)
       }
-      .navigationTitle("Info")
-      .inlineNavigationTitle()
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-      }
+      .selectableDetails()
     }
     .presentationDetents([.medium])
   }

@@ -33,3 +33,24 @@ struct ViewerToolbar: View {
     .accessibilityLabel(label)
   }
 }
+
+/// View modifier rendering floating bottom action chrome for image viewer interactions on iOS.
+struct ViewerChrome: ViewModifier {
+  let image: ViewerImage?
+  let imageCount: Int
+  let isVisible: Bool
+  let onExport: (ImageExportAction) -> Void
+  let onEditFromHere: () -> Void
+  let onInfo: () -> Void
+  let onMove: (Int) -> Void
+
+  func body(content: Self.Content) -> some View {
+    content.overlay(alignment: .bottom) {
+      if isVisible, image != nil {
+        ViewerToolbar(onExport: onExport, onEditFromHere: onEditFromHere, onInfo: onInfo)
+          .padding(.bottom, 8)
+          .transition(.opacity)
+      }
+    }
+  }
+}

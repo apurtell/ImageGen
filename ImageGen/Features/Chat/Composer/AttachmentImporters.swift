@@ -8,17 +8,31 @@ enum FileImport {
     var errorDescription: String? { "The file couldn't be read." }
   }
 
+  struct TooLarge: LocalizedError {
+    var errorDescription: String? { "The image is too large to attach." }
+  }
+
+  /// Validates that candidate attachment byte length does not exceed platform thresholds.
+  static func checkSize(_ byteCount: Int) throws {
+    if let limit = Platform.maxAttachmentBytes, byteCount > limit { throw TooLarge() }
+  }
+
   /// Duplicates external security scoped file resources into local staging storage while ensuring
   /// resource access scopes are cleanly relinquished upon completion or error.
   static func copySecurityScoped(_ url: URL, into dir: URL, id: UUID) throws -> URL {
     let scoped = url.startAccessingSecurityScopedResource()
     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+    // Ensure candidate represents a regular file after resolving symlinks.
+    let source = url.resolvingSymlinksInPath()
+    let values = try? source.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+    guard values?.isRegularFile == true else { throw Unreadable() }
+    try checkSize(values?.fileSize ?? 0)
     let ext = url.pathExtension.isEmpty ? "img" : url.pathExtension.lowercased()
     let destination = dir.appendingPathComponent("\(id.uuidString).\(ext)")
     try FileStore.createDirectory(dir)
     do {
       if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
-      try FileManager.default.copyItem(at: url, to: destination)
+      try FileManager.default.copyItem(at: source, to: destination)
     } catch {
       throw Unreadable()
     }

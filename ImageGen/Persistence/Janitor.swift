@@ -20,6 +20,12 @@ struct Janitor: Sendable {
     var thumbnailCap: Int64 = 300 * 1024 * 1024
   }
 
+  /// Evaluates whether maintenance execution is due based on elapsed time since previous completion.
+  static func isDue(lastFinished: Date?, now: Date, interval: TimeInterval) -> Bool {
+    guard let lastFinished else { return false }
+    return now.timeIntervalSince(lastFinished) >= interval
+  }
+
   /// Telemetry report detailing reclaimed resources and non-fatal operational errors.
   struct Report: Sendable, Equatable {
     var staging = 0

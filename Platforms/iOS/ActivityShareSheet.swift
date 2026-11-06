@@ -31,3 +31,18 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
 
   func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
+
+extension View {
+  /// Presents the activity sheet for the model's share ticket.
+  func sharePresentation(_ model: ImageExportModel) -> some View {
+    @Bindable var model = model
+    return sheet(item: $model.share) { ticket in
+      ActivityShareSheet(file: ticket.item.file) { type, completed, error in
+        model.shareFinished(ticket, activityType: type, completed: completed, error: error)
+      }
+      .presentationDetents([.medium, .large])
+      .ignoresSafeArea()
+      .onDisappear { model.shareDisappeared(ticket) }
+    }
+  }
+}

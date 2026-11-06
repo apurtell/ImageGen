@@ -40,21 +40,3 @@ struct ComposerPasteButton: View {
     .accessibilityLabel("Paste image")
   }
 }
-
-/// View modifier maintaining real-time awareness of pasteboard image presence, synchronizing across
-/// system pasteboard notification events and application foreground reactivation cycles.
-struct PasteboardImageWatcher: ViewModifier {
-  @Binding var hasImages: Bool
-  @Environment(\.scenePhase) private var scenePhase
-
-  func body(content: Self.Content) -> some View {
-    content
-      .onAppear { hasImages = SystemPasteboard.general.hasImages }
-      .onChange(of: scenePhase) { _, phase in
-        if phase == .active { hasImages = SystemPasteboard.general.hasImages }
-      }
-      .onReceive(SystemPasteboard.changes) { _ in
-        hasImages = SystemPasteboard.general.hasImages
-      }
-  }
-}

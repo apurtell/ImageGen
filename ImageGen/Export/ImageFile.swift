@@ -39,6 +39,26 @@ struct ImageFile: Transferable, Sendable, Equatable {
     return provider
   }
 
+  /// Creates an item provider referencing a scratch copy of the asset with its suggested filename for drag operations.
+  func draggedCopyProvider() -> NSItemProvider {
+    guard let copy = try? ExportScratch.namedCopy(of: url, name: suggestedName) else { return NSItemProvider() }
+    return NSItemProvider(object: copy as NSURL)
+  }
+
+  /// Atomically writes or replaces the target destination with stored image content.
+  func write(to destination: URL) throws {
+    let manager = FileManager.default
+    guard manager.fileExists(atPath: destination.path) else {
+      try manager.copyItem(at: url, to: destination)
+      return
+    }
+    let holder = try manager.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: destination, create: true)
+    defer { try? manager.removeItem(at: holder) }
+    let copy = holder.appendingPathComponent(destination.lastPathComponent)
+    try manager.copyItem(at: url, to: copy)
+    _ = try manager.replaceItemAt(destination, withItemAt: copy)
+  }
+
   /// Generates a standardized, timestamped export filename incorporating asset date, truncated UUID, and format extension.
   static func suggestedName(date: Date, id: UUID, ext: String, timeZone: TimeZone = .current) -> String {
     var calendar = Calendar(identifier: .gregorian)
@@ -91,6 +111,8 @@ struct ExportItem: Sendable, Equatable, Identifiable {
 /// File document representation bridging disk-backed asset files to system file export presentations.
 struct ImageFileDocument: FileDocument {
   static var readableContentTypes: [UTType] { [.image] }
+  /// Supported export uniform type identifiers validated by system save panels.
+  static var writableContentTypes: [UTType] { [.jpeg, .png, .webP, .heic, .heif, .gif, .tiff, .bmp, ImageFile.avif, .image] }
   let file: ImageFile
 
   init(file: ImageFile) { self.file = file }

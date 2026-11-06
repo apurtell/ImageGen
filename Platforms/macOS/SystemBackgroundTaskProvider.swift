@@ -1,9 +1,6 @@
 import Foundation
 
 /// Keeps the process active using `ProcessInfo.beginActivity` while a generation request is prepared.
-///
-/// Prevents App Nap and sudden termination until the request payload has been passed to the
-/// background URLSession daemon. macOS assertions do not expire, so `onExpire` is never called.
 final class SystemBackgroundTaskProvider: BackgroundTaskProviding {
   private let log: ActivityLog
   /// Holds the opaque token returned by ProcessInfo.beginActivity.
@@ -13,6 +10,7 @@ final class SystemBackgroundTaskProvider: BackgroundTaskProviding {
 
   private let activities = Locked<[Int: Activity]>([:])
   private let nextID = Locked<Int>(0)
+  private let liveActivity = Locked<Activity?>(nil)
 
   init(log: ActivityLog) {
     self.log = log
@@ -34,6 +32,17 @@ final class SystemBackgroundTaskProvider: BackgroundTaskProviding {
     await log.flush(timeout: .seconds(1))
     if let activity = activities.withLock({ $0.removeValue(forKey: token.id) }) {
       ProcessInfo.processInfo.endActivity(activity.token)
+    }
+  }
+
+  func liveRequestsChanged(count: Int) {
+    liveActivity.withLock { live in
+      if count > 0, live == nil {
+        live = Activity(token: ProcessInfo.processInfo.beginActivity(options: .userInitiated, reason: "image request in flight"))
+      } else if count == 0, let activity = live {
+        ProcessInfo.processInfo.endActivity(activity.token)
+        live = nil
+      }
     }
   }
 }

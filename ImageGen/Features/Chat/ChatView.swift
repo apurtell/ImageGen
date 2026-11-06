@@ -22,11 +22,21 @@ struct ChatView: View {
   @State private var exporter: ImageExportModel
   @State private var awayFromBottom = false
   @State private var settledLastID: UUID?
+  /// Viewport width utilized for responsive column constraints.
+  @State private var transcriptWidth: CGFloat?
   /// The transcript's bottom edge is in view, so tail growth should keep it there.
   @State private var isAtBottom = true
   /// A row above the tail was retried: it grows in place until the user scrolls or a new tail arrives.
   @State private var holdingForRetry = false
   @State private var isUserScrolling = false
+  /// Timestamp of the most recent discrete wheel or trackpad scroll gesture.
+  @State private var lastWheelScroll = Date.distantPast
+  /// Monotonically increasing user scroll gesture count used to abort programmatic settling.
+  @State private var userScrolls = 0
+  /// Vertical offset between transcript content extent and visible viewport bottom edge.
+  @State private var distanceFromBottom: CGFloat = 0
+  /// Trigger counter for animated scroll to the trailing transcript message.
+  @State private var jumpRequests = 0
 
   /// Presentation payload wrapper for arbitrary details text sheets.
   struct DetailsText: Identifiable {
@@ -36,7 +46,9 @@ struct ChatView: View {
 
   init(conversationID: UUID, services: ChatServices) {
     self.conversationID = conversationID
-    _model = State(initialValue: ChatScreenModel(conversationID: conversationID, services: services))
+    _model = State(
+      initialValue: services.chatModels?.model(for: conversationID, services: services)
+        ?? ChatScreenModel(conversationID: conversationID, services: services))
     _exporter = State(initialValue: ImageExportModel(log: services.log))
     _messages = Query(filter: #Predicate<Message> { $0.conversation?.id == conversationID }, sort: \Message.sequence)
     _requests = Query(filter: #Predicate<GenerationRequest> { $0.conversation?.id == conversationID }, sort: \GenerationRequest.createdAt)
@@ -53,43 +65,14 @@ struct ChatView: View {
     ScrollViewReader { proxy in
       transcript(proxy)
     }
-    .inlineNavigationTitle()
-    .toolbar {
-      ToolbarItem(placement: .principal) {
-        // The in-place title edit replaces the title while `model.titleDraft` is non-nil.
-        if model.isEditingTitle {
-          InlineTitleField(
-            text: Binding(get: { model.titleDraft ?? "" }, set: { model.titleDraft = $0 }),
-            onSave: { Task { await model.commitTitleEdit() } }, onCancel: { model.cancelTitleEdit() }
-          )
-          .frame(width: 210)
-          .padding(.horizontal, 12).padding(.vertical, 6)
-          .glassEffect(.regular.interactive(), in: .capsule)
-        } else {
-          Text(model.title).font(.headline).lineLimit(1)
-            .contentShape(Rectangle())
-            .onLongPressGesture(minimumDuration: 0.4) { model.beginTitleEdit() }
-            .onTapGesture { renaming = true }
-            .accessibilityAddTraits(.isButton)
-            .accessibilityLabel("Rename \(model.title)")
-            .accessibilityAction(named: "Edit title in place") { model.beginTitleEdit() }
-        }
-      }
-      ToolbarItemGroup(placement: .trailingBar) {
-        DeveloperMenu()
-        Menu {
-          Button("Rename", systemImage: "pencil") { renaming = true }
-          Button("Chat settings…", systemImage: "slider.horizontal.3") { showChatSettings = true }
-          Button("Delete chat", systemImage: "trash", role: .destructive) { confirmDeleteChat = true }
-        } label: {
-          Image(systemName: "ellipsis.circle")
-        }
-        .accessibilityLabel("Chat menu")
-      }
-    }
+    .acceptsImageDrops(model)
+    .modifier(ChatToolbar(model: model, renaming: $renaming, showChatSettings: $showChatSettings, confirmDeleteChat: $confirmDeleteChat))
+    .publishesChatCommands(commandHandle)
     .renameAlert(isPresented: $renaming, currentTitle: model.title) { name in Task { await model.rename(to: name) } }
-    .confirmationDialog("Delete this chat?", isPresented: $confirmDeleteChat, titleVisibility: .visible) {
+    .confirmationDialog(deleteChatTitle, isPresented: $confirmDeleteChat, titleVisibility: .visible) {
       Button("Delete", role: .destructive) { Task { await model.deleteChat() } }
+    } message: {
+      if let warning = Platform.deleteChatWarning { Text(warning) }
     }
     .confirmationDialog(
       "Delete this message?", isPresented: Binding(get: { deletingMessage != nil }, set: { if !$0 { deletingMessage = nil } }),
@@ -107,7 +90,7 @@ struct ChatView: View {
         if let p = model.pendingEdit { Task { await model.editAndResend(userMessageID: p.userMessageID, requestID: p.requestID, confirmed: true) } }
       }
     }
-    .alert("Couldn't do that", isPresented: Binding(get: { model.alertMessage != nil }, set: { if !$0 { model.alertMessage = nil } })) {
+    .alert(Platform.actionFailedTitle, isPresented: Binding(get: { model.alertMessage != nil }, set: { if !$0 { model.alertMessage = nil } })) {
       Button("OK", role: .cancel) {}
     } message: {
       Text(model.alertMessage ?? "")
@@ -115,19 +98,70 @@ struct ChatView: View {
     .modifier(ImageExportPresenter(model: exporter, toastOffset: 8))
     .viewerCover(item: $viewer) { request in
       ImageViewer(request: request, thumbnails: model.services.thumbnails, log: model.services.log) { id in
+        // Restore parent conversation navigation context and focus when navigating from detached viewer.
+        let navigator = model.services.navigator
+        navigator.open(conversationID)
+        navigator.requestComposerFocus(for: conversationID)
+        Platform.revealChatWindow()
         Task { await model.pin(id) }
       }
     }
-    .sheet(isPresented: $showChatSettings) { ChatSettingsSheet(model: model) }
-    .sheet(item: $infoRequest) { ReplyInfoSheet(request: $0) }
-    .sheet(item: $details) { DetailsSheet(text: $0.text) }
+    .sheet(isPresented: $showChatSettings) { ChatSettingsSheet(model: model).sheetSizing(minWidth: 420) }
+    .sheet(item: $infoRequest) { ReplyInfoSheet(request: $0).sheetSizing(minWidth: 480, minHeight: 520) }
+    .sheet(item: $details) { DetailsSheet(text: $0.text).sheetSizing(minWidth: 480, minHeight: 320) }
     .sensoryFeedback(.impact, trigger: model.sendCount)
     .sensoryFeedback(.selection, trigger: model.pinCount)
     .sensoryFeedback(.selection, trigger: model.isEditingTitle) { _, editing in editing }
     .sensoryFeedback(.success, trigger: model.completedWhileVisible)
+    .onChange(of: model.completedWhileVisible) { _, _ in Platform.announce("Reply ready") }
     .task { await model.onAppear() }
     .onDisappear { Task { await model.onDisappear() } }
     .onChange(of: signature) { _, _ in Task { await model.reload() } }
+    // Invalidate title upon external rename events.
+    .onChange(of: model.services.navigator.titleRevision) { _, _ in Task { await model.reload() } }
+  }
+
+  /// Confirmation dialog title customized with associated asset counts where supported.
+  private var deleteChatTitle: String {
+    Platform.deleteChatWarning == nil
+      ? "Delete this chat?" : ChatListView.deleteTitle(imageCount: messages.reduce(0) { $0 + $1.images.count })
+  }
+
+  /// Indicates whether a modal sheet, alert, or confirmation dialog is active.
+  private var isPresenting: Bool {
+    showChatSettings || confirmDeleteChat || renaming || infoRequest != nil || details != nil || deletingMessage != nil
+      || model.pendingEdit != nil || model.alertMessage != nil
+  }
+
+  /// Constructs the focused command dispatch handle exposing conversation actions to platform menus.
+  private var commandHandle: ChatCommandHandle {
+    let model = self.model
+    let actions = rowActions
+    let lastReply = messages.last { $0.messageRole == .model }
+    let lastPrompt = messages.last { $0.messageRole == .user }
+    let lastRequest = lastReply?.requestID.flatMap { requestsByID[$0] }
+    let canRegenerate = model.liveRequest == nil && lastRequest.map { actions.regenerateUnavailableReason($0) == nil } == true
+    let latestAsset = messages.reversed().lazy.compactMap { $0.orderedImages.last }.first
+    return ChatCommandHandle(
+      canStop: model.liveRequest != nil, canJumpToLatest: !messages.isEmpty, canSend: model.canSend,
+      canAddImages: model.canAddAttachments, isPresenting: isPresenting,
+      stop: { Task { await model.stop() } },
+      rename: { model.beginTitleEdit() },
+      showSettings: { showChatSettings = true },
+      delete: { confirmDeleteChat = true },
+      jumpToLatest: { jumpRequests += 1 },
+      send: { Task { await model.send() } },
+      choosePhotos: { model.requestedPicker = .photos },
+      chooseFiles: { model.requestedPicker = .files },
+      pasteImage: { pasteImage(into: model) },
+      regenerateLastReply: canRegenerate ? { if let id = lastRequest?.id { actions.regenerate(id) } } : nil,
+      editLastPrompt: lastPrompt.map { prompt in { actions.editAndResend(prompt.id) } },
+      lastReplyInfo: lastRequest.map { request in { infoRequest = request } },
+      deleteLastMessage: messages.last.map { message in { deletingMessage = message } },
+      latestImage: latestAsset.map { asset in
+        ChatCommandHandle.LatestImage(
+          view: { actions.view(asset.id) }, export: { actions.export(asset, $0) }, editFromHere: { actions.pin(asset.id) })
+      })
   }
 
   /// Whether height changes should keep the bottom edge still. Otherwise the top of the visible rows stays still.
@@ -151,11 +185,16 @@ struct ChatView: View {
       .scrollTargetLayout()
       .padding(.horizontal)
       .padding(.top, 8)
+      .readableColumn()
+      .scrollBarIndependentWidth(viewport: transcriptWidth)
     }
+    .transcriptBottomMargin()
+    .measuresScrollViewportWidth($transcriptWidth)
     .defaultScrollAnchor(.bottom, for: .initialOffset)
     .defaultScrollAnchor(.bottom, for: .alignment)
     .defaultScrollAnchor(followsTail ? .bottom : .top, for: .sizeChanges)
     .scrollDismissesKeyboard(.interactively)
+    .composerScrollEdge()
     .onScrollGeometryChange(for: Bool.self) { geo in
       geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height > geo.containerSize.height
     } action: { _, away in
@@ -164,11 +203,18 @@ struct ChatView: View {
     .onScrollGeometryChange(for: CGFloat.self) { geo in
       geo.contentSize.height + geo.contentInsets.bottom - geo.visibleRect.maxY
     } action: { _, distance in
+      distanceFromBottom = distance
       isAtBottom = distance < 44
     }
     .onScrollPhaseChange { _, phase in
       isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+      if isUserScrolling { userScrolls += 1 }
       if phase == .interacting { holdingForRetry = false }
+    }
+    .onUserWheelScroll {
+      holdingForRetry = false
+      lastWheelScroll = .now
+      userScrolls += 1
     }
     .overlay(alignment: .bottomTrailing) {
       if awayFromBottom, let last = messages.last {
@@ -176,15 +222,23 @@ struct ChatView: View {
           holdingForRetry = false
           withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
         } label: {
-          Image(systemName: "arrow.down").frame(width: 36, height: 36)
+          Image(systemName: "arrow.down").frame(width: Platform.circleButtonSize, height: Platform.circleButtonSize)
         }
+        .chromelessButton()
         .glassEffect(.regular.interactive(), in: .circle)
+        .tooltip("Jump to the latest message")
         .padding()
         .accessibilityLabel("Jump to latest")
       }
     }
     .safeAreaBar(edge: .bottom) {
-      ComposerView(model: model)
+      ComposerView(model: model).readableColumn().composerBarSurface()
+    }
+    .providesTranscriptHeight()
+    .onChange(of: jumpRequests) {
+      guard let last = messages.last else { return }
+      holdingForRetry = false
+      withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
     }
     .task(id: messages.last?.id) {
       // A new last message scrolls to it. Skipped on first load, which starts at the bottom already.
@@ -202,12 +256,18 @@ struct ChatView: View {
     }
   }
 
-  /// Re-aligns to the bottom a few times to absorb delayed image layout, leaving the position to any scroll the user starts.
+  /// Repeatedly aligns scroll position to accommodate delayed layout passes, aborting if the user initiates manual scrolling.
   private func settleAtBottom(_ proxy: ScrollViewProxy, while shouldContinue: () -> Bool) async {
-    for delay in [0.05, 0.35, 0.9] {
+    let scrollsAtStart = userScrolls
+    for delay in TranscriptSettling.delays {
       do { try await Task.sleep(for: .seconds(delay)) } catch { return }
-      guard !isUserScrolling, shouldContinue(), let last = messages.last else { return }
-      proxy.scrollTo(last.id, anchor: .bottom)
+      let stop = TranscriptSettling.shouldStop(
+        userScrolled: userScrolls != scrollsAtStart, isUserScrolling: isUserScrolling,
+        sinceLastWheel: Date.now.timeIntervalSince(lastWheelScroll))
+      guard !stop, shouldContinue(), let last = messages.last else { return }
+      if TranscriptSettling.needsScroll(distanceFromBottom: distanceFromBottom) {
+        proxy.scrollTo(last.id, anchor: .bottom)
+      }
     }
   }
 
@@ -225,7 +285,7 @@ struct ChatView: View {
     let images = message.orderedImages.map {
       ViewerImage(item: exportItem($0, files: files), origin: $0.imageOrigin, settings: settings)
     }
-    return ViewerRequest(images: images, startID: id)
+    return ViewerRequest(images: images, startID: id, conversationID: conversationID)
   }
 
   /// Verifies existence of the originating prompt message, traversing ancestor request records when evaluating regenerations.
@@ -264,6 +324,7 @@ struct ChatView: View {
       pin: { id in Task { await model.pin(id) } },
       view: { id in viewer = viewerRequest(startingAt: id) },
       export: { asset, action in exporter.perform(action, exportItem(asset, files: files)) },
+      exportItem: { exportItem($0, files: files) },
       regenerateUnavailableReason: { request in
         request.inputs.allSatisfy { files.exists(relative: $0.preparedRelativePath) } ? nil : "An input image was deleted"
       })

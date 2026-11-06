@@ -1,4 +1,4 @@
-# ImageGen for iPhone: Design
+# ImageGen for iPhone and Mac: Design
 
 Status: v1 design, ready for implementation
 Date: 2026-10-15
@@ -10,22 +10,22 @@ Companion: `doc/IMPLEMENTATION_PLAN.md` (milestones, tasks, and verification ste
 ## 1. Purpose and scope
 
 ### 1.1 Purpose
-ImageGen is a personal iPhone app. It does what the OpenWebUI Gemini pipe does, in a native app: you chat to generate and edit images through the Gemini REST API (`generateContent`), using your own Gemini API key. A request carries only the selected image(s) and the latest instruction. Results arrive as images plus optional Markdown text, and stay in a list of saved chats on the device.
+ImageGen is a personal app for iPhone and Mac, with a native app on each (section 3.11 covers the Mac). It does what the OpenWebUI Gemini pipe does: you chat to generate and edit images through the Gemini REST API (`generateContent`), using your own Gemini API key. A request carries only the selected image(s) and the latest instruction. Results arrive as images plus optional Markdown text, and stay in a list of saved chats on the device.
 
 ### 1.2 Goals (v1)
 1. **Same results as the pipe.** Given the same inputs, the request body matches the pipe's except for the deliberate deviations in section 2.6.
 2. **Gemini 3.1 Flash Image (`gemini-3.1-flash-image`) is the default model and always available.** Each chat can switch to other image models.
 3. **Aspect ratio and resolution are configurable, with defaults of 16:9 and 2K.** Global defaults live in Settings. Each chat can override them from the composer. Every request records the values it used, so Regenerate reproduces them.
-4. **Images can be attached from Photos, Files and the clipboard.** Several attachments per message are allowed. Uploads are downscaled to a long edge you set, and HEIC is converted to JPEG.
+4. **Images can be attached from Photos, Files and the clipboard, and on the Mac by dropping them on the chat.** Several attachments per message are allowed. Uploads are downscaled to a long edge you set, and HEIC is converted to JPEG.
 5. **"Edit from here".** You can pin any earlier image as the base for the next message.
-6. **Requests survive the app going to the background.** They run on a background `URLSession`, and a local notification fires when one finishes while the app isn't active.
+6. **Requests survive the app going to the background.** On iOS they run on a background `URLSession`; the Mac app keeps running and holds off idle sleep for them (section 3.11). A local notification fires when one finishes while the app isn't active.
 7. **Saved images are byte-for-byte what the API returned.** This applies to Photos, Files, Share and Copy.
 8. **Saved chats.** Chats persist on the device (SwiftData plus image files) and can be reopened, renamed and deleted.
 9. **Every step is logged, for debugging.** Before each action the app logs, in terse natural language, what it is about to do and every operative parameter; afterwards it logs the result. A Developer menu (`hammer`) on the chat list and the chat screen shows the last action, the last error or the full log, and clears it. The log stays on the device and never holds the API key, headers or image data (sections 3.10, 4.13).
 
 ### 1.3 Non-goals (v1)
 These were declined or deferred:
-- Camera capture, a share extension, and drag-and-drop.
+- Camera capture and a share extension.
 - Thinking controls or displaying thoughts. `thinkingConfig` is never sent, and thought parts are always dropped.
 - Google Search grounding.
 - A usage, token or cost readout.
@@ -37,11 +37,13 @@ These were declined or deferred:
 - Editing a sent message in place (in its bubble). Edit and Resend and a refused reply's Edit load the text into the composer and send a new turn (section 3.6). In-place editing is a possible future enhancement.
 
 ### 1.4 Platform and constraints
-- iOS 26.0 minimum, iPhone only, portrait plus landscape (not upside-down). Built against the iOS 26+ SDK with Xcode 26.x or later.
+- **iOS app:** iOS 26.0 minimum, laid out for the iPhone, portrait plus landscape (not upside-down).
+- **Mac app:** macOS 26.0 minimum, a native AppKit and SwiftUI target (not Catalyst).
+- Built against the iOS 26+ and macOS 26+ SDKs with Xcode 26.x or later.
 - Swift 6 language mode with complete strict concurrency, SwiftUI with Observation, SwiftData, and Liquid Glass.
 - No third-party dependencies.
-- Installed from Xcode with an Apple Developer Program team. The first install is a one-time Product › Run from Xcode; the provisioning profile lasts a year (see section 11, R9).
-- Built and verified using XcodeGen (`project.yml`), Swift Testing, and the iOS simulator, then deployed to the device.
+- Installed from Xcode with an Apple Developer Program team. The first iPhone install is a one-time Product › Run from Xcode; the provisioning profile lasts a year (see section 11, R9). The Mac app needs the same team for signing, because its keychain requires a signed build.
+- Built and verified using XcodeGen (`project.yml`) and Swift Testing, on the iOS simulator and then the device, and on the Mac directly.
 
 ---
 
@@ -403,7 +405,7 @@ Long-pressing an image opens a `contextMenu` with a large preview.
 |---|---|
 | Edit from here | Sets `Conversation.pinnedImageID`; the composer shows the chip; haptic feedback. For a model's image, the chat's aspect ratio and resolution pills take the values its request recorded (Default when a value equals the global default), each logged as a Chat setting change from "Edit from here"; the model pill stays. A selection haptic and a toast ("Editing from this image · 16:9 · 2K") confirm it, because the chip and pills change at the bottom of the screen |
 | Save to Photos | Saves the original bytes (section 4.9) |
-| Save to Files… | Opens `fileExporter` with the original file |
+| Save to Files… | Opens `fileExporter` with the original file (a save panel on the Mac, section 3.11) |
 | Share… | The share sheet (`UIActivityViewController`) with the original file (section 4.9) |
 | Copy | Copies the original bytes to the pasteboard |
 | View | Opens the full-screen viewer |
@@ -495,6 +497,42 @@ The Developer menu shows the activity log (section 4.13). It's a toolbar `Menu` 
 - It updates live while open: new entries for the shown action (or any entry, for Full Log) are appended without reopening. The sheet stays on the action it opened with; a newer action doesn't replace it until the sheet is reopened. Full Log stays pinned to the bottom while you're at the bottom.
 - No editing. Opening, copying and sharing the log are not logged, so viewing never changes what Last Action shows.
 - Empty log (only possible before the first launch entry is written): "No log entries".
+
+### 3.11 macOS app
+
+The Mac app is a native AppKit/SwiftUI target (`ImageGenMac`, product name `ImageGen`), not Catalyst. It shares the pipeline, persistence, view models and most views with iOS.
+
+- **Platform split:**
+  - `ImageGen/` is shared and imports neither UIKit nor AppKit (`scripts/lint.sh` enforces it). `Platforms/iOS` and `Platforms/macOS` each define the same type and function names (`Platform`, `PrimaryNavigation`, `ChatToolbar`, `ComposerAddMenu`, `MenuCheckItem`, `ViewerPager`, `ViewerChrome`, `ZoomableImageView`, `LogTextView`, `AutoFocusTextField`, `SystemBackgroundTaskProvider`, `SettingsProgressButton`, `SettingsActionRow`, `CustomModelRow`, plus view modifiers such as `chromelessMenu()`, `sharePresentation(_:)`, `messageRowMenu(isPrompt:_:)` and `viewerCover`), so shared code calls them without `#if`. A modifier is a no-op where the other platform doesn't need it.
+  - The one `#if os(macOS)` in `ImageGen/` is `kSecUseDataProtectionKeychain` in `KeychainStore`, where a platform file would only duplicate the store.
+  - `DebugHooks` and `DebugSupport` are `#if DEBUG`, so Release builds of both apps exclude them.
+- **Bundle IDs:** Release uses `IMAGEGEN_BUNDLE_ID`. Debug appends `.debug`, which gives it its own sandbox container, defaults, keychain item and background session, so test runs that seed or reset the store (`-ResetStore`) can't touch a Release install. Release builds are not debuggable: `CODE_SIGN_INJECT_BASE_ENTITLEMENTS` is off, so development signing adds no `get-task-allow`. Distribution still needs a Developer ID re-sign.
+- **Window and navigation:** one main window. On first launch it is half the display's visible area in each dimension (never below the 800×560 content minimum or above the display) and centred (`MainWindowSizing`); after that the system restores the size and position people chose. The chat list is a sidebar (`NavigationSplitView`) with the selected chat beside it; selection is `Navigator.path.last`. Sidebar rows have a context menu (Rename, Delete), the Delete key on the selected row uses the same confirmation as iOS, and rows show their status in a tooltip. An inline rename takes the keyboard directly (an AppKit field, because a closing menu or the composer can undo a SwiftUI focus request), and ends on Return, Esc, losing focus or a selection change. SwiftUI keeps a `Window` scene's window out of the Window menu's list and adds an item named after the scene instead, so the scene's title follows the chat on screen (`Navigator.chatTitle`), and the menu lists the chat's title.
+- **Keyboard focus:** a chat opened from the sidebar leaves the keyboard in the sidebar, so the arrow keys keep moving through chats and the Delete key keeps working; Return or Tab moves on to the prompt. Routes that open a chat to type in it (New Chat, a notification, Edit From Here, ending a rename) ask for the composer through `Navigator.requestComposerFocus`. Otherwise the field takes the keyboard when a chat appears, unless the sidebar or another text field has it.
+- **Unsent work:** selecting another chat is casual browsing on the Mac, not the deliberate back navigation it is on iOS. So a chat's screen model lives as long as the chat (`ChatModelCache`), which keeps its attachment tray, and a new chat with a draft or attachments is not discarded when left. A chat with neither is still deleted when left, and it also leaves `Navigator.path`, since closing the window can make it disappear while still selected. A quit runs `AppEnvironment.prepareToTerminate` for up to a second: drafts flush, empty chats go, and queued log entries reach the file. A tray doesn't outlive the process.
+- **Settings scene:** a standard Settings window (Cmd-comma) with General and Models tabs over the shared settings content. `Navigator.settingsPath` selects the tab. Actions are regular buttons at the trailing edge of their rows. The About panel in the app menu holds the version and the SynthID note, which iOS keeps in Settings. Custom models have a Remove button and context menu, since a Mac form has no swipe. Saving a key in Settings ends onboarding.
+- **Commands:** File has New Chat, Delete Chat and Save Image As. Edit adds Paste Image and the standard text commands (Find, Spelling and Grammar, Substitutions, Transformations). View has Show Sidebar, Jump to Latest (Cmd-Option-Down, because Cmd-Down moves a text field's caret), and the viewer's zoom and paging; Previous and Next Image are enabled only when there is an image to go to. Chat has Send, Stop, the attachment pickers, the last message's actions (Regenerate, Edit and Resend, Info, Delete), Rename and Chat Settings. Image acts on the viewer's image while its window is key, and otherwise on the chat's latest image. Developer replaces the iOS Developer menu. Chat commands act on the key window's chat through `ChatCommandHandle` and disable themselves without one or while one of its sheets or dialogs is up. New Chat is disabled during onboarding.
+- **Transcript:** a right-click anywhere on a row, including over selectable text and blank space, shows the message's actions, and a button with the same menu appears while the pointer is over the row, beside the bubble on a prompt and at the top trailing corner of a reply. Text selection and Cmd-C still work; a transparent view (`SecondaryClickMenu`) takes only secondary clicks, because selectable text's own menu would otherwise replace the row's. Images can be dragged out as files, and reached and opened by keyboard and VoiceOver. Prompt bubbles use the app's accent colour, not the System Settings accent, which white text can't always sit on.
+- **Scrolling the transcript:** after a new reply the view re-aligns to the bottom a few times to absorb late image layout (`TranscriptSettling`). It stops for good at any scroll by the user, and it issues no scroll when the bottom is already in place: a scroll takes effect at the next layout pass, so an unneeded one undoes a wheel event that arrives before that pass.
+- **Sheets:** a plain header with the title and a Done button sits above the content (`SheetScaffold`), not a `NavigationStack`, whose toolbar sets the title in from the content in a Mac sheet. Chat Settings has no minimum height, so it is as tall as its rows.
+- **Viewer window:** the full-screen viewer becomes a separate window that opens on the display of the window that asked. Each opening gets a fresh identity, so opening another image replaces the content, selection and zoom. Its actions are in the window's toolbar (previous and next for several images, then Share, Save to Photos, Save As, Copy, Edit From Here, Info) and in a context menu on the image; nothing overlays the picture, and the position is the window subtitle. Arrow keys change the image and Esc closes it (or leaves full screen first); the zoom shortcuts belong to the View menu; Edit > Copy copies the image. At fit a drag takes the image out as a file; zoomed in it pans. Edit From Here returns to the image's chat, and deleting that chat closes the viewer. The window's minimum content size is 360×280, stated by the SwiftUI content: its hosting view manages the window's minimum and overwrites one set on the window directly.
+- **Export:** Share opens the system picker at the pointer with no sheet in between, and stays tracked until the chosen service reports back. Services and drags get a temporary copy under the suggested name (`ExportScratch`), not the stored original. Drags offer it as a file URL and not a file promise, whose name the system rebuilds from the type (a JPEG would land as .jpeg, not the .jpg the viewer and the save panel show). Those copies and shared logs are removed at launch and when the log is cleared. Save As uses an `NSSavePanel` as a sheet on the window rather than `fileExporter`, whose panel can't be retitled and calls itself "Export". A failed save shows an alert.
+- **Composer:**
+  - Return and Cmd-Return send, and Shift-Return and Option-Return insert a newline. Return belongs to an input method while it is composing. Caps Lock doesn't change any of this.
+  - Images attach by dropping files or image data anywhere on the chat, with Cmd-V (text still pastes as text), from Edit > Paste Image or from the + menu (Photos, Choose File, Paste Image). Paste Image takes the image even when text came with it. Edit > Paste itself stays with the text field, whose editor owns that command's validation, so it stays text-only.
+  - An image drag takes the keyboard from the composer field while it is over the chat, because the field's editor would otherwise accept it and insert the file's path. Text drags still insert into the field.
+  - Pasted data is read after the tray shows the item. Chosen and dropped files are copied into staging under security-scoped access before preprocessing, links resolved, so the preprocessor reads only real files inside the sandbox container. Files and data over 512 MB are rejected.
+  - Code that replaces the composer text clears the field's undo history, which can no longer describe it.
+- **Layout:**
+  - Transcript and composer sit in an 820 pt centred column. The window is often much wider than the column, so the column is centred in whatever width there is.
+  - The composer bar is an opaque, window-wide surface in the system background colour, with a separator above it, and the transcript simply ends at it. The system's scroll edge effect is off at the bottom, because it would show blurred content through the bar. The last row keeps a 16 pt margin above the bar, as a content margin so that scrolling to the bottom respects it.
+  - The composer's pills and chips use no glass on the Mac. They sit directly on the system background, outlined by a hairline capsule.
+  - Reply images and the pending card share one size cap (`ReplyImageCap`), so a card that becomes an image doesn't change size and a retried reply stays put. An image's longest edge is at most 640 pt and its height at most 60% of the transcript's outer height, which leaves the prompt and metadata in view and the image's top below the toolbar. It's the outer height, composer area included, so typing a longer prompt doesn't resize every image.
+  - Controls use larger text styles than iOS, because the Mac's footnote and caption styles are 10 pt and it has no Dynamic Type.
+- **Scroll bar width rule:** with "Show scroll bars: Always" (legacy scroll bars), a bar takes width from the scroll view while the content overflows. The pending card's and images' heights follow their width, so content can overflow only when the bar is absent: the bar appears, the content narrows and stops overflowing, the bar goes, and each layout pass flips it again, which hangs the app. So the transcript's width doesn't depend on the bar. It's capped from the scroll view's outer frame, which the bar can't change, with the bar's width reserved whether or not it is showing (`measuresScrollViewportWidth`, `scrollBarIndependentWidth`). It has to be a cap and not a fixed width: SwiftUI would take a fixed width as the content's own, and it would become the window's minimum width, so the window couldn't shrink. And the scroll view has to report the width it is offered, not hug the content, or the column narrows in a wide window.
+- **Log view:** the Developer menu's log views open in one window, which can stay beside a chat while the log streams. It is called Activity Log in its title and the Window menu, the view on show is the subtitle (Last Action, Last Error, Full Log), and it opens on the full log from the Window menu. It closes like any window, so it has no Done button. Edit > Find opens the find bar over the log, which searches as you type.
+- **Background execution:** there is no background session wake. A `ProcessInfo` activity assertion (`.userInitiated`) is held from when a request is recorded until it finishes, including requests adopted at launch and retries, which stops idle system sleep and App Nap while the app may have no window open. `GenerationService` reports the live count through `BackgroundTaskProviding.liveRequestsChanged`. A chat counts as on screen for notifications only if its window isn't minimized or hidden, and `MacAppDelegate` delivers them. Being inactive isn't iOS's background: retries aren't re-created on activation. The Janitor also repeats when the app is next used after 6 hours, because the process can run for weeks.
+- **Sandbox and signing:** the app is sandboxed with network client, user-selected file read-write and Photos library access. The data protection keychain requires a signed build, so `scripts/build-mac.sh` and `scripts/test-mac.sh` use real signing.
 
 ---
 
@@ -1154,8 +1192,8 @@ A test injects a sentinel key and asserts that it never appears in the log file 
   - `Details` text is redacted: base64 data and thought signatures are removed. The key is never in a response body, and a test asserts that.
   - No third-party analytics or crash reporting.
 - **Metadata.** EXIF and GPS are removed from uploads before sending, because uploads are always re-encoded. The originals, metadata included, stay on the device for the user's own save and share.
-- **Data at rest.** iOS data protection with the default class (`completeUntilFirstUserAuthentication`), needed for background writes. Data is included in the device backup, which is encrypted when the user enables it. Nothing leaves the device except the requests to Gemini.
-- **The pasteboard.** Reads happen only through the system `PasteButton`, so there's no paste prompt and no reads without user intent. `hasImages` is used only to decide whether to show the button.
+- **Data at rest.** On iOS, data protection with the default class (`completeUntilFirstUserAuthentication`), needed for background writes. Data is included in the device backup, which is encrypted when the user enables it. On the Mac, files sit in the app's sandbox container, protected by the container's permissions and by FileVault when the user has it on; the app adds no encryption of its own, and Time Machine backs the container up under the user's settings. Nothing leaves the device except the requests to Gemini.
+- **The pasteboard.** On iOS, reads happen only through the system `PasteButton`, so there's no paste prompt and no reads without user intent. `hasImages` is used only to decide whether to show the button. On the Mac, reads happen only on Cmd-V and Paste Image: pasteboard types are checked first, so an ordinary text paste reads nothing here, and contents are read only when an image or file is present. Whether macOS's pasteboard privacy setting treats these as paste-related hasn't been checked with the setting at Ask.
 - **Photos.** Add-only access. The picker runs out of process and needs no read permission.
 - **Model output.** Generated images carry a SynthID watermark, a property of the API. This is noted in About.
 
@@ -1307,7 +1345,7 @@ A test injects a sentinel key and asserts that it never appears in the log file 
 ## 10. Build and project conventions
 - **`project.yml`:**
   - XcodeGen 2.46+.
-  - One `application` target `ImageGen` (iOS 26.0, `TARGETED_DEVICE_FAMILY = 1`) and one `bundle.unit-test` target `ImageGenTests`.
+  - Application targets `ImageGen` (iOS 26.0, `TARGETED_DEVICE_FAMILY = 1`) and `ImageGenMac` (macOS 26.0, `PRODUCT_NAME = ImageGen`, sandboxed), and `bundle.unit-test` targets `ImageGenTests` and `ImageGenMacTests`, both compiling `ImageGenTests/`. Schemes are `ImageGen` and `ImageGenMac`. `ImageGen/` is shared; `Platforms/iOS` and `Platforms/macOS` are per-target.
   - `SWIFT_VERSION: 6.0`.
   - `info.properties` holds `NSPhotoLibraryAddUsageDescription`, `UILaunchScreen` and `UISupportedInterfaceOrientations` (portrait and the two landscape orientations).
   - No `UIBackgroundModes`: a background URLSession doesn't need one. No BGTask identifiers in v1.

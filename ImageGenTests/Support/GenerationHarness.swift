@@ -103,6 +103,8 @@ final class RecordingBackgroundTaskProvider: BackgroundTaskProviding {
 
   let log: ActivityLog
   let events = Locked<[Event]>([])
+  /// Chronological record of reported live request counts.
+  let liveCounts = Locked<[Int]>([])
   private let expiries = Locked<[Int: @Sendable () -> Void]>([:])
   private let next = Locked(0)
 
@@ -123,6 +125,10 @@ final class RecordingBackgroundTaskProvider: BackgroundTaskProviding {
     await log.flush()
     let lines = Self.lineCount(log.fileURL)
     events.withLock { $0.append(.end(fileLines: lines)) }
+  }
+
+  func liveRequestsChanged(count: Int) {
+    liveCounts.withLock { $0.append(count) }
   }
 
   /// Simulates OS expiration callbacks across all active background task assertions.
@@ -175,7 +181,7 @@ final class GenerationHarness: Sendable {
     shrink: @escaping @Sendable (PreparedImage, Int) async throws -> PreparedImage = BudgetPlanner.shrinkWithPreprocessor,
     sanitize: (@Sendable (SecretRegistry) -> @Sendable (String) -> String)? = nil,
     logLimits: ActivityLogStore.Limits = .standard, active: Bool = false,
-    reuse: GenerationHarness? = nil
+    reuse: GenerationHarness? = nil, recreatesInactiveRetries: Bool = true
   ) throws {
     clock = reuse?.clock ?? TestClock(Date())
     if let reused = reuse?.s {
@@ -245,6 +251,7 @@ final class GenerationHarness: Sendable {
     deps.shrink = shrink
     deps.budget = budget
     deps.clock = now
+    deps.recreatesInactiveRetries = recreatesInactiveRetries
     service = GenerationService(deps)
   }
 

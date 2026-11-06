@@ -7,12 +7,14 @@ enum AttachSource: String, Sendable {
   case photos = "Photos"
   case files = "Files"
   case paste = "Paste"
+  case drop = "Drop"
 
   var origin: ImageOrigin {
     switch self {
     case .photos: .photos
     case .files: .files
     case .paste: .paste
+    case .drop: .files
     }
   }
 }
@@ -333,6 +335,9 @@ extension ChatScreenModel {
     services.log.result(action, .success, "done")
   }
 
+  /// Discards staged attachments and aborts pending ingest tasks when releasing the model.
+  func discardTray() { clearTray() }
+
   /// Clears the composer tray, terminating pending processing tasks and purging staged artifacts.
   private func clearTray() {
     for item in tray {
@@ -374,6 +379,7 @@ extension ChatScreenModel {
       clearTray()
     }
     composerText = info.text
+    noteProgrammaticTextEdit()
     if let restorable { try? await store.setPin(conversationID, imageID: restorable) }
     isTextFieldFocused = true
 

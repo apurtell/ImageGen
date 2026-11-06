@@ -78,7 +78,7 @@ imagegen/
     test.sh                           run unit tests; passes extra args through (e.g. -only-testing)
     run-sim.sh                        install + launch on the simulator with launch options
     shot.sh                           simctl screenshot → artifacts/<milestone>/<name>.png
-    check-warnings.sh                 clean build into its own log; fails on any warning in ImageGen/ sources
+    check-warnings.sh                 clean builds of both apps into their own logs; fails on any warning in ImageGen/ or Platforms/ sources
     lint.sh                           banned-pattern greps (section 2.7); --self-test checks the rules fire
     gen_image_fixtures.swift          generates the four checked-in binary test images (M0)
     device-install.sh                 build + install + launch on a connected iPhone
@@ -399,14 +399,14 @@ The patterns are extended regular expressions for `grep -rnE`, written exactly a
 
 ```
 # rule                                 pattern                                                  scope
-no-key-in-urls                         '\?key=|&key='                                           ImageGen/
-no-full-decode                         'UIImage\(data:|UIImage\(contentsOfFile:'                ImageGen/ except DebugSupport/
-no-reencoding-exports                  'UIImageWriteToSavedPhotosAlbum|jpegData\(|pngData\('    ImageGen/Export/ ImageGen/Features/
+no-key-in-urls                         '\?key=|&key='                                           ImageGen/ Platforms/
+no-full-decode                         'UIImage\(data:|UIImage\(contentsOfFile:|NSImage\(data:|NSImage\(contentsOf:|NSImage\(contentsOfFile:|NSImage\(byReferencing|NSBitmapImageRep\(data:'    ImageGen/ Platforms/ except DebugSupport/
+no-reencoding-exports                  'UIImageWriteToSavedPhotosAlbum|jpegData\(|pngData\(|tiffRepresentation|representation\(using:|NSBitmapImageRep'    ImageGen/Export/ ImageGen/Features/ Platforms/
 no-swiftui-in-pure-layers              '^import SwiftUI'                                        ImageGen/{Gemini,Imaging,Pipeline,Security,Networking}/
 no-print                               '\bprint\('                                              ImageGen/ except DebugSupport/
 no-async-urlsession-for-generation     '\.data\(for:|\.upload\(for:'                            ImageGen/Networking/ ImageGen/Pipeline/
 debug-names-only-via-hooks             '\bLaunchOptions\b|MockGeminiURLProtocol|DemoSeeder|SceneRoute'   ImageGen/ except DebugSupport/ and App/DebugHooks.swift
-no-key-in-activity-log                 (multiline, perl; see below)                             ImageGen/
+no-key-in-activity-log                 (multiline, perl; see below)                             ImageGen/ Platforms/
 debug-guard                            first non-comment line of each DebugSupport/*.swift and of App/DebugHooks.swift is '#if DEBUG'
 ```
 

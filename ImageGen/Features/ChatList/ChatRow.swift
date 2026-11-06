@@ -39,7 +39,7 @@ struct ChatRow: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      SquareThumbnail(asset: latestImage, size: 44)
+      SquareThumbnail(asset: latestImage, size: Platform.chatRowThumbnailSize)
       VStack(alignment: .leading, spacing: 2) {
         HStack {
           if let editing = titleEditing {
@@ -47,27 +47,26 @@ struct ChatRow: View {
           } else if typeSize.isAccessibilitySize {
             // Stack timestamp beneath title during accessibility Dynamic Type sizes to avoid truncation.
             VStack(alignment: .leading, spacing: 2) {
-              Text(conversation.title).font(.headline).lineLimit(2)
+              Text(conversation.title).font(Platform.chatRowTitleFont).lineLimit(2)
               Text(conversation.updatedAt, format: .relative(presentation: .named))
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
           } else {
-            Text(conversation.title).font(.headline).lineLimit(1)
+            Text(conversation.title).font(Platform.chatRowTitleFont).lineLimit(1)
             Spacer(minLength: 4)
-            Text(conversation.updatedAt, format: .relative(presentation: .named))
-              .font(.caption).foregroundStyle(.secondary)
+            ChatRowTimestamp(date: conversation.updatedAt)
           }
         }
         HStack {
           // Non-empty whitespace preserves vertical line height metrics when prompt snippets are absent.
           Text(snippet.isEmpty ? " " : snippet)
-            .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+            .font(Platform.chatRowSnippetFont).foregroundStyle(.secondary).lineLimit(1)
           Spacer(minLength: 4)
           switch status {
           case .inFlight:
-            ProgressView().controlSize(.mini).accessibilityLabel("Generating")
+            ProgressView().controlSize(.mini).tooltip("Generating").accessibilityLabel("Generating")
           case .needsAttention:
-            Circle().fill(.red).frame(width: 9, height: 9).accessibilityLabel("Needs attention")
+            Circle().fill(.red).frame(width: 9, height: 9).tooltip("Needs attention").accessibilityLabel("Needs attention")
           case .none:
             EmptyView()
           }

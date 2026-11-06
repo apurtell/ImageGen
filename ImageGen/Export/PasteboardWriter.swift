@@ -15,7 +15,10 @@ struct PasteboardWriter {
     do {
       // Read raw file bytes off the main thread prior to staging onto the system pasteboard.
       let data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: url) }.value
-      pasteboard.setData(data, type: item.utType)
+      guard pasteboard.setData(data, type: item.utType) else {
+        log.result(action, .failed, "the pasteboard refused the data")
+        return false
+      }
       log.result(action, .success, "pasteboard written (1 item, \(item.utType.identifier))")
       return true
     } catch {

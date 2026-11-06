@@ -25,23 +25,26 @@ struct LogViewerSheet: View {
             .padding(.horizontal).padding(.vertical, 4)
         }
       }
-      .navigationTitle(model.title)
-      .inlineNavigationTitle()
+      .logViewerTitle(model.title)
       // Export actions access the latest evaluated log text reflecting active streaming appends.
       .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Done") { dismiss() }
+        if Platform.logViewerHasDoneButton {
+          ToolbarItem(placement: .confirmationAction) {
+            Button("Done") { dismiss() }.defaultActionShortcut()
+          }
         }
         ToolbarItemGroup(placement: .leadingBar) {
           Button("Copy", systemImage: "doc.on.doc") {
             SystemPasteboard.general.string = model.text
             copied = true
           }
+          .tooltip("Copy the log")
           .accessibilityLabel("Copy")
           // Expose standard share link providing file transfer representations for external inspection.
           ShareLink(item: model.shareFile, preview: SharePreview(model.shareFile.fileName)) {
             Image(systemName: "square.and.arrow.up")
           }
+          .tooltip("Share the log as a file")
           .accessibilityLabel("Share")
         }
       }

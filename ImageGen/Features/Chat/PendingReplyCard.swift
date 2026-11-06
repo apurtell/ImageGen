@@ -32,8 +32,9 @@ struct PendingReplyCard: View {
             }
           }
         }
-        // Same geometry as the image that replaces it, so the row doesn't change height on completion.
+        // Pre-allocates target aspect ratio geometry to minimize visual layout shifts upon image delivery.
         .aspectRatio(aspect, contentMode: .fit)
+        .replyImageSizing(aspect: aspect)
         .animation(.linear(duration: 0.5), value: context.date)
       }
       Button("Cancel", systemImage: "xmark.circle", role: .cancel, action: onCancel)

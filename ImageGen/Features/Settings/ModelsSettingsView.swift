@@ -9,7 +9,7 @@ struct ModelsSettingsView: View {
   @State private var addError: String?
 
   var body: some View {
-    List {
+    SettingsList {
       Section {
         LabeledContent("Default model", value: "Gemini 3.1 Flash Image")
       } footer: {
@@ -35,14 +35,15 @@ struct ModelsSettingsView: View {
 
       Section {
         ForEach(model.settings.customModelIDs, id: \.self) { id in
-          Text(id).font(.body.monospaced())
+          CustomModelRow(id: id) { model.removeCustomModel(id) }
         }
         // Support swipe-to-delete removal of custom model entries.
         .onDelete { offsets in
           for i in offsets { model.removeCustomModel(model.settings.customModelIDs[i]) }
         }
         HStack {
-          TextField("Model ID, e.g. gemini-x-image", text: $newID)
+          TextField("Model ID, e.g. gemini-x-image", text: $newID, prompt: Text("Model ID, e.g. gemini-x-image"))
+            .hidesFormFieldLabel()
             .neverAutocapitalize()
             .autocorrectionDisabled()
             .font(.body.monospaced())
@@ -62,23 +63,19 @@ struct ModelsSettingsView: View {
       } header: {
         Text("Custom models")
       } footer: {
-        Text("Each ID is checked with Google before it's added. Swipe to remove one.")
+        Text(Platform.customModelsFooter)
       }
 
       Section {
-        Button {
-          Task { await model.refreshModels() }
-        } label: {
-          HStack {
-            Text("Check Now")
-            Spacer()
-            if model.isRefreshingModels { ProgressView() }
+        SettingsActionRow {
+          SettingsProgressButton(title: "Check Now", isBusy: model.isRefreshingModels) {
+            Task { await model.refreshModels() }
           }
+          .disabled(model.isRefreshingModels)
         }
-        .disabled(model.isRefreshingModels)
       } footer: {
         if let checked = model.lastChecked {
-          Text("Last checked \(checked, format: .relative(presentation: .named)). Pull down to check again.")
+          Text("Last checked \(checked, format: .relative(presentation: .named)).\(Platform.modelsCheckAgainHint)")
         } else {
           Text("Not checked yet.")
         }

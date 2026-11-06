@@ -83,6 +83,8 @@ final class AppEnvironment {
   let navigator: Navigator
   let developerMenu: DeveloperMenuModel
   let notificationPermission: NotificationPermission
+  /// Retains active conversation view models across navigation transitions to preserve uncommitted attachments.
+  let chatModels: ChatModelCache?
 
   @ObservationIgnored private let launchStarted = ContinuousClock.now
   @ObservationIgnored private var reconcilerTask: Task<Void, Never>?
@@ -90,6 +92,7 @@ final class AppEnvironment {
   @ObservationIgnored private var reconcilerFinished = false
   @ObservationIgnored private var firstFrameSeen = false
   @ObservationIgnored private(set) var janitorTask: Task<Janitor.Report, Never>?
+  @ObservationIgnored private var janitorFinishedAt: Date?
 
   init(_ config: Configuration) {
     if config.resetBeforeLaunch {
@@ -111,6 +114,7 @@ final class AppEnvironment {
     // 2. Storage engine and persistent state initialization.
     files = FileStore(root: config.root, cachesRoot: config.cachesRoot)
     files.retireStaging()
+    ExportScratch.sweep()
     do {
       container = try StoreFactory.makeContainer(root: config.root, inMemory: config.inMemoryStore)
     } catch {
@@ -148,7 +152,8 @@ final class AppEnvironment {
         defaults: { AppSettings.readDefaults(suite.flatMap(UserDefaults.init(suiteName:)) ?? .standard) },
         setOmitCivicOnMain: { await MainActor.run { settings.omitCivicIntegrity = true } },
         onBackgroundEventsFinished: { id, handled in await relay.callAndClear(identifier: id, completionsHandled: handled) },
-        sessionDescription: config.sessionDescription))
+        sessionDescription: config.sessionDescription, recreatesInactiveRetries: Platform.recreatesInactiveRetries,
+        inactiveDeliveryNote: Platform.inactiveDeliveryNote))
 
     // 4. Auxiliary coordinators and navigation state.
     reconciler = Reconciler(
@@ -158,6 +163,7 @@ final class AppEnvironment {
       client: modelsClient, keyStore: keyStore, settings: settings, log: log, registry: registry)
     connectivity = config.connectivity
     navigator = Navigator()
+    chatModels = Platform.keepsUnsentChats ? ChatModelCache() : nil
     developerMenu = DeveloperMenuModel(log: log)
     notificationPermission = NotificationPermission(
       authorizer: config.notificationAuthorizer, defaults: config.defaults, log: log, skip: config.skipNotificationPrompt)
@@ -169,7 +175,8 @@ final class AppEnvironment {
     ChatServices(
       store: store, files: files, generation: service, settings: settings, log: log, connectivity: connectivity,
       activity: activity, notifications: notificationPermission, navigator: navigator, thumbnails: thumbnails,
-      copyToPasteboard: { SystemPasteboard.general.string = $0 })
+      copyToPasteboard: { SystemPasteboard.general.string = $0 }, chatModels: chatModels,
+      keepsUnsentChats: Platform.keepsUnsentChats)
   }
 
   /// Constructs view model dependencies for application settings presentation.
@@ -181,7 +188,7 @@ final class AppEnvironment {
         notificationStatus: {
           if let forced = DebugHooks.forcedNotificationState { return forced }
           return UserNotificationAuthorizer.name(await UNUserNotificationCenter.current().notificationSettings().authorizationStatus)
-        }))
+        }, chatModels: chatModels))
   }
 
   func apiKeySectionModel() -> APIKeySectionModel {
@@ -189,7 +196,9 @@ final class AppEnvironment {
   }
 
   var chatActions: ChatActions {
-    ChatActions(store: store, generation: service, log: log, navigator: navigator)
+    ChatActions(
+      store: store, generation: service, log: log, navigator: navigator, chatModels: chatModels,
+      keepsUnsentChats: Platform.keepsUnsentChats)
   }
 
   /// Finalizes post-launch initialization: logs application execution context and initiates
@@ -216,6 +225,7 @@ final class AppEnvironment {
   /// Propagates system scene phase transitions across active coordinators.
   func scenePhaseChanged(isActive: Bool, isBackground: Bool) {
     activity.setActive(isActive)
+    if isActive { rerunJanitorIfDue() }
     if isActive {
       let service = self.service
       let availability = self.availability
@@ -234,6 +244,12 @@ final class AppEnvironment {
     }
   }
 
+  /// Flushes uncommitted drafts, cleans up empty conversations, and persists diagnostic log buffers during termination.
+  func prepareToTerminate() async {
+    await chatModels?.saveForTermination()
+    await log.flush(timeout: .seconds(1))
+  }
+
   /// Awaits completion of background launch reconciliation (testing utility).
   func waitForReconciler() async {
     await reconcilerTask?.value
@@ -248,8 +264,24 @@ final class AppEnvironment {
   /// before scheduling detached filesystem maintenance.
   private func startJanitorIfReady() {
     guard firstFrameSeen, reconcilerFinished, janitorTask == nil else { return }
+    runJanitor()
+  }
+
+  private func runJanitor() {
     let janitor = Janitor(files: files, store: store, log: log)
-    janitorTask = Task.detached(priority: .utility) { await janitor.run() }
+    let task = Task.detached(priority: .utility) { await janitor.run() }
+    janitorTask = task
+    Task { [weak self] in
+      _ = await task.value
+      self?.janitorFinishedAt = .now
+    }
+  }
+
+  /// Triggers storage maintenance when the elapsed time since the previous run exceeds the configured interval.
+  private func rerunJanitorIfDue() {
+    guard let interval = Platform.janitorRerunInterval, Janitor.isDue(lastFinished: janitorFinishedAt, now: .now, interval: interval) else { return }
+    janitorFinishedAt = nil
+    runJanitor()
   }
 
   static var applicationSupportRoot: URL {

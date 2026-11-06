@@ -14,30 +14,11 @@ struct SettingsView: View {
     // Bind navigation stack path to navigator state to support deep-linking directly into sub-pages.
     NavigationStack(path: $navigator.settingsPath) {
       Form {
-        // Transition to onboarding workflow if credentials are deleted.
-        APIKeySection(model: keyModel) {
-          dismiss()
-          navigator.needsOnboarding = true
-        }
-        Section {
-          NavigationLink(value: SettingsPage.models) {
-            LabeledContent("Models", value: "\(model.settings.enabledModelIDs.count + model.settings.customModelIDs.count) enabled")
-          }
-        } header: {
-          Text("Models")
-        } footer: {
-          Text("New chats always use Gemini 3.1 Flash Image. Chats can switch models from the composer.")
-        }
-        GenerationDefaultsSection(model: model)
-        UploadsSection(model: model)
-        AdvancedSection(model: model)
-        NotificationsSection(model: model)
-        StorageSection(model: model)
-        AboutSection(model: model)
+        SettingsSections(keyModel: keyModel, model: model)
       }
       .navigationTitle("Settings")
       .inlineNavigationTitle()
-      .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+      .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.defaultActionShortcut() } }
       .navigationDestination(for: SettingsPage.self) { page in
         switch page {
         case .models: ModelsSettingsView(model: model)
@@ -53,37 +34,76 @@ struct SettingsView: View {
   }
 }
 
+/// Reusable form sections presenting global application configuration across platform hosts.
+struct SettingsSections: View {
+  let keyModel: APIKeySectionModel
+  let model: SettingsModel
+  @Environment(\.dismiss) private var dismiss
+  @Environment(Navigator.self) private var navigator
+
+  var body: some View {
+    // Transition to onboarding workflow if credentials are deleted.
+    APIKeySection(model: keyModel) {
+      dismiss()
+      navigator.needsOnboarding = true
+    } onSaved: {
+      navigator.needsOnboarding = false
+    }
+    Section {
+      SettingsModelsRow(enabledCount: model.settings.enabledModelIDs.count + model.settings.customModelIDs.count)
+    } header: {
+      Text("Models")
+    } footer: {
+      Text("New chats always use Gemini 3.1 Flash Image. Chats can switch models from the composer.")
+    }
+    GenerationDefaultsSection(model: model)
+    UploadsSection(model: model)
+    AdvancedSection(model: model)
+    NotificationsSection(model: model)
+    StorageSection(model: model)
+    if Platform.showsAboutInSettings { AboutSection(model: model) }
+  }
+}
+
 /// Renders API credential status, on-demand validation triggers, replacement forms, and revocation actions.
 struct APIKeySection: View {
   let model: APIKeySectionModel
   let onRemoved: () -> Void
+  /// Callback invoked upon successful credential validation and persistence.
+  let onSaved: () -> Void
   @State private var confirmRemove = false
 
   var body: some View {
     Section("API Key") {
       LabeledContent("Status", value: model.statusText)
       if let replace = model.replace {
-        ReplaceKeyForm(model: replace, onSaved: { model.replaceFinished() }, onCancel: { model.cancelReplace() })
+        ReplaceKeyForm(
+          model: replace,
+          onSaved: {
+            model.replaceFinished()
+            onSaved()
+          },
+          onCancel: { model.cancelReplace() })
       } else {
-        Button("Replace Key") { model.beginReplace() }
-        if model.hasKey {
-          // Disable validation trigger while asynchronous check is active.
-          Button {
-            Task { await model.validateNow() }
-          } label: {
-            HStack {
-              Text("Validate Now")
-              Spacer()
-              if model.validation == .validating { ProgressView() }
+        SettingsActionRow {
+          Button(model.hasKey ? "Replace Key" : "Add Key") { model.beginReplace() }
+          if model.hasKey {
+            // Disable validation trigger while asynchronous check is active.
+            SettingsProgressButton(title: "Validate Now", isBusy: model.validation == .validating) {
+              Task { await model.validateNow() }
             }
+            .disabled(model.validation == .validating)
           }
-          .disabled(model.validation == .validating)
+        }
+        if model.hasKey {
           switch model.validation {
           case .valid(let text): Label(text, systemImage: "checkmark.seal").foregroundStyle(.green)
           case .problem(let text): Label(text, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
           default: EmptyView()
           }
-          Button("Remove Key", role: .destructive) { confirmRemove = true }
+          SettingsActionRow {
+            Button("Remove Key", role: .destructive) { confirmRemove = true }
+          }
         }
       }
     }
@@ -102,25 +122,31 @@ private struct ReplaceKeyForm: View {
   @Bindable var model: OnboardingModel
   let onSaved: () -> Void
   let onCancel: () -> Void
+  @FocusState private var fieldFocused: Bool
 
   var body: some View {
     HStack {
       Group {
         if model.reveal {
-          TextField("New API key", text: $model.keyText)
+          TextField("New API key", text: $model.keyText, prompt: Text("New API key"))
         } else {
-          SecureField("New API key", text: $model.keyText)
+          SecureField("New API key", text: $model.keyText, prompt: Text("New API key"))
         }
       }
+      .hidesFormFieldLabel()
+      .focused($fieldFocused)
+      .takesInitialFocus($fieldFocused)
+      .submitsOnReturn { validateAndSave() }
       .neverAutocapitalize()
       .autocorrectionDisabled()
-      .textContentType(.password)
+      .apiKeyContentType()
       Button {
         model.reveal.toggle()
       } label: {
         Image(systemName: model.reveal ? "eye.slash" : "eye")
       }
       .buttonStyle(.borderless)
+      .tooltip(model.reveal ? "Hide key" : "Show key")
       .accessibilityLabel(model.reveal ? "Hide key" : "Show key")
     }
     switch model.phase {
@@ -133,19 +159,25 @@ private struct ReplaceKeyForm: View {
       EmptyView()
     }
     HStack {
-      Button("Cancel", role: .cancel, action: onCancel).buttonStyle(.borderless)
+      Button("Cancel", role: .cancel, action: onCancel).formSecondaryButtonStyle()
       Spacer()
       Button {
-        Task { if await model.validateAndSave() { onSaved() } }
+        validateAndSave()
       } label: {
         HStack {
           if model.phase == .validating { ProgressView() }
           Text("Validate and Save")
         }
       }
-      .buttonStyle(.borderless)
+      .formPrimaryButtonStyle()
+      .defaultActionShortcut()
       .disabled(!model.canValidate)
     }
+  }
+
+  private func validateAndSave() {
+    guard model.canValidate else { return }
+    Task { if await model.validateAndSave() { onSaved() } }
   }
 }
 
@@ -234,10 +266,10 @@ struct NotificationsSection: View {
   var body: some View {
     Section("Notifications") {
       LabeledContent("Status", value: model.notificationStatusText)
-      // Guide user to iOS Settings if notifications were previously disabled.
+      // Present deep link to system settings when notifications are denied.
       if model.notificationStatus == "denied" {
         if let url = Platform.settingsURL {
-          Button("Open Settings") { openURL(url) }
+          Button(Platform.openSettingsTitle) { openURL(url) }
         }
       }
       Toggle(
@@ -262,19 +294,21 @@ struct StorageSection: View {
       LabeledContent("Requests", value: size(model.sizes.requests + model.sizes.staging))
       LabeledContent("Thumbnail cache", value: size(model.sizes.thumbnails))
       LabeledContent("Total", value: size(model.totalBytes)).bold()
-      Button("Clear Thumbnail Cache") { Task { await model.clearThumbnailCache() } }
-      Button("Delete All Chats", role: .destructive) { confirmDelete = true }
-        .confirmationDialog("Delete all chats?", isPresented: $confirmDelete, titleVisibility: .visible) {
-          Button("Delete All Chats", role: .destructive) { confirmDeleteAgain = true }
-        } message: {
-          Text("Every chat and its images will be removed from this iPhone.")
-        }
-        .alert("Are you sure?", isPresented: $confirmDeleteAgain) {
-          Button("Delete Everything", role: .destructive) { Task { await model.deleteAllChats() } }
-          Button("Cancel", role: .cancel) {}
-        } message: {
-          Text("This can't be undone. Images you saved to Photos or Files are kept.")
-        }
+      SettingsActionRow {
+        Button("Clear Thumbnail Cache") { Task { await model.clearThumbnailCache() } }
+        Button("Delete All Chats", role: .destructive) { confirmDelete = true }
+          .confirmationDialog("Delete all chats?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete All Chats", role: .destructive) { confirmDeleteAgain = true }
+          } message: {
+            Text("Every chat and its images will be removed from this \(Platform.deviceNoun).")
+          }
+          .alert(Platform.deleteEverythingTitle, isPresented: $confirmDeleteAgain) {
+            Button("Delete Everything", role: .destructive) { Task { await model.deleteAllChats() } }
+            Button("Cancel", role: .cancel) {}
+          } message: {
+            Text("This can't be undone. \(Platform.savedImagesKeptNote)")
+          }
+      }
     }
   }
 }

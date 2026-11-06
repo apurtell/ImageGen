@@ -4,6 +4,16 @@ import Testing
 @testable import ImageGen
 
 @Suite(.tags(.io))
+struct JanitorScheduleTests {
+  @Test func repeatsOnlyAfterAFinishedRunIsOldEnough() {
+    let now = Date(timeIntervalSinceReferenceDate: 100_000)
+    #expect(!Janitor.isDue(lastFinished: nil, now: now, interval: 3600))
+    #expect(!Janitor.isDue(lastFinished: now.addingTimeInterval(-3599), now: now, interval: 3600))
+    #expect(Janitor.isDue(lastFinished: now.addingTimeInterval(-3600), now: now, interval: 3600))
+  }
+}
+
+@Suite(.tags(.io))
 struct JanitorTests {
   /// Test fixture providing an in-memory data store, shared virtual clock, and activity log probe.
   struct Fixture {

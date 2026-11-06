@@ -20,25 +20,27 @@ struct ContextChips: View {
         SquareThumbnail(asset: asset(model.pinnedImageID), size: 28, corner: 6)
           .opacity(model.pinChipDimmed ? 0.4 : 1)
         Text(model.pinChipDimmed ? "Pinned image replaced by attachments" : "Editing from pinned image")
-          .font(.footnote)
+          .font(Platform.composerControlFont)
           .foregroundStyle(model.pinChipDimmed ? .secondary : .primary)
         Button {
           Task { await model.unpin() }
         } label: {
           Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
         }
+        .chromelessButton()
+        .tooltip("Unpin")
         .accessibilityLabel("Unpin")
       }
       .padding(.horizontal, 10).padding(.vertical, 6)
       // Apply dimming directly to subview content to bypass container-level glass compositing constraints.
-      .glassEffect(.composerControl(colorScheme))
+      .composerControlSurface(colorScheme)
     } else if model.showsImplicitChip {
       HStack(spacing: 8) {
         SquareThumbnail(asset: asset(model.implicitBaseID), size: 28, corner: 6)
-        Text("Editing latest image").font(.footnote)
+        Text("Editing latest image").font(Platform.composerControlFont)
       }
       .padding(.horizontal, 10).padding(.vertical, 6)
-      .glassEffect(.composerControl(colorScheme))
+      .composerControlSurface(colorScheme)
       .accessibilityElement(children: .combine)
     }
   }

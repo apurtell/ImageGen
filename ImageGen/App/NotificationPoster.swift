@@ -43,7 +43,7 @@ struct NotificationPoster: NotificationPosting {
 
   func post(_ n: ReplyNotification) async -> NotificationOutcome {
     guard isEnabled() else { return .suppressed(reason: "turned off in Settings") }
-    if activity.isActive && activity.visibleConversationID == n.conversationID {
+    if activity.isOnScreen(n.conversationID) {
       return .suppressed(reason: "chat is on screen")
     }
     do {

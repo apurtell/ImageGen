@@ -8,6 +8,12 @@ import Observation
 @Observable @MainActor
 final class DeveloperMenuModel {
   let log: ActivityLog
+  /// Pending log viewer presentation kind requested via application command.
+  var requested: LogViewerModel.Kind?
+  /// Monotonically increasing counter driving presentation state refreshes.
+  private(set) var presentation = 0
+  /// Presentation trigger for log purge confirmation dialog.
+  var confirmingClear = false
   /// Latest activity log status snapshot reflecting active sequence positions and error identifiers.
   private(set) var status = ActivityLogStatus(lastSequence: 0, lastActionID: nil, lastErrorID: nil)
   /// Long-lived observation task receiving activity log status updates.
@@ -25,6 +31,11 @@ final class DeveloperMenuModel {
   /// Actor isolated deinitializer ensuring background status subscription tasks are cancelled.
   isolated deinit { task?.cancel() }
 
+  func present(_ kind: LogViewerModel.Kind) {
+    requested = kind
+    presentation += 1
+  }
+
   var hasError: Bool { status.lastErrorID != nil }
   var lastActionID: ActionID? { status.lastActionID }
   var lastErrorID: ActionID? { status.lastErrorID }
@@ -32,5 +43,6 @@ final class DeveloperMenuModel {
   /// Clears persisted activity log entries while preserving lifecycle markers for currently active actions.
   func clearLog() async {
     await log.clear()
+    ExportScratch.sweep()
   }
 }

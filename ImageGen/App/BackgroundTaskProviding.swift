@@ -16,4 +16,10 @@ protocol BackgroundTaskProviding: Sendable {
   func begin(name: String, onExpire: @escaping @Sendable () -> Void) async -> BackgroundTaskToken
   /// Ends the background task corresponding to the token.
   func end(_ token: BackgroundTaskToken) async
+  /// Notifies the provider of changes in active generation requests to maintain background execution assertions or prevent idle system sleep.
+  func liveRequestsChanged(count: Int)
+}
+
+extension BackgroundTaskProviding {
+  func liveRequestsChanged(count: Int) {}
 }

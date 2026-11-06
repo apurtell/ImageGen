@@ -225,6 +225,69 @@ struct ExportTests {
     await probe.assertPaired()
   }
 
+  @Test(arguments: ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/gif", "image/avif"])
+  func documentCanWriteEveryExportType(mime: String) {
+    #expect(ImageFileDocument.writableContentTypes.contains(ImageFile.utType(forMime: mime)))
+  }
+
+  @Test func exportScratchHoldsNamedCopiesUntilSwept() throws {
+    let root = TestFileRoot()
+    let source = root.url.appendingPathComponent("stored.png")
+    try ImageFactory.png().write(to: source)
+    let copy = try ExportScratch.namedCopy(of: source, name: "ImageGen-friendly.png")
+    #expect(copy.lastPathComponent == "ImageGen-friendly.png")
+    #expect(try Data(contentsOf: copy) == Data(contentsOf: source))
+    #expect(copy.path.hasPrefix(ExportScratch.root.path))
+  }
+
+  @Test func draggedCopyIsAFileUnderTheSuggestedName() async throws {
+    let root = TestFileRoot()
+    let data = ImageFactory.jpeg()
+    let item = try exportItem(in: root, data: data, mime: "image/jpeg", ext: "jpg")
+    let provider = item.file.draggedCopyProvider()
+    // File URLs preserve exact suggested filename extensions rather than uniform type identifiers.
+    #expect(provider.registeredTypeIdentifiers.contains(UTType.fileURL.identifier))
+    #expect(!provider.registeredTypeIdentifiers.contains(UTType.jpeg.identifier))
+    let url: URL? = await withCheckedContinuation { continuation in
+      _ = provider.loadObject(ofClass: NSURL.self) { object, _ in continuation.resume(returning: object as? URL) }
+    }
+    let copy = try #require(url)
+    #expect(copy.lastPathComponent == item.suggestedName)
+    #expect(copy.pathExtension == "jpg")
+    #expect(copy.path.hasPrefix(ExportScratch.root.path))
+    #expect(try Data(contentsOf: copy) == data)
+  }
+
+  @Test func writingAFileKeepsItsBytes() throws {
+    let root = TestFileRoot()
+    let data = ImageFactory.jpeg()
+    let item = try exportItem(in: root, data: data, mime: "image/jpeg", ext: "jpg")
+    let destination = root.url.appendingPathComponent("saved.jpg")
+    try item.file.write(to: destination)
+    #expect(try Data(contentsOf: destination) == data)
+    #expect(try Data(contentsOf: item.url) == data)
+  }
+
+  @Test func writingOverAFileReplacesIt() throws {
+    let root = TestFileRoot()
+    let data = ImageFactory.jpeg()
+    let item = try exportItem(in: root, data: data, mime: "image/jpeg", ext: "jpg")
+    let destination = root.url.appendingPathComponent("saved.jpg")
+    try Data("older".utf8).write(to: destination)
+    try item.file.write(to: destination)
+    #expect(try Data(contentsOf: destination) == data)
+    #expect(try Data(contentsOf: item.url) == data)
+  }
+
+  @Test func aFailedWriteLeavesTheExistingFile() throws {
+    let root = TestFileRoot()
+    let destination = root.url.appendingPathComponent("saved.jpg")
+    try Data("older".utf8).write(to: destination)
+    let file = ImageFile(url: root.url.appendingPathComponent("missing.jpg"), utType: .jpeg, suggestedName: "x.jpg")
+    #expect(throws: (any Error).self) { try file.write(to: destination) }
+    #expect(try Data(contentsOf: destination) == Data("older".utf8))
+  }
+
   @Test func shareProviderCarriesOriginalType() throws {
     let root = TestFileRoot()
     let item = try exportItem(in: root, data: ImageFactory.heic(), mime: "image/heic", ext: "heic")

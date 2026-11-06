@@ -27,6 +27,6 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>ImageGen saves the images you choose to your photo library.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ImageGen attaches the photos you choose to a prompt and saves images you choose to your photo library.</string>
+	<string>ImageGen saves the images you choose to your photo library.</string>
 </dict>
 </plist>

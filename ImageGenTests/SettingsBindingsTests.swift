@@ -179,7 +179,7 @@ struct SettingsBindingsTests {
     let r = try await Rig()
     await r.settingsModel.refreshNotificationStatus()
     #expect(r.settingsModel.notificationStatus == "denied")
-    #expect(r.settingsModel.notificationStatusText == "Off in system Settings")
+    #expect(r.settingsModel.notificationStatusText == Platform.notificationsDeniedStatus)
   }
 
   @Test func settingChangesLogged() async throws {

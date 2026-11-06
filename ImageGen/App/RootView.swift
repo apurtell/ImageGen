@@ -2,14 +2,14 @@ import SwiftUI
 
 /// Root presentation container arbitrating primary navigation stacks, modals, and route dispatch.
 ///
-/// Binds `Navigator` state to SwiftUI's `NavigationStack` and modal sheet presentation.
+/// Binds `Navigator` state to the platform's primary navigation and settings presentation.
 /// Coordinates initial presentation frame signaling to `AppEnvironment` for filesystem cleanup qualification,
 /// listens for incoming notification deep links, and applies programmatic launch routing.
 struct RootView: View {
   @Environment(AppEnvironment.self) private var env
 
   var body: some View {
-    @Bindable var navigator = env.navigator
+    let navigator = env.navigator
     Group {
       if navigator.needsOnboarding {
         OnboardingView(
@@ -18,19 +18,12 @@ struct RootView: View {
         ) {
           navigator.needsOnboarding = false
         }
+        .onboardingLayout()
       } else {
-        NavigationStack(path: $navigator.path) {
-          ChatListView()
-            .navigationDestination(for: UUID.self) { id in
-              ChatView(conversationID: id, services: env.chatServices())
-                .id(id)
-            }
-        }
+        PrimaryNavigation()
       }
     }
-    .sheet(isPresented: $navigator.showSettings) {
-      SettingsView(keyModel: env.apiKeySectionModel(), model: env.settingsModel())
-    }
+    .settingsPresentation()
     .onChange(of: env.router.pendingConversationID, initial: true) { _, id in
       guard let id else { return }
       env.router.pendingConversationID = nil

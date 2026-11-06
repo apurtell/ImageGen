@@ -10,12 +10,12 @@ struct ReplyStatusCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       Label {
-        Text(card.title).font(.headline)
+        Text(card.title).font(.headline).selectableDetails()
       } icon: {
         Image(systemName: card.symbol).foregroundStyle(card.symbol == "hand.raised" ? .orange : .red)
       }
       if let message = card.message {
-        Text(message).font(.subheadline).foregroundStyle(.secondary)
+        Text(message).font(Platform.statusCardMessageFont).foregroundStyle(.secondary).selectableDetails()
       }
       if !card.buttons.isEmpty {
         HStack(spacing: 8) {

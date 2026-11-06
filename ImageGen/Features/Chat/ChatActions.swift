@@ -11,6 +11,9 @@ struct ChatActions {
   let generation: any GenerationServicing
   let log: ActivityLog
   let navigator: Navigator
+  var chatModels: ChatModelCache?
+  /// Controls retention of empty conversation entities containing uncommitted draft inputs.
+  var keepsUnsentChats = false
 
   /// Instantiates a new conversation entity within the backing store and records the event.
   func newChat() async -> UUID? {
@@ -35,6 +38,7 @@ struct ChatActions {
       try await store.rename(id, to: name)
       let now = (try? await store.conversationTitle(id)) ?? ""
       log.result(action, .success, "done · title now \(private: Self.quoted(now))")
+      navigator.noteTitleChanged()
     } catch {
       log.result(action, .failed, "\(error.localizedDescription)")
     }
@@ -43,13 +47,18 @@ struct ChatActions {
   /// Evaluates and cleans up conversations remaining without messages.
   ///
   /// Employs a pre-check to eliminate redundant logging overhead, followed by an atomic store
-  /// conditional deletion to guard against concurrent generation or message ingress.
+  /// conditional deletion to guard against concurrent generation or message ingress. Synchronizes navigation
+  /// state and model caches upon deletion to prevent dangling references across window or view transitions.
   func discardIfEmpty(_ id: UUID) async {
     guard (try? await store.messageCount(conv: id)) == 0 else { return }
     let action = log.begin("Delete empty chat", origin: .system, "chat \(Format.short(id)) · left with no messages")
     do {
-      let deleted = try await store.deleteIfEmpty(id)
-      log.result(action, .success, deleted ? "done" : "kept: it has messages now")
+      let deleted = try await store.deleteIfEmpty(id, keepingDrafts: keepsUnsentChats)
+      log.result(action, .success, deleted ? "done" : keepsUnsentChats ? "kept: it has messages or a draft" : "kept: it has messages now")
+      if deleted {
+        navigator.path.removeAll { $0 == id }
+        chatModels?.remove(id)
+      }
     } catch {
       log.result(action, .failed, "\(error.localizedDescription)")
     }
@@ -75,6 +84,8 @@ struct ChatActions {
         log.result(action, .failed, "\(removed) · \(result.failures) failed: \(result.firstError ?? "unknown")")
       }
       navigator.path.removeAll { $0 == id }
+      chatModels?.remove(id)
+      Platform.closeViewer(ofConversation: id)
     } catch {
       log.result(action, .failed, "\(error.localizedDescription)")
     }

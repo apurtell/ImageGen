@@ -470,6 +470,34 @@ struct GenerationServiceTests {
     #expect(tree.contains { $0.message == "background-created retry re-created in the foreground" })
   }
 
+  @Test func inactiveRetryIsLeftAloneWhereNotRecreated() async throws {
+    let h = try H(manualSleeper: true, active: false, recreatesInactiveRetries: false)
+    try h.respond("Errors/err_503.json", "Responses/resp_text_image.json")
+    let conv = try await h.s.store.createConversation()
+    let id = try await h.service.send(h.draft(conv, "x"))
+    let scheduled = try await h.wait(id, for: [.retryScheduled])
+    #expect(!scheduled.nextAttemptCreatedInBackground)
+    let oldTask = scheduled.taskIdentifier
+    try await h.until { h.sleeper!.waitingCount == 1 }
+    h.activity.setActive(true)
+    await h.service.appBecameActive()
+    let after = try await h.snapshot(id)
+    #expect(after.taskIdentifier == oldTask)
+    #expect(after.attempt == scheduled.attempt)
+    h.sleeper!.advance()
+    #expect(try await h.wait(id).state == .succeeded)
+  }
+
+  @Test func liveRequestCountCoversTheWholeRequest() async throws {
+    let h = try H()
+    try h.respond("Responses/resp_text_image.json")
+    let conv = try await h.s.store.createConversation()
+    let id = try await h.service.send(h.draft(conv, "x"))
+    _ = try await h.wait(id)
+    try await h.until { h.tasks.liveCounts.value.last == 0 }
+    #expect(h.tasks.liveCounts.value == [1, 0])
+  }
+
   @Test func beganEventMovesToInFlight() async throws {
     let h = try H(manualSleeper: true)
     try h.respond("Errors/err_503.json")

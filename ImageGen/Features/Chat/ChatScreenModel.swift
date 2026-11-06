@@ -15,6 +15,10 @@ struct ChatServices {
   var navigator: Navigator
   var thumbnails: ThumbnailService
   var copyToPasteboard: @MainActor (String) -> Void
+  /// Optional in-memory cache retaining model instances across navigation transitions.
+  var chatModels: ChatModelCache?
+  /// Governs whether empty conversations containing draft modifications are retained upon dismissal.
+  var keepsUnsentChats = false
   /// Debounce threshold applied before persisting draft prompt modifications.
   var draftDebounce: Duration = .milliseconds(500)
   /// Preprocessing hook transforming candidate uploads into target ingestion dimensions.
@@ -23,7 +27,14 @@ struct ChatServices {
   }
 
   /// Factory providing conversation-level lifecycle dispatchers.
-  var actions: ChatActions { ChatActions(store: store, generation: generation, log: log, navigator: navigator) }
+  var actions: ChatActions {
+    ChatActions(store: store, generation: generation, log: log, navigator: navigator, chatModels: chatModels, keepsUnsentChats: keepsUnsentChats)
+  }
+}
+
+/// Supported system file and media picker presentations for prompt attachments.
+enum AttachmentPicker {
+  case photos, files
 }
 
 /// Provenance descriptor identifying the user interface source of a parameter modification.
@@ -56,6 +67,8 @@ final class ChatScreenModel {
   }
   /// Bidirectional focus binding for the primary input field.
   var isTextFieldFocused = false
+  /// Pending modal picker presentation requested via application menu dispatch.
+  var requestedPicker: AttachmentPicker?
   /// Pending request coordinates requiring user confirmation prior to draft replacement.
   var pendingEdit: (userMessageID: UUID, requestID: UUID?)?
   /// User-facing alert message payload presented upon exceptional workflow failures.
@@ -79,6 +92,9 @@ final class ChatScreenModel {
   private(set) var completedWhileVisible = 0
   /// Ordered collection of attachment candidates currently residing in the composer tray.
   var tray: [TrayItem] = []
+  /// Monotonically increasing edit counter indicating external or programmatic replacements of the input buffer.
+  private(set) var programmaticTextEdits = 0
+  func noteProgrammaticTextEdit() { programmaticTextEdits += 1 }
   /// Ephemeral overlay notification string displayed above the composer.
   private(set) var toast: String?
   /// Guard flag asserted during initial request dispatch to debounce duplicate submission gestures.
@@ -112,7 +128,19 @@ final class ChatScreenModel {
     services.activity.setVisible(nil, leaving: conversationID)
     connectivityTask?.cancel()
     connectivityTask = nil
+    isTextFieldFocused = false
+    titleDraft = nil
     await flushDraft()
+    if !isStarting && !keepsAttachments { await services.actions.discardIfEmpty(conversationID) }
+  }
+
+  /// Evaluates whether uncommitted attachments in the staging tray warrant conversation retention.
+  private var keepsAttachments: Bool { services.keepsUnsentChats && !tray.isEmpty }
+
+  /// Flushes draft modifications and evaluates empty conversation retention during application termination.
+  func saveForTermination() async {
+    await flushDraft()
+    // Staged attachments in memory do not persist across process termination.
     if !isStarting { await services.actions.discardIfEmpty(conversationID) }
   }
 
@@ -234,6 +262,19 @@ final class ChatScreenModel {
 
   func isCoerced(_ field: CoercionField) -> Bool { effective.coercions.contains { $0.field == field } }
 
+  /// Constructs descriptive accessibility and tooltip text explaining parameter inheritance, overrides, and capability coercions.
+  func pillHelp(_ field: CoercionField, overridden: Bool) -> String {
+    let name =
+      switch field {
+      case .model: "Model"
+      case .aspectRatio: "Aspect ratio"
+      case .imageSize: "Resolution"
+      }
+    var parts = [overridden ? "\(name), set for this chat" : "\(name), from the defaults in Settings"]
+    if isCoerced(field) { parts.append("The chosen value isn't supported by this model, so the closest one is used.") }
+    return parts.joined(separator: ". ")
+  }
+
   /// Menu label describing the default aspect ratio setting, indicating coercion status when applicable.
   var defaultAspectItemLabel: String {
     let d = defaults.aspectRatio
@@ -317,6 +358,7 @@ final class ChatScreenModel {
     tray = []
     sendCount += 1
     composerText = ""
+    programmaticTextEdits += 1
     await flushDraft()
     do {
       _ = try await services.generation.send(draft)
@@ -340,7 +382,10 @@ final class ChatScreenModel {
 
   /// Restores prompt text and attachment candidates back into the composer following an unrecorded dispatch failure.
   private func restoreComposer(text: String, items: [TrayItem]) {
-    if composerText.isEmpty { composerText = text }
+    if composerText.isEmpty {
+      composerText = text
+      programmaticTextEdits += 1
+    }
     let intact = items.filter { item in
       [item.originalURL, item.prepared?.url].allSatisfy { url in url.map { FileManager.default.fileExists(atPath: $0.path) } ?? false }
     }

@@ -30,9 +30,9 @@ struct ChatListView: View {
             .buttonStyle(.borderedProminent)
         }
       } else {
-        List {
+        ChatListContainer(onDelete: { id in deleting = conversations.first { $0.id == id } }) {
           // Leading standalone action row duplicating the primary creation trigger from the navigation bar.
-          NewChatRow { Task { await newChat() } }
+          if Platform.showsNewChatRow { NewChatRow { Task { await newChat() } } }
           ForEach(conversations) { conversation in
             Group {
               if editingID == conversation.id {
@@ -43,13 +43,11 @@ struct ChatListView: View {
                     text: $titleDraft, onSave: { saveTitle(conversation) }, onCancel: cancelTitle))
               } else {
                 // Pass conversation identifier to destination builder to preserve value semantic navigation routes.
-                NavigationLink(value: conversation.id) {
+                ChatListLink(id: conversation.id) {
                   ChatRow(conversation: conversation)
                 }
-                // Enable in-place editing on long press while allowing standard tap gestures to proceed to navigation.
-                .simultaneousGesture(
-                  LongPressGesture(minimumDuration: 0.5).onEnded { _ in beginTitle(conversation) })
-                .accessibilityAction(named: "Rename") { beginTitle(conversation) }
+                // Attach contextual and gesture triggers for in-place title renaming and deletion.
+                .chatRowGestures(rename: { beginTitle(conversation) }, delete: { deleting = conversation })
               }
             }
             .swipeActions(edge: .trailing) {
@@ -60,7 +58,6 @@ struct ChatListView: View {
             }
           }
         }
-        .listStyle(.plain)
         // List-anchored confirmation alert presenting deletion warnings for the selected conversation.
         .alert(
           deleting.map(Self.deleteTitle) ?? "",
@@ -79,19 +76,9 @@ struct ChatListView: View {
     }
     // Emit selection haptic feedback upon initiating in-place title editing.
     .sensoryFeedback(.selection, trigger: editingID) { _, id in id != nil }
+    .endsRowEditing(whenSelectionChanges: env.navigator) { cancelTitle() }
     .navigationTitle("Chats")
-    .toolbar {
-      ToolbarItem(placement: .leadingBar) {
-        Button("Settings", systemImage: "gearshape") { env.navigator.showSettings = true }
-          .accessibilityLabel("Settings")
-      }
-      // Retain New Chat as the trailing navigation bar item for primary visual prominence.
-      ToolbarItemGroup(placement: .trailingBar) {
-        DeveloperMenu()
-        Button("New Chat", systemImage: "square.and.pencil") { Task { await newChat() } }
-          .accessibilityLabel("New Chat")
-      }
-    }
+    .chatListToolbar(newChat: { Task { await newChat() } })
   }
 
   /// Initiates inline title editing for the specified conversation across gesture or accessibility triggers.
@@ -119,13 +106,18 @@ struct ChatListView: View {
 
   /// Formulates localized confirmation prompts detailing associated image counts slated for cascade deletion.
   static func deleteTitle(_ conversation: Conversation) -> String {
-    let count = conversation.messages.reduce(0) { $0 + $1.images.count }
-    return count == 0 ? "Delete this chat?" : "Delete chat and its \(count) image\(count == 1 ? "" : "s")?"
+    deleteTitle(imageCount: conversation.messages.reduce(0) { $0 + $1.images.count })
+  }
+
+  static func deleteTitle(imageCount count: Int) -> String {
+    count == 0 ? "Delete this chat?" : "Delete chat and its \(count) image\(count == 1 ? "" : "s")?"
   }
 
   /// Initializes a new conversational session and navigates immediately to its transcript upon creation.
   private func newChat() async {
-    if let id = await env.chatActions.newChat() { env.navigator.open(id) }
+    guard let id = await env.chatActions.newChat() else { return }
+    env.navigator.open(id)
+    env.navigator.requestComposerFocus(for: id)
   }
 }
 

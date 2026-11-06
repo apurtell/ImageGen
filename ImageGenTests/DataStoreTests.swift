@@ -325,6 +325,16 @@ struct DataStoreTests {
     #expect(try await s.store.selectorHistory(conv: used).count == 2)
   }
 
+  @Test func deleteIfEmptyCanKeepDrafts() async throws {
+    let s = try InMemoryStore()
+    let drafted = try await s.store.createConversation()
+    try await s.store.setDraft(drafted, text: "a lighthouse")
+    #expect(!(try await s.store.deleteIfEmpty(drafted, keepingDrafts: true)))
+    #expect(try await s.store.conversationTitle(drafted) != "")
+    try await s.store.setDraft(drafted, text: "  ")
+    #expect(try await s.store.deleteIfEmpty(drafted, keepingDrafts: true))
+  }
+
   @Test func selectorHistoryOrderAndStates() async throws {
     let s = try InMemoryStore()
     let conv = try await s.store.createConversation()

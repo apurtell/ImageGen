@@ -26,7 +26,9 @@ struct DeveloperMenu: View {
       LogViewerSheet(
         model: LogViewerModel(
           kind: kind, log: model.log,
-          startingAt: kind == .lastAction ? model.lastActionID : kind == .lastError ? model.lastErrorID : nil))
+          startingAt: kind == .lastAction ? model.lastActionID : kind == .lastError ? model.lastErrorID : nil)
+      )
+      .sheetSizing(minWidth: 640, minHeight: 420)
     }
     .confirmationDialog("Clear the activity log?", isPresented: $confirmClear, titleVisibility: .visible) {
       Button("Clear Log", role: .destructive) { Task { await model.clearLog() } }

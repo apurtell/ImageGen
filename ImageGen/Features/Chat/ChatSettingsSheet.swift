@@ -5,10 +5,9 @@ import SwiftUI
 /// Dispatches asynchronous update tasks through `ChatScreenModel` when user selections diverge from global defaults.
 struct ChatSettingsSheet: View {
   let model: ChatScreenModel
-  @Environment(\.dismiss) private var dismiss
 
   var body: some View {
-    NavigationStack {
+    SheetScaffold(title: "Chat Settings") {
       Form {
         Picker("Model", selection: Binding(get: { model.overrides.modelID }, set: { v in Task { await model.setModel(v, from: .chatSettings) } })) {
           Text(model.defaultModelItemLabel).tag(String?.none)
@@ -25,9 +24,7 @@ struct ChatSettingsSheet: View {
           ForEach(model.sizes, id: \.self) { s in Text(s.displayName).tag(Optional(s)) }
         }
       }
-      .navigationTitle("Chat Settings")
-      .inlineNavigationTitle()
-      .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+      .sheetFormStyle()
     }
   }
 }

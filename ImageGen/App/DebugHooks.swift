@@ -44,7 +44,7 @@ enum DebugHooks {
     }
     if options.seedPasteboardImage {
       let jpeg = MockImageRenderer.jpeg(width: 1024, height: 768, prompt: "Pasted image", caption: "from the pasteboard")
-      await MainActor.run { SystemPasteboard.general.setData(jpeg, type: .jpeg) }
+      await MainActor.run { _ = SystemPasteboard.general.setData(jpeg, type: .jpeg) }
     }
     if options.orientation == "landscape" {
       await Platform.requestLandscape()

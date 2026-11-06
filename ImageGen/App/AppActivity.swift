@@ -8,6 +8,8 @@ import Foundation
 /// using lightweight mutual exclusion (`Locked`), ensuring lock free nonblocking reads across concurrency boundaries.
 final class AppActivity: Sendable {
   private let state: Locked<(isActive: Bool, visibleConversationID: UUID?)>
+  /// Tracks conversation window visibility, accounting for window minimization and workspace transitions.
+  private let chatWindowVisible = Locked(true)
 
   init(isActive: Bool = false, visibleConversationID: UUID? = nil) {
     state = Locked((isActive, visibleConversationID))
@@ -17,6 +19,14 @@ final class AppActivity: Sendable {
   var visibleConversationID: UUID? { state.value.visibleConversationID }
 
   func setActive(_ active: Bool) { state.withLock { $0.isActive = active } }
+
+  func setChatWindowVisible(_ visible: Bool) { chatWindowVisible.withLock { $0 = visible } }
+
+  /// Evaluates whether the specified conversation is active and visible on screen.
+  func isOnScreen(_ id: UUID?) -> Bool {
+    let s = state.value
+    return s.isActive && id != nil && s.visibleConversationID == id && chatWindowVisible.value
+  }
 
   /// Updates visible conversation context. When `leaving` is specified, clears the identifier
   /// only if it matches the current value, preventing out-of-order disappearance transitions

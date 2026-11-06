@@ -108,8 +108,9 @@ actor DataStore: ModelActor {
 
   /// Conditionally deletes a conversation if no messages have been recorded.
   @discardableResult
-  func deleteIfEmpty(_ id: UUID) throws -> Bool {
+  func deleteIfEmpty(_ id: UUID, keepingDrafts: Bool = false) throws -> Bool {
     guard let conversation = try? fetchConversation(id), conversation.messages.isEmpty else { return false }
+    if keepingDrafts && !conversation.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
     _ = try deleteConversation(id)
     return true
   }

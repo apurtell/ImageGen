@@ -6,7 +6,7 @@ struct ToastView: View {
 
   var body: some View {
     Text(text)
-      .font(.footnote)
+      .font(Platform.toastFont)
       .padding(.horizontal, 14).padding(.vertical, 8)
       .glassEffect()
       .accessibilityAddTraits(.isStaticText)
@@ -24,5 +24,8 @@ extension View {
       }
     }
     .animation(.default, value: text)
+    .onChange(of: text) { _, now in
+      if let now { Platform.announce(now) }
+    }
   }
 }

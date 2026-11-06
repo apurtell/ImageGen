@@ -5,7 +5,6 @@ import SwiftUI
 /// transport diagnostics, execution timestamps, and raw response attributes.
 struct ReplyInfoSheet: View {
   let request: GenerationRequest
-  @Environment(\.dismiss) private var dismiss
   @Environment(\.modelContext) private var context
   @State private var showDetails = false
 
@@ -27,7 +26,7 @@ struct ReplyInfoSheet: View {
   }
 
   var body: some View {
-    NavigationStack {
+    SheetScaffold(title: "Info") {
       Form {
         Section("Request") {
           row("Model", request.modelID)
@@ -64,14 +63,23 @@ struct ReplyInfoSheet: View {
           if let s = request.startedAt { row("Started", s.formatted(date: .omitted, time: .standard)) }
           if let c = request.completedAt { row("Completed", c.formatted(date: .omitted, time: .standard)) }
         }
-        if request.details != nil {
-          Section { Button("Details") { showDetails = true } }
+        if let details = request.details {
+          Section {
+            if Platform.showsReplyDetailsInline {
+              DisclosureGroup("Details") {
+                Text(details)
+                  .font(.system(.caption, design: .monospaced))
+                  .textSelection(.enabled)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+              }
+            } else {
+              Button("Details") { showDetails = true }
+            }
+          }
         }
       }
-      .navigationTitle("Info")
-      .inlineNavigationTitle()
-      .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-      .sheet(isPresented: $showDetails) { DetailsSheet(text: request.details ?? "") }
+      .sheetFormStyle()
+      .sheet(isPresented: $showDetails) { DetailsSheet(text: request.details ?? "").sheetSizing(minWidth: 480, minHeight: 320) }
     }
   }
 

@@ -7,17 +7,16 @@ struct OnboardingView: View {
   /// Completion handler invoked upon successful credential configuration and warning acknowledgment.
   let onFinished: () -> Void
   @State private var showFlashWarning = false
+  @FocusState private var keyFieldFocused: Bool
 
   var body: some View {
     NavigationStack {
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
           Text("Connect Gemini").font(.largeTitle.bold())
-          Text("ImageGen talks to Google's Gemini API with your own API key. The key is stored in the Keychain on this iPhone and never shown again.")
+          Text("ImageGen talks to Google's Gemini API with your own API key. The key is stored in the Keychain on this \(Platform.deviceNoun) and never shown again.")
             .foregroundStyle(.secondary)
-          Text("Get a key at aistudio.google.com/apikey")
-            .font(.callout.monospaced())
-            .textSelection(.enabled)
+          APIKeySourceLink()
           HStack {
             // Dynamically alternate between obscured SecureField and plaintext TextField based on visibility state.
             Group {
@@ -27,14 +26,20 @@ struct OnboardingView: View {
                 SecureField("API key", text: $model.keyText)
               }
             }
+            .framelessFieldStyle()
+            .focused($keyFieldFocused)
+            .takesInitialFocus($keyFieldFocused)
+            .submitsOnReturn { submit() }
             .neverAutocapitalize()
             .autocorrectionDisabled()
-            .textContentType(.password)
+            .apiKeyContentType()
             Button {
               model.reveal.toggle()
             } label: {
               Image(systemName: model.reveal ? "eye.slash" : "eye")
             }
+            .chromelessButton()
+            .tooltip(model.reveal ? "Hide key" : "Show key")
             .accessibilityLabel(model.reveal ? "Hide key" : "Show key")
           }
           .padding(12)
@@ -60,12 +65,14 @@ struct OnboardingView: View {
           } label: {
             HStack {
               if model.phase == .validating { ProgressView() }
-              Text("Validate and Save").frame(maxWidth: .infinity)
+              Text("Validate and Save").onboardingButtonLabel()
             }
             .padding(.vertical, 6)
           }
           .buttonStyle(.glassProminent)
+          .defaultActionShortcut()
           .disabled(!model.canValidate)
+          .onboardingButtonPlacement()
         }
         .padding(24)
       }
@@ -75,6 +82,11 @@ struct OnboardingView: View {
         Text(OnboardingModel.flashWarning)
       }
     }
+  }
+
+  private func submit() {
+    guard model.canValidate else { return }
+    Task { await validate() }
   }
 
   /// Dispatches asynchronous credential verification and routes to completion or advisory warnings.

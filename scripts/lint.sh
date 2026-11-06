@@ -1,6 +1,6 @@
 #!/bin/bash
 # Banned-pattern checks (IMPLEMENTATION_PLAN.md section 2.7).
-#   scripts/lint.sh              lint ImageGen/
+#   scripts/lint.sh              lint ImageGen/ and Platforms/
 #   scripts/lint.sh --self-test  plant one violation per rule in a scratch tree and check each rule fires
 set -uo pipefail
 source "$(dirname "$0")/env.sh"
@@ -33,13 +33,15 @@ grep_rule() {
   return 1
 }
 
-rule_no_key_in_urls()        { grep_rule "$1" '\?key=|&key=' ""; }
+rule_no_key_in_urls()        { grep_rule "$1" '\?key=|&key=' "" @Platforms; }
 rule_no_full_decode() {
-  grep_rule "$1" 'UIImage\(data:|UIImage\(contentsOfFile:|NSImage\(data:|NSImage\(contentsOf:|NSImage\(contentsOfFile:' "" @Platforms \
+  grep_rule "$1" 'UIImage\(data:|UIImage\(contentsOfFile:|NSImage\(data:|NSImage\(contentsOf:|NSImage\(contentsOfFile:|NSImage\(byReferencing|NSBitmapImageRep\(data:' "" @Platforms \
     -- /ImageGen/DebugSupport/
 }
 rule_no_uikit_appkit_in_shared() { grep_rule "$1" '^[[:space:]]*(@[A-Za-z_]+ )?import (UIKit|AppKit)\b' ""; }
-rule_no_reencoding_exports() { grep_rule "$1" 'UIImageWriteToSavedPhotosAlbum|jpegData\(|pngData\(' Export Features; }
+rule_no_reencoding_exports() {
+  grep_rule "$1" 'UIImageWriteToSavedPhotosAlbum|jpegData\(|pngData\(|tiffRepresentation|representation\(using:|NSBitmapImageRep' Export Features @Platforms
+}
 rule_no_swiftui_in_pure_layers() { grep_rule "$1" '^import SwiftUI' Gemini Imaging Pipeline Security Networking; }
 rule_no_print()              { grep_rule "$1" '\bprint\(' "" @Platforms -- /ImageGen/DebugSupport/; }
 rule_no_async_urlsession_for_generation() { grep_rule "$1" '\.data\(for:|\.upload\(for:' Networking Pipeline; }
@@ -51,6 +53,8 @@ rule_debug_names_only_via_hooks() {
 rule_no_key_in_activity_log() {
   local root="$1" found=0 out
   [ -d "$root/ImageGen" ] || return 0
+  local dirs=("$root/ImageGen")
+  [ -d "$root/Platforms" ] && dirs+=("$root/Platforms")
   while IFS= read -r -d '' f; do
     out="$(perl -0777 -ne '
       while (/\.(?:begin|step|result)\s*(\((?:[^()]++|(?1))*\))/g) {
@@ -62,7 +66,7 @@ rule_no_key_in_activity_log() {
         }
       }' "$f")"
     if [ -n "$out" ]; then printf '%s\n' "$out"; found=1; fi
-  done < <(find "$root/ImageGen" -name '*.swift' -print0)
+  done < <(find "${dirs[@]}" -name '*.swift' -print0)
   return $found
 }
 
@@ -126,6 +130,11 @@ self_test() {
   plant Support/LogSingle.swift 'log.begin("Validate key", origin: .user, "key \(apiKey)")'
   plant Support/LogMulti.swift $'log.step(a,\n  "retry in 2s",\n  keyStore.read())'
   plant DebugSupport/Unguarded.swift $'// no guard\nenum Mock {}'
+  mkdir -p "$tmp/Platforms/macOS"
+  printf '%s\n' 'let u = "https://x/models?key=\(k)"' > "$tmp/Platforms/macOS/Url.swift"
+  printf '%s\n' 'let d = image.tiffRepresentation' > "$tmp/Platforms/macOS/Reencode.swift"
+  printf '%s\n' 'let r = NSBitmapImageRep(data: d)' > "$tmp/Platforms/macOS/Decode.swift"
+  printf '%s\n' 'log.step(a, "key \(apiKey)")' > "$tmp/Platforms/macOS/Log.swift"
 
   local failed=0 out
   for rule in "${RULES[@]}"; do
@@ -140,6 +149,14 @@ self_test() {
   done
   out="$(rule_no_full_decode "$tmp")"
   printf '%s\n' "$out" | $GREP -q 'DecodeMac.swift' || { echo "self-test: no-full-decode missed NSImage"; failed=1; }
+  out="$(rule_no_key_in_urls "$tmp")"
+  printf '%s\n' "$out" | $GREP -q 'Platforms/macOS/Url.swift' || { echo "self-test: no-key-in-urls missed Platforms"; failed=1; }
+  out="$(rule_no_reencoding_exports "$tmp")"
+  printf '%s\n' "$out" | $GREP -q 'Platforms/macOS/Reencode.swift' || { echo "self-test: no-reencoding-exports missed Platforms"; failed=1; }
+  out="$(rule_no_full_decode "$tmp")"
+  printf '%s\n' "$out" | $GREP -q 'Platforms/macOS/Decode.swift' || { echo "self-test: no-full-decode missed NSBitmapImageRep"; failed=1; }
+  out="$(rule_no_key_in_activity_log "$tmp")"
+  printf '%s\n' "$out" | $GREP -q 'Platforms/macOS/Log.swift' || { echo "self-test: no-key-in-activity-log missed Platforms"; failed=1; }
   out="$(rule_no_print "$tmp")"
   printf '%s\n' "$out" | $GREP -q 'Platforms/iOS/Print.swift' || { echo "self-test: no-print missed Platforms"; failed=1; }
   if [ "$failed" -ne 0 ]; then echo "self-test: FAILED"; return 1; fi
