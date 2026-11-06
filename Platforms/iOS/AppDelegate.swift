@@ -13,7 +13,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
   ) -> Bool {
     guard !AppEnvironment.isTestHost else { return true }
     UNUserNotificationCenter.current().delegate = self
-    AppEnvironment.shared.didFinishLaunching(applicationState: application.applicationState)
+    AppEnvironment.shared.didFinishLaunching(applicationState: LaunchState(application.applicationState))
     return true
   }
 
@@ -67,5 +67,18 @@ extension AppDelegate: UNUserNotificationCenterDelegate {
         done()
       }
     }
+  }
+}
+
+extension LaunchState {
+  /// Maps UIKit application state to the shared launch state.
+  init(_ state: UIApplication.State) {
+    self =
+      switch state {
+      case .active: .active
+      case .inactive: .inactive
+      case .background: .background
+      @unknown default: .unknown
+      }
   }
 }

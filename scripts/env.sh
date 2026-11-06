@@ -30,6 +30,8 @@ export DERIVED="$REPO_ROOT/build/DerivedData"
 export LOGS="$REPO_ROOT/build/logs"
 export PROJECT="$REPO_ROOT/ImageGen.xcodeproj"
 export SCHEME="ImageGen"
+export MAC_SCHEME="ImageGenMac"
+export MAC_DERIVED="$REPO_ROOT/build/DerivedData-mac"
 
 # Prints the UDID of the dedicated simulator, or nothing when it doesn't exist.
 sim_udid() {

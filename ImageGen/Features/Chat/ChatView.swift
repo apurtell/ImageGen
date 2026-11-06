@@ -53,7 +53,7 @@ struct ChatView: View {
     ScrollViewReader { proxy in
       transcript(proxy)
     }
-    .navigationBarTitleDisplayMode(.inline)
+    .inlineNavigationTitle()
     .toolbar {
       ToolbarItem(placement: .principal) {
         // The in-place title edit replaces the title while `model.titleDraft` is non-nil.
@@ -75,7 +75,7 @@ struct ChatView: View {
             .accessibilityAction(named: "Edit title in place") { model.beginTitleEdit() }
         }
       }
-      ToolbarItemGroup(placement: .topBarTrailing) {
+      ToolbarItemGroup(placement: .trailingBar) {
         DeveloperMenu()
         Menu {
           Button("Rename", systemImage: "pencil") { renaming = true }
@@ -113,7 +113,7 @@ struct ChatView: View {
       Text(model.alertMessage ?? "")
     }
     .modifier(ImageExportPresenter(model: exporter, toastOffset: 8))
-    .fullScreenCover(item: $viewer) { request in
+    .viewerCover(item: $viewer) { request in
       ImageViewer(request: request, thumbnails: model.services.thumbnails, log: model.services.log) { id in
         Task { await model.pin(id) }
       }

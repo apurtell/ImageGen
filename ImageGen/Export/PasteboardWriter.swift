@@ -1,10 +1,10 @@
-import UIKit
+import Foundation
 
 /// Handles system clipboard export operations, copying raw asset data directly under its native uniform type
 /// identifier to prevent fidelity loss from transcoding.
 @MainActor
 struct PasteboardWriter {
-  var pasteboard: UIPasteboard = .general
+  var pasteboard: SystemPasteboard = .general
   let log: ActivityLog
 
   /// Writes the asset data to the system pasteboard asynchronously, emitting action telemetry and returning success status.
@@ -15,7 +15,7 @@ struct PasteboardWriter {
     do {
       // Read raw file bytes off the main thread prior to staging onto the system pasteboard.
       let data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: url) }.value
-      pasteboard.setItems([[item.utType.identifier: data]])
+      pasteboard.setData(data, type: item.utType)
       log.result(action, .success, "pasteboard written (1 item, \(item.utType.identifier))")
       return true
     } catch {

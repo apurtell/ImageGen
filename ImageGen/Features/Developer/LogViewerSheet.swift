@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// Modal presentation container displaying filtered or exhaustive activity log records,
 /// providing clipboard export, share sheet distribution, and live stream updates.
@@ -27,15 +26,15 @@ struct LogViewerSheet: View {
         }
       }
       .navigationTitle(model.title)
-      .navigationBarTitleDisplayMode(.inline)
+      .inlineNavigationTitle()
       // Export actions access the latest evaluated log text reflecting active streaming appends.
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done") { dismiss() }
         }
-        ToolbarItemGroup(placement: .topBarLeading) {
+        ToolbarItemGroup(placement: .leadingBar) {
           Button("Copy", systemImage: "doc.on.doc") {
-            UIPasteboard.general.string = model.text
+            SystemPasteboard.general.string = model.text
             copied = true
           }
           .accessibilityLabel("Copy")

@@ -81,12 +81,12 @@ struct ChatListView: View {
     .sensoryFeedback(.selection, trigger: editingID) { _, id in id != nil }
     .navigationTitle("Chats")
     .toolbar {
-      ToolbarItem(placement: .topBarLeading) {
+      ToolbarItem(placement: .leadingBar) {
         Button("Settings", systemImage: "gearshape") { env.navigator.showSettings = true }
           .accessibilityLabel("Settings")
       }
       // Retain New Chat as the trailing navigation bar item for primary visual prominence.
-      ToolbarItemGroup(placement: .topBarTrailing) {
+      ToolbarItemGroup(placement: .trailingBar) {
         DeveloperMenu()
         Button("New Chat", systemImage: "square.and.pencil") { Task { await newChat() } }
           .accessibilityLabel("New Chat")

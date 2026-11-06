@@ -41,7 +41,14 @@ struct KeychainStore: APIKeyStore {
 
   /// Base query attributes identifying the application's unique credential entry.
   private var baseQuery: [CFString: Any] {
-    [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: Self.account]
+    var query: [CFString: Any] = [
+      kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: Self.account,
+    ]
+    #if os(macOS)
+    // macOS requires the data protection keychain for device-only accessibility after first unlock.
+    query[kSecUseDataProtectionKeychain] = true
+    #endif
+    return query
   }
 
   func read() throws -> String? {

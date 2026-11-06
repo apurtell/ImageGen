@@ -86,7 +86,7 @@ struct ImageViewer: View {
         .transition(.opacity)
       }
     }
-    .statusBarHidden(!showsChrome)
+    .hidesStatusBar(!showsChrome)
     // Coordinate dismissal of secondary presentation sheets when dismissing the viewer hierarchy.
     .modifier(ImageExportPresenter(model: exporter, toastOffset: 64))
     .sheet(item: $info) { ViewerInfoSheet(image: $0) }
@@ -108,7 +108,7 @@ struct ImageViewer: View {
         .tag(image.id)
       }
     }
-    .tabViewStyle(.page(indexDisplayMode: .never))
+    .pagedTabStyle()
   }
 
   private var topBar: some View {
@@ -154,7 +154,7 @@ struct ViewerInfoSheet: View {
         LabeledContent("File name", value: image.item.suggestedName)
       }
       .navigationTitle("Info")
-      .navigationBarTitleDisplayMode(.inline)
+      .inlineNavigationTitle()
       .toolbar {
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
       }

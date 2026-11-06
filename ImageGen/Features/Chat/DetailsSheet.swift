@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 /// Presents sanitized diagnostic payloads or structured error representations in a selectable monospace view.
 struct DetailsSheet: View {
@@ -16,11 +15,11 @@ struct DetailsSheet: View {
           .padding()
       }
       .navigationTitle("Details")
-      .navigationBarTitleDisplayMode(.inline)
+      .inlineNavigationTitle()
       .toolbar {
         ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-        ToolbarItem(placement: .topBarLeading) {
-          Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+        ToolbarItem(placement: .leadingBar) {
+          Button("Copy", systemImage: "doc.on.doc") { SystemPasteboard.general.string = text }
             .accessibilityLabel("Copy")
         }
       }

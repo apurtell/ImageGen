@@ -1,8 +1,12 @@
 import Foundation
 import Observation
 import SwiftData
-import UIKit
 import UserNotifications
+
+/// Application state at launch, independent of platform-specific lifecycle types.
+enum LaunchState: String, Sendable {
+  case active, inactive, background, unknown
+}
 
 /// Configuration bundle for mock environments, substituting background network sessions
 /// and secure Keychain storage with ephemeral protocols and in-memory credential stores.
@@ -42,7 +46,7 @@ final class AppEnvironment {
     var inMemoryStore = false
     /// Triggers filesystem and store purge prior to initialization.
     var resetBeforeLaunch = false
-    var makeBackgroundTasks: (ActivityLog) -> any BackgroundTaskProviding = { UIApplicationBackgroundTaskProvider(log: $0) }
+    var makeBackgroundTasks: (ActivityLog) -> any BackgroundTaskProviding = { SystemBackgroundTaskProvider(log: $0) }
     /// Custom notification delivery hook for test environments; nil delegates to `UNUserNotificationCenter`.
     var deliverNotification: (@Sendable (ReplyNotification) async -> Void)? = nil
     var connectivity: any ConnectivityMonitoring = NWPathConnectivityMonitor()
@@ -102,7 +106,7 @@ final class AppEnvironment {
     let build = info["CFBundleVersion"] as? String ?? "?"
     launchAction = log.begin(
       "Launch", origin: .system,
-      "ImageGen \(version) (\(build)) · iOS \(UIDevice.current.systemVersion) · mock mode \(config.mockModeDescription)")
+      "ImageGen \(version) (\(build)) · \(Platform.osDescription) · mock mode \(config.mockModeDescription)")
 
     // 2. Storage engine and persistent state initialization.
     files = FileStore(root: config.root, cachesRoot: config.cachesRoot)
@@ -165,7 +169,7 @@ final class AppEnvironment {
     ChatServices(
       store: store, files: files, generation: service, settings: settings, log: log, connectivity: connectivity,
       activity: activity, notifications: notificationPermission, navigator: navigator, thumbnails: thumbnails,
-      copyToPasteboard: { UIPasteboard.general.string = $0 })
+      copyToPasteboard: { SystemPasteboard.general.string = $0 })
   }
 
   /// Constructs view model dependencies for application settings presentation.
@@ -190,14 +194,8 @@ final class AppEnvironment {
 
   /// Finalizes post-launch initialization: logs application execution context and initiates
   /// background reconciliation off the main actor.
-  func didFinishLaunching(applicationState: UIApplication.State) {
-    let state = switch applicationState {
-    case .active: "active"
-    case .inactive: "inactive"
-    case .background: "background"
-    @unknown default: "unknown"
-    }
-    log.step(launchAction, "application state \(state)")
+  func didFinishLaunching(applicationState: LaunchState) {
+    log.step(launchAction, "application state \(applicationState.rawValue)")
     let reconciler = self.reconciler
     reconcilerTask = Task.detached(priority: .utility) { [weak self] in
       await reconciler.run()

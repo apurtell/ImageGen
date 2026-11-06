@@ -1,5 +1,5 @@
 #if DEBUG
-import UIKit
+import Foundation
 import UniformTypeIdentifiers
 
 /// Encapsulates debug harness integrations, mock environments, and test automation hooks.
@@ -44,13 +44,10 @@ enum DebugHooks {
     }
     if options.seedPasteboardImage {
       let jpeg = MockImageRenderer.jpeg(width: 1024, height: 768, prompt: "Pasted image", caption: "from the pasteboard")
-      UIPasteboard.general.setData(jpeg, forPasteboardType: UTType.jpeg.identifier)
+      await MainActor.run { SystemPasteboard.general.setData(jpeg, type: .jpeg) }
     }
     if options.orientation == "landscape" {
-      await MainActor.run {
-        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first?
-          .requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight))
-      }
+      await Platform.requestLandscape()
     }
     guard let scene = options.scene.flatMap(SceneRoute.init(rawValue:)) else { return nil }
     return scene.launchRoute(keys: keys)

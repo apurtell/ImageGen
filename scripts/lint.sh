@@ -9,11 +9,14 @@ GREP=/usr/bin/grep
 
 # Each rule takes the root that contains ImageGen/, prints its violations and returns 1 if any.
 
-# grep_rule <root> <pattern> <dir under ImageGen/>... [-- <path substring to exclude>...]
+# grep_rule <root> <pattern> <dir under ImageGen/, or @dir relative to the root>... [-- <path substring to exclude>...]
 grep_rule() {
   local root="$1" pattern="$2"; shift 2
   local dirs=() excludes=()
-  while [ $# -gt 0 ] && [ "$1" != "--" ]; do dirs+=("$root/ImageGen/$1"); shift; done
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do
+    case "$1" in @*) dirs+=("$root/${1#@}") ;; *) dirs+=("$root/ImageGen/$1") ;; esac
+    shift
+  done
   [ $# -gt 0 ] && shift
   excludes=("$@")
   local existing=()
@@ -31,14 +34,18 @@ grep_rule() {
 }
 
 rule_no_key_in_urls()        { grep_rule "$1" '\?key=|&key=' ""; }
-rule_no_full_decode()        { grep_rule "$1" 'UIImage\(data:|UIImage\(contentsOfFile:' "" -- /ImageGen/DebugSupport/; }
+rule_no_full_decode() {
+  grep_rule "$1" 'UIImage\(data:|UIImage\(contentsOfFile:|NSImage\(data:|NSImage\(contentsOf:|NSImage\(contentsOfFile:' "" @Platforms \
+    -- /ImageGen/DebugSupport/
+}
+rule_no_uikit_appkit_in_shared() { grep_rule "$1" '^[[:space:]]*(@[A-Za-z_]+ )?import (UIKit|AppKit)\b' ""; }
 rule_no_reencoding_exports() { grep_rule "$1" 'UIImageWriteToSavedPhotosAlbum|jpegData\(|pngData\(' Export Features; }
 rule_no_swiftui_in_pure_layers() { grep_rule "$1" '^import SwiftUI' Gemini Imaging Pipeline Security Networking; }
-rule_no_print()              { grep_rule "$1" '\bprint\(' "" -- /ImageGen/DebugSupport/; }
+rule_no_print()              { grep_rule "$1" '\bprint\(' "" @Platforms -- /ImageGen/DebugSupport/; }
 rule_no_async_urlsession_for_generation() { grep_rule "$1" '\.data\(for:|\.upload\(for:' Networking Pipeline; }
 rule_debug_names_only_via_hooks() {
-  grep_rule "$1" '\bLaunchOptions\b|MockGeminiURLProtocol|DemoSeeder|SceneRoute' "" \
-    -- /ImageGen/DebugSupport/ /ImageGen/App/DebugHooks.swift
+  grep_rule "$1" '\bLaunchOptions\b|MockGeminiURLProtocol|DemoSeeder|SceneRoute|MockImageRenderer' "" \
+    @Platforms -- /ImageGen/DebugSupport/ /ImageGen/App/DebugHooks.swift
 }
 
 rule_no_key_in_activity_log() {
@@ -74,7 +81,7 @@ rule_debug_guard() {
   return $found
 }
 
-RULES=(no_key_in_urls no_full_decode no_reencoding_exports no_swiftui_in_pure_layers no_print
+RULES=(no_key_in_urls no_full_decode no_uikit_appkit_in_shared no_reencoding_exports no_swiftui_in_pure_layers no_print
        no_async_urlsession_for_generation debug_names_only_via_hooks no_key_in_activity_log debug_guard)
 
 run_all() {
@@ -93,10 +100,11 @@ self_test() {
   local tmp; tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   local g="$tmp/ImageGen"
-  mkdir -p "$g"/{App,Gemini,Pipeline,Networking,Export,Features,DebugSupport,Support}
+  mkdir -p "$tmp/Platforms/iOS" "$g"/{App,Gemini,Pipeline,Networking,Export,Features,DebugSupport,Support}
   plant() { printf '%s\n' "$2" > "$g/$1"; }
 
   # A clean tree passes every rule, including the names the rules must not catch.
+  printf '%s\n' $'import UIKit\nlet ok = UIImage(cgImage: c)' > "$tmp/Platforms/iOS/Clean.swift"
   plant App/AppDelegate.swift 'func f(_ o: [UIApplication.LaunchOptionsKey: Any]?) {}'
   plant App/DebugHooks.swift $'// hooks\n#if DEBUG\nlet x = LaunchOptions.self\n#endif'
   plant DebugSupport/LaunchOptions.swift $'\n#if DEBUG\nprint("ok"); let i = UIImage(data: d)\n#endif'
@@ -108,6 +116,9 @@ self_test() {
   plant Gemini/Url.swift 'let u = "https://x/models?key=\(k)"'
   plant Features/Decode.swift 'let i = UIImage(data: d)'
   plant Export/Reencode.swift 'let d = image.jpegData(compressionQuality: 1)'
+  plant Features/DecodeMac.swift 'let i = NSImage(contentsOf: u)'
+  plant Features/Uikit.swift $'import AppKit'
+  printf '%s\n' 'print("x")' > "$tmp/Platforms/iOS/Print.swift"
   plant Pipeline/UI.swift 'import SwiftUI'
   plant Networking/Print.swift 'print("debug")'
   plant Networking/Async.swift 'let (d, r) = try await session.data(for: request)'
@@ -127,6 +138,10 @@ self_test() {
   for f in LogSingle LogMulti; do
     printf '%s\n' "$out" | $GREP -q "$f.swift" || { echo "self-test: no-key-in-activity-log missed $f.swift"; failed=1; }
   done
+  out="$(rule_no_full_decode "$tmp")"
+  printf '%s\n' "$out" | $GREP -q 'DecodeMac.swift' || { echo "self-test: no-full-decode missed NSImage"; failed=1; }
+  out="$(rule_no_print "$tmp")"
+  printf '%s\n' "$out" | $GREP -q 'Platforms/iOS/Print.swift' || { echo "self-test: no-print missed Platforms"; failed=1; }
   if [ "$failed" -ne 0 ]; then echo "self-test: FAILED"; return 1; fi
   echo "self-test: all ${#RULES[@]} rules fire"
 }

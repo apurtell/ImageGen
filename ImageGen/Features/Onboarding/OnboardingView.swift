@@ -27,7 +27,7 @@ struct OnboardingView: View {
                 SecureField("API key", text: $model.keyText)
               }
             }
-            .textInputAutocapitalization(.never)
+            .neverAutocapitalize()
             .autocorrectionDisabled()
             .textContentType(.password)
             Button {

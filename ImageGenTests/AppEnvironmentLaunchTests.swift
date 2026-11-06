@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import UIKit
 
 @testable import ImageGen
 
@@ -94,7 +93,7 @@ struct AppEnvironmentLaunchTests {
     #expect(first.kind == .begin)
     #expect(first.origin == .system)
     #expect(first.message.hasPrefix("ImageGen "))
-    #expect(first.message.contains(" · iOS \(UIDevice.current.systemVersion) · mock mode off"))
+    #expect(first.message.contains(" · \(Platform.osDescription) · mock mode off"))
     let launch = all.filter { $0.actionID == first.actionID }
     #expect(launch.map(\.kind) == [.begin, .step, .result])
     #expect(launch[1].message == "application state background")

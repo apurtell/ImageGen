@@ -2,7 +2,6 @@ import CoreTransferable
 import Foundation
 import Photos
 import Testing
-import UIKit
 import UniformTypeIdentifiers
 
 @testable import ImageGen
@@ -70,7 +69,7 @@ struct ExportTests {
     #expect(file.utType.identifier == o.type)
 
     // Asserts uniform type identifier fidelity across the exported representation.
-    let provider = ActivityShareSheet.itemProvider(for: file)
+    let provider = file.itemProvider
     #expect(provider.registeredTypeIdentifiers == [o.type])
 
     // Verifies byte-identical payload integrity through asynchronous file representation export.
@@ -101,21 +100,26 @@ struct ExportTests {
 
   @Test func pasteboardHoldsOriginalBytesOnlyOneType() async throws {
     let probe = ActivityLogProbe(root: TestFileRoot())
-    let pasteboard = UIPasteboard.withUniqueName()
-    defer { UIPasteboard.remove(withName: pasteboard.name) }
+    let pasteboard = SystemPasteboard.unique()
+    defer { pasteboard.discard() }
     let data = ImageFactory.png()
     let item = try exportItem(in: probe.root, data: data, mime: "image/png", ext: "png")
     #expect(await PasteboardWriter(pasteboard: pasteboard, log: probe.log).copy(item))
-    #expect(pasteboard.numberOfItems == 1)
-    #expect(pasteboard.types == ["public.png"])
-    #expect(pasteboard.data(forPasteboardType: "public.png") == data)
+    #expect(pasteboard.itemCount == 1)
+    #if os(iOS)
+    #expect(pasteboard.typeIdentifiers == ["public.png"])
+    #else
+    // AppKit adds converted image types automatically, but the original bytes remain under the primary type.
+    #expect(pasteboard.typeIdentifiers.first == "public.png")
+    #endif
+    #expect(pasteboard.data(for: .png) == data)
   }
 
   @Test func saveToPhotosLogged() async throws {
     let probe = ActivityLogProbe(root: TestFileRoot())
     let item = try exportItem(in: probe.root, data: ImageFactory.jpeg(), mime: "image/jpeg", ext: "jpg", width: 2752, height: 1536)
     let library = FakePhotoLibrary(status: .authorized)
-    let model = ImageExportModel(log: probe.log, photoLibrary: library, pasteboard: UIPasteboard.withUniqueName())
+    let model = ImageExportModel(log: probe.log, photoLibrary: library, pasteboard: SystemPasteboard.unique())
     await model.saveToPhotos(item)
     #expect(library.added.value.map(\.name) == [item.suggestedName])
     #expect(library.added.value.first?.url == item.url)
@@ -157,13 +161,13 @@ struct ExportTests {
 
   @Test func copyLogged() async throws {
     let probe = ActivityLogProbe(root: TestFileRoot())
-    let pasteboard = UIPasteboard.withUniqueName()
-    defer { UIPasteboard.remove(withName: pasteboard.name) }
+    let pasteboard = SystemPasteboard.unique()
+    defer { pasteboard.discard() }
     let data = ImageFactory.jpeg()
     let item = try exportItem(in: probe.root, data: data, mime: "image/jpeg", ext: "jpg")
     let model = ImageExportModel(log: probe.log, photoLibrary: FakePhotoLibrary(status: .authorized), pasteboard: pasteboard)
     await model.copy(item)
-    #expect(pasteboard.data(forPasteboardType: "public.jpeg") == data)
+    #expect(pasteboard.data(for: .jpeg) == data)
     let tree = await probe.action(named: "Copy")
     #expect(tree.first?.message == "image · \(item.logDescription)")
     #expect(tree.last?.message == "pasteboard written (1 item, public.jpeg)")
@@ -180,7 +184,7 @@ struct ExportTests {
     var tree = await probe.action(named: "Share")
     #expect(tree.first?.message == item.logDescription)
     #expect(tree.count == 1)
-    model.shareFinished(ticket, activityType: .airDrop, completed: true, error: nil)
+    model.shareFinished(ticket, activityType: "com.apple.UIKit.activity.AirDrop", completed: true, error: nil)
     model.shareFinished(ticket, activityType: nil, completed: false, error: nil)
     model.shareDisappeared(ticket)
     #expect(model.share == nil)
@@ -224,7 +228,7 @@ struct ExportTests {
   @Test func shareProviderCarriesOriginalType() throws {
     let root = TestFileRoot()
     let item = try exportItem(in: root, data: ImageFactory.heic(), mime: "image/heic", ext: "heic")
-    let provider = ActivityShareSheet.itemProvider(for: item.file)
+    let provider = item.file.itemProvider
     #expect(provider.registeredTypeIdentifiers == [UTType.heic.identifier])
     #expect(provider.suggestedName == item.suggestedName)
   }

@@ -1,6 +1,5 @@
 import Foundation
 import Testing
-import UIKit
 
 @testable import ImageGen
 
@@ -144,8 +143,8 @@ struct LogViewerModelTests {
     let probe = ActivityLogProbe()
     probe.log.result(probe.log.begin("Copy", origin: .user, "x"), .success, "")
     let m = await viewer(.lastAction, probe)
-    let board = try #require(UIPasteboard(name: UIPasteboard.Name("ImageGenTests-\(UUID().uuidString)"), create: true))
-    defer { UIPasteboard.remove(withName: board.name) }
+    let board = SystemPasteboard.unique()
+    defer { board.discard() }
     board.string = m.text
     #expect(board.string == m.text)
     #expect(m.text.contains("[Copy "))

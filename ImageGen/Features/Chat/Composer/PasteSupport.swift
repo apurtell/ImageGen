@@ -49,12 +49,12 @@ struct PasteboardImageWatcher: ViewModifier {
 
   func body(content: Self.Content) -> some View {
     content
-      .onAppear { hasImages = UIPasteboard.general.hasImages }
+      .onAppear { hasImages = SystemPasteboard.general.hasImages }
       .onChange(of: scenePhase) { _, phase in
-        if phase == .active { hasImages = UIPasteboard.general.hasImages }
+        if phase == .active { hasImages = SystemPasteboard.general.hasImages }
       }
-      .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
-        hasImages = UIPasteboard.general.hasImages
+      .onReceive(SystemPasteboard.changes) { _ in
+        hasImages = SystemPasteboard.general.hasImages
       }
   }
 }

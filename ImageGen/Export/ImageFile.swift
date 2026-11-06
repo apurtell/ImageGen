@@ -31,6 +31,14 @@ struct ImageFile: Transferable, Sendable, Equatable {
       .exportingCondition { $0.utType == avif }
   }
 
+  /// Creates an item provider for sharing or dragging the file under its suggested filename.
+  var itemProvider: NSItemProvider {
+    let provider = NSItemProvider()
+    provider.register(self)
+    provider.suggestedName = suggestedName
+    return provider
+  }
+
   /// Generates a standardized, timestamped export filename incorporating asset date, truncated UUID, and format extension.
   static func suggestedName(date: Date, id: UUID, ext: String, timeZone: TimeZone = .current) -> String {
     var calendar = Calendar(identifier: .gregorian)

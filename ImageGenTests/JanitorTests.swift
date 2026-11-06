@@ -206,6 +206,7 @@ struct JanitorTests {
     let other = f.s.files.logsDir.appendingPathComponent("old.jsonl")
     try f.write(other, age: 86_400 * 30)
     f.probe.log.result(f.probe.log.begin("Copy", origin: .user, ""), .success, "")
+    await f.probe.log.flush(timeout: .seconds(1))
     _ = await f.janitor.run()
     #expect(f.exists(other))
     #expect(f.exists(f.probe.fileURL))

@@ -36,7 +36,7 @@ struct SettingsView: View {
         AboutSection(model: model)
       }
       .navigationTitle("Settings")
-      .navigationBarTitleDisplayMode(.inline)
+      .inlineNavigationTitle()
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
       .navigationDestination(for: SettingsPage.self) { page in
         switch page {
@@ -112,7 +112,7 @@ private struct ReplaceKeyForm: View {
           SecureField("New API key", text: $model.keyText)
         }
       }
-      .textInputAutocapitalization(.never)
+      .neverAutocapitalize()
       .autocorrectionDisabled()
       .textContentType(.password)
       Button {
@@ -236,8 +236,8 @@ struct NotificationsSection: View {
       LabeledContent("Status", value: model.notificationStatusText)
       // Guide user to iOS Settings if notifications were previously disabled.
       if model.notificationStatus == "denied" {
-        Button("Open Settings") {
-          if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+        if let url = Platform.settingsURL {
+          Button("Open Settings") { openURL(url) }
         }
       }
       Toggle(

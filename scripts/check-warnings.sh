@@ -1,5 +1,5 @@
 #!/bin/bash
-# Clean build into its own derived data and log; fails on any warning from ImageGen/ sources.
+# Clean build into its own derived data and log; fails on any warning from ImageGen/ and Platforms/ sources.
 set -uo pipefail
 source "$(dirname "$0")/env.sh"
 cd "$REPO_ROOT"
@@ -14,10 +14,10 @@ status=$?
 if [ "$status" -ne 0 ]; then
   echo "check-warnings: build failed (see $log)"; exit "$status"
 fi
-warnings="$(grep -E '/ImageGen/.*: warning:' "$log" | sort -u)"
+warnings="$(grep -E '/(ImageGen|Platforms)/.*: warning:' "$log" | sort -u)"
 if [ -n "$warnings" ]; then
   echo "$warnings"
-  echo "check-warnings: $(echo "$warnings" | wc -l | tr -d ' ') warning(s) in ImageGen/"
+  echo "check-warnings: $(echo "$warnings" | wc -l | tr -d ' ') warning(s) in ImageGen/ and Platforms/"
   exit 1
 fi
-echo "check-warnings: 0 warnings in ImageGen/"
+echo "check-warnings: 0 warnings in ImageGen/ and Platforms/"

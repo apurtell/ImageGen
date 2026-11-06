@@ -43,7 +43,7 @@ struct ModelsSettingsView: View {
         }
         HStack {
           TextField("Model ID, e.g. gemini-x-image", text: $newID)
-            .textInputAutocapitalization(.never)
+            .neverAutocapitalize()
             .autocorrectionDisabled()
             .font(.body.monospaced())
             // Submit custom model identifier validation.
@@ -85,7 +85,7 @@ struct ModelsSettingsView: View {
       }
     }
     .navigationTitle("Models")
-    .navigationBarTitleDisplayMode(.inline)
+    .inlineNavigationTitle()
     // Support manual pull-to-refresh to query remote model catalog availability.
     .refreshable { await model.refreshModels() }
   }

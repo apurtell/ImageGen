@@ -1,6 +1,5 @@
 import Observation
 import SwiftUI
-import UIKit
 
 /// Image export operations supported by context menus and modal image viewer toolbars.
 enum ImageExportAction: Sendable {
@@ -33,7 +32,7 @@ final class ImageExportModel {
   @ObservationIgnored private var filesAction: ActionID?
   @ObservationIgnored private var toastTask: Task<Void, Never>?
 
-  init(log: ActivityLog, photoLibrary: any PhotoLibraryAccess = SystemPhotoLibrary(), pasteboard: UIPasteboard = .general) {
+  init(log: ActivityLog, photoLibrary: any PhotoLibraryAccess = SystemPhotoLibrary(), pasteboard: SystemPasteboard = .general) {
     self.log = log
     photos = PhotoLibrarySaver(library: photoLibrary, log: log)
     self.pasteboard = PasteboardWriter(pasteboard: pasteboard, log: log)
@@ -109,7 +108,7 @@ final class ImageExportModel {
   }
 
   /// Processes completion of the system activity sheet matching the specified share ticket.
-  func shareFinished(_ ticket: ShareTicket, activityType: UIActivity.ActivityType?, completed: Bool, error: (any Error)?) {
+  func shareFinished(_ ticket: ShareTicket, activityType: String?, completed: Bool, error: (any Error)?) {
     exportLog.endShare(ticket, activityType: activityType, completed: completed, error: error)
     if share === ticket { share = nil }
   }
@@ -164,7 +163,7 @@ struct ImageExportPresenter: ViewModifier {
       }
       .alert("Photos access is off", isPresented: $model.showPhotosDenied) {
         Button("Open Settings") {
-          if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+          if let url = Platform.settingsURL { Platform.open(url) }
         }
         Button("Cancel", role: .cancel) {}
       } message: {

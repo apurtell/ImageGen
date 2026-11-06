@@ -1,5 +1,4 @@
 import Foundation
-import UIKit
 
 /// Thread safe tracking token representing an active share presentation session.
 ///
@@ -42,7 +41,7 @@ struct ExportLog: Sendable {
   }
 
   /// Records the completion disposition of an active share session, ensuring atomic first-completion handling.
-  func endShare(_ ticket: ShareTicket, activityType: UIActivity.ActivityType?, completed: Bool, error: (any Error)?) {
+  func endShare(_ ticket: ShareTicket, activityType: String?, completed: Bool, error: (any Error)?) {
     // Atomically test-and-set the completion flag to guarantee exactly-once terminal recording.
     let first = ticket.ended.withLock { ended in
       defer { ended = true }
@@ -52,7 +51,7 @@ struct ExportLog: Sendable {
     if let error {
       log.result(ticket.action, .failed, "\(error.localizedDescription)")
     } else if completed {
-      log.result(ticket.action, .success, "via \(activityType?.rawValue ?? "unknown activity")")
+      log.result(ticket.action, .success, "via \(activityType ?? "unknown activity")")
     } else {
       log.result(ticket.action, .cancelled, "dismissed")
     }
