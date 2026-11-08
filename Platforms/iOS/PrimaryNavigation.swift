@@ -1,7 +1,51 @@
 import SwiftUI
 
-/// Primary stack navigation host coordinating list presentation and conversation push routing on iOS.
+/// Root adaptive navigation controller coordinating between hierarchical stack and split-view presentations on iOS.
+///
+/// Both layouts synchronize active conversation state through `Navigator.path`. During size class transitions on iPad,
+/// underlying conversation state, drafts, and scroll anchors are preserved via `ChatModelCache` and view model caches,
+/// while modal image viewers remain presented above navigation boundaries.
 struct PrimaryNavigation: View {
+  @Environment(\.horizontalSizeClass) private var sizeClass
+  @Bindable private var viewers = ViewerCoverController.shared
+
+  private var layout: NavigationLayout {
+    NavigationLayout.choose(isPad: Platform.isPad, isRegularWidth: sizeClass == .regular)
+  }
+
+  var body: some View {
+    Group {
+      switch layout {
+      case .stack: StackNavigation()
+      case .split: SplitNavigation()
+      }
+    }
+    .environment(\.navigationLayout, layout)
+    .fullScreenCover(item: $viewers.cover) { $0.content }
+  }
+}
+
+/// Global presentation controller managing full-window image viewer presentations independent of adaptive layout rebuilds.
+@Observable @MainActor
+final class ViewerCoverController {
+  struct Cover: Identifiable {
+    let id = UUID()
+    let content: AnyView
+  }
+
+  static let shared = ViewerCoverController()
+  var cover: Cover?
+
+  func show(_ content: AnyView) { cover = Cover(content: content) }
+}
+
+extension Navigator {
+  /// Indicates whether active modal presentations (such as Settings or Image Viewer) obscure the primary conversation.
+  var isChatCovered: Bool { showSettings || ViewerCoverController.shared.cover != nil }
+}
+
+/// Hierarchical single-column navigation stack presentation.
+private struct StackNavigation: View {
   @Environment(AppEnvironment.self) private var env
 
   var body: some View {
@@ -16,7 +60,32 @@ struct PrimaryNavigation: View {
   }
 }
 
-/// Presents the application settings interface within a modal sheet.
+/// Multi-column split navigation presentation displaying conversation list sidebar alongside active detail conversation.
+private struct SplitNavigation: View {
+  @Environment(AppEnvironment.self) private var env
+
+  var body: some View {
+    NavigationSplitView {
+      ChatListView()
+    } detail: {
+      if let id = env.navigator.path.last {
+        ChatView(conversationID: id, services: env.chatServices())
+          .id(id)
+      } else {
+        ContentUnavailableView {
+          Label("No Chat Selected", systemImage: "photo.on.rectangle.angled")
+        } description: {
+          Text("Choose a chat from the sidebar or start a new one.")
+        }
+        .toolbar {
+          ToolbarItem(placement: .trailingBar) { DeveloperMenu() }
+        }
+      }
+    }
+  }
+}
+
+/// View modifier managing modal presentation of application settings.
 private struct SettingsSheetPresenter: ViewModifier {
   @Environment(AppEnvironment.self) private var env
 

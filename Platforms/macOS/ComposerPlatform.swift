@@ -85,14 +85,30 @@ extension View {
 
   /// Centers content within readable column bounds for widescreen presentation.
   func readableColumn() -> some View {
-    frame(maxWidth: 820).frame(maxWidth: .infinity)
+    frame(maxWidth: TranscriptLayout.readableWidth).frame(maxWidth: .infinity)
   }
 
-  /// Constrains inline reply image geometry within maximum display bounds and transcript height.
+  /// Enforces readable line-length constraints on text blocks within expanded transcript columns.
+  func readableMeasure(alignment: Alignment = .leading) -> some View {
+    frame(maxWidth: TranscriptLayout.readableWidth, alignment: alignment)
+  }
+
+  /// Constrains reply image and placeholder dimensions to responsive column width and vertical viewport limits.
   func replyImageSizing(aspect: CGFloat) -> some View { modifier(ReplyImageFrame(aspect: aspect)) }
 
-  /// Propagates enclosing transcript height down the view hierarchy for proportional image scaling.
-  func providesTranscriptHeight() -> some View { modifier(TranscriptHeightProvider()) }
+  /// Reserves vertical space in placeholder cards matching expected metadata and textual content to prevent layout shifts upon completion.
+  func replyFooterSizing(expectsText: Bool) -> some View { modifier(ReplyFooterHeight(expectsText: expectsText)) }
+
+  /// Propagates enclosing viewport dimensions to child transcript views, notifying observers on dimension changes.
+  func measuresTranscriptViewport(onChange: @escaping () -> Void) -> some View {
+    modifier(TranscriptViewportProvider(onChange: onChange))
+  }
+
+  /// Propagates row layout geometry to coordinate scroll anchor preservation across viewport resizes.
+  func reportsTranscriptRow(id: UUID, to reflow: TranscriptReflow) -> some View { modifier(TranscriptRowReport(id: id, reflow: reflow)) }
+
+  /// Tags the primary input field view hierarchy to enable keystroke forwarding from the sidebar.
+  func marksComposerField() -> some View { background(ComposerFieldAnchor()) }
 
   /// Attaches double-click and accessibility activation triggers for image navigation.
   func opensOnDoubleClick(name: @autoclosure () -> String, _ action: @escaping () -> Void) -> some View {
@@ -188,36 +204,71 @@ extension View {
       })
   }
 
-  /// Suppresses bottom scroll edge bounce effects behind the opaque composer bar.
-  func composerScrollEdge() -> some View { scrollEdgeEffectHidden(true, for: .bottom) }
-
-  /// Background styling and border divider for the desktop composer bar.
-  func composerBarSurface() -> some View {
-    background(Color(nsColor: .windowBackgroundColor)).overlay(alignment: .top) { Divider() }
-  }
-
-  /// Applies bottom content margin to scrollable transcript content.
-  func transcriptBottomMargin() -> some View { contentMargins(.bottom, 16, for: .scrollContent) }
-}
-
-/// View modifier applying proportional width constraints based on aspect ratio and transcript height.
-private struct ReplyImageFrame: ViewModifier {
-  let aspect: CGFloat
-  @Environment(\.transcriptHeight) private var transcriptHeight
-
-  func body(content: Self.Content) -> some View {
-    content.frame(maxWidth: ReplyImageCap.maxWidth(aspect: aspect, transcriptHeight: transcriptHeight), alignment: .leading)
-  }
-}
-
-/// Geometry reader propagating viewport height into the view hierarchy.
-private struct TranscriptHeightProvider: ViewModifier {
-  @State private var height: CGFloat?
-
   func body(content: Self.Content) -> some View {
     content
-      .environment(\.transcriptHeight, height)
-      .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded() } action: { height = $0 }
+      .environment(\.transcriptViewport, size)
+      .environment(\.transcriptGutter, gutter)
+      .onGeometryChange(for: CGSize.self) {
+        CGSize(width: $0.size.width.rounded(), height: $0.size.height.rounded())
+      } action: { new in
+        if size != nil { onChange() }
+        size = new
+      }
+      .onReceive(NotificationCenter.default.publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
+        let new = Self.currentGutter
+        guard new != gutter else { return }
+        onChange()
+        gutter = new
+      }
+  }
+}
+
+extension EnvironmentValues {
+  /// Lateral margin clearance reserved to accommodate persistent legacy scrollbars without shifting content.
+  @Entry fileprivate var transcriptGutter: CGFloat = 0
+}
+
+/// Structural marker view identifying the backing NSTextView within the AppKit hierarchy.
+private struct ComposerFieldAnchor: NSViewRepresentable {
+  func makeNSView(context: Context) -> ComposerFieldAnchorView { ComposerFieldAnchorView() }
+
+  func updateNSView(_ view: ComposerFieldAnchorView, context: Context) {}
+}
+
+final class ComposerFieldAnchorView: NSView {
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  /// Immediately assigns AppKit first responder focus to the composer text view, positioning the insertion point at the end of existing draft text.
+  static func takeKeyboard(in window: NSWindow) {
+    guard let root = window.contentView, let anchor = first(ComposerFieldAnchorView.self, in: root),
+      let field = anchor.fieldOverAnchor(in: root), window.makeFirstResponder(field)
+    else { return }
+    if let editor = (field as? NSTextField)?.currentEditor() ?? (field as? NSTextView) {
+      editor.selectedRange = NSRange(location: (editor.string as NSString).length, length: 0)
+    }
+  }
+
+  private func fieldOverAnchor(in root: NSView) -> NSView? {
+    let center = convert(NSPoint(x: bounds.midX, y: bounds.midY), to: nil)
+    func search(_ view: NSView) -> NSView? {
+      if view.isHidden { return nil }
+      let isField = (view as? NSTextField)?.isEditable == true || (view as? NSTextView)?.isEditable == true
+      if isField, view.bounds.contains(view.convert(center, from: nil)) { return view }
+      for subview in view.subviews {
+        if let found = search(subview) { return found }
+      }
+      return nil
+    }
+    return search(root)
+  }
+
+  /// Iterative view hierarchy traversal avoiding closure re-evaluation overhead during deep search passes.
+  private static func first<View: NSView>(_ type: View.Type, in view: NSView) -> View? {
+    if let found = view as? View { return found }
+    for subview in view.subviews {
+      if let found = first(type, in: subview) { return found }
+    }
+    return nil
   }
 }
 
@@ -342,14 +393,7 @@ private struct ImageDropTarget: ViewModifier {
         }
       }
       .overlay {
-        if targeted {
-          RoundedRectangle(cornerRadius: 12)
-            .strokeBorder(Color.accentColor, lineWidth: 3)
-            .background(Color.accentColor.opacity(0.08), in: .rect(cornerRadius: 12))
-            .padding(6)
-            .allowsHitTesting(false)
-            .transition(.opacity)
-        }
+        if targeted { ImageDropHighlight().transition(.opacity) }
       }
       .animation(.easeOut(duration: 0.12), value: targeted)
   }
@@ -486,14 +530,16 @@ final class MonitorView: NSView {
 }
 
 extension View {
-  /// Applies maximum width constraints accounting for legacy scrollbar gutters.
-  func scrollBarIndependentWidth(viewport: CGFloat?) -> some View { modifier(ScrollBarIndependentWidth(viewport: viewport)) }
+  /// Centers transcript content within an invariant column width calculated independently of scrollbar presence.
+  ///
+  /// Under legacy scrollbar modes ("Show scroll bars: Always"), scrollbar appearance consumes layout width
+  /// when content vertically overflows. Content whose vertical height derives from its width (such as aspect-ratio-locked cards)
+  /// can trigger unstable layout oscillations if scrollbar presence alters available width. By computing maximum width
+  /// and gutter offsets directly from the invariant outer window frame, the column remains stable and centered.
+  func scrollBarIndependentColumn(reflow: TranscriptReflow) -> some View { modifier(ScrollBarIndependentColumn(reflow: reflow)) }
 
-  /// Measures outer scroll viewport width for layout constraint calculations.
-  func measuresScrollViewportWidth(_ width: Binding<CGFloat?>) -> some View {
-    frame(maxWidth: .infinity)
-      .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width.wrappedValue = $0 }
-  }
+  /// Expands container bounds to encompass full available window width.
+  func fillsTranscriptWidth() -> some View { frame(maxWidth: .infinity) }
 
   /// Background styling for composer status pills and context chips on macOS.
   func composerControlSurface(_ scheme: ColorScheme, interactive: Bool = false) -> some View {
@@ -501,19 +547,90 @@ extension View {
   }
 }
 
-private struct ScrollBarIndependentWidth: ViewModifier {
-  let viewport: CGFloat?
-  @State private var gutter = Self.currentGutter
+/// Non-lazy transcript stack ensuring authoritative layout geometry calculation for all message rows.
+/// Unlike lazy vertical stacks whose estimated content heights drift significantly when window resizing mutates aspect-constrained row heights,
+/// eager layout guarantees accurate scroll offsets and avoids blank viewport artifacts during continuous window resizing.
+struct TranscriptStack<Content: View>: View {
+  let spacing: CGFloat
+  @ViewBuilder let content: Content
 
-  private static var currentGutter: CGFloat {
-    NSScroller.preferredScrollerStyle == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+  var body: some View {
+    VStack(spacing: spacing) { content }
   }
+}
+
+private struct ScrollBarIndependentColumn: ViewModifier {
+  let reflow: TranscriptReflow
+  @Environment(\.transcriptViewport) private var viewport
+  @Environment(\.transcriptGutter) private var gutter
 
   func body(content: Self.Content) -> some View {
     content
-      .frame(maxWidth: viewport.map { max($0 - gutter, 0) })
-      .onReceive(NotificationCenter.default.publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
-        gutter = Self.currentGutter
-      }
+      .frame(
+        maxWidth: viewport.map { TranscriptLayout.columnWidth(viewportWidth: $0.width, gutter: gutter) } ?? TranscriptLayout.readableWidth)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .offset(x: viewport.map { TranscriptLayout.columnOrigin(viewportWidth: $0.width, gutter: gutter) } ?? 0)
+      .coordinateSpace(.named(TranscriptContent.coordinateSpace))
+      .background(TranscriptScrollHandle(reflow: reflow))
+  }
+}
+
+/// NSViewRepresentable bridge binding native NSScrollView clip view geometry and programmatic scrolling to TranscriptReflow.
+private struct TranscriptScrollHandle: NSViewRepresentable {
+  let reflow: TranscriptReflow
+
+  func makeNSView(context: Context) -> TranscriptScrollHandleView { TranscriptScrollHandleView() }
+
+  func updateNSView(_ view: TranscriptScrollHandleView, context: Context) {
+    reflow.scrollTo = { [weak view] visibleTop, topInset in view?.scroll(toVisibleTop: visibleTop, topInset: topInset) }
+    reflow.position = { [weak view] in view?.position }
+    view.onScrollViewChange = { [weak reflow] in reflow?.scrollViewDidChange() }
+  }
+}
+
+final class TranscriptScrollHandleView: NSView {
+  /// Notification handler fired on clip view bounds or document frame mutations, extracting updated scroll metrics.
+  var onScrollViewChange: (() -> Void)?
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    let center = NotificationCenter.default
+    center.removeObserver(self)
+    guard window != nil, let scrollView = enclosingScrollView else { return }
+    let clip = scrollView.contentView
+    clip.postsBoundsChangedNotifications = true
+    clip.postsFrameChangedNotifications = true
+    center.addObserver(self, selector: #selector(scrollViewChanged), name: NSView.boundsDidChangeNotification, object: clip)
+    center.addObserver(self, selector: #selector(scrollViewChanged), name: NSView.frameDidChangeNotification, object: clip)
+    guard let document = scrollView.documentView else { return }
+    document.postsFrameChangedNotifications = true
+    center.addObserver(self, selector: #selector(scrollViewChanged), name: NSView.frameDidChangeNotification, object: document)
+  }
+
+  @objc private func scrollViewChanged() {
+    onScrollViewChange?()
+  }
+
+  /// Computes authoritative scroll offset and trailing bottom distance directly from NSClipView geometry.
+  var position: (offset: CGFloat, distanceFromBottom: CGFloat)? {
+    guard let scrollView = enclosingScrollView, let document = scrollView.documentView else { return nil }
+    let clip = scrollView.contentView.bounds
+    return (clip.minY, document.frame.maxY + scrollView.contentInsets.bottom - clip.maxY)
+  }
+
+  /// Directly positions NSClipView bounds origin, enabling programmatic scroll repositioning during active layout passes without violating SwiftUI state mutation rules.
+  func scroll(toVisibleTop visibleTop: CGFloat, topInset: CGFloat) {
+    guard let scrollView = enclosingScrollView else { return }
+    let clip = scrollView.contentView
+    let lastOffset = (scrollView.documentView?.frame.maxY ?? 0) + scrollView.contentInsets.bottom - clip.bounds.height
+    let wanted = visibleTop.isFinite ? visibleTop - topInset : lastOffset
+    var bounds = clip.bounds
+    bounds.origin.y = wanted
+    let origin = clip.constrainBoundsRect(bounds).origin
+    guard abs(origin.y - clip.bounds.minY) > 0.25 else { return }
+    clip.scroll(to: origin)
+    scrollView.reflectScrolledClipView(clip)
   }
 }

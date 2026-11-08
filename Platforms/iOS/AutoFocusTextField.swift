@@ -65,6 +65,15 @@ final class FocusingTextField: UITextField {
   /// Ensures auto-focus happens only once when first attached to the window.
   private var didFocus = false
 
+  /// Dismisses first responder focus upon hardware keyboard Escape key execution.
+  override var keyCommands: [UIKeyCommand]? {
+    let escape = UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(escapePressed))
+    escape.wantsPriorityOverSystemBehavior = true
+    return (super.keyCommands ?? []) + [escape]
+  }
+
+  @objc private func escapePressed() { resignFirstResponder() }
+
   override func didMoveToWindow() {
     super.didMoveToWindow()
     guard window != nil, !didFocus else { return }

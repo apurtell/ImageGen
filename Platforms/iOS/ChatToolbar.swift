@@ -24,6 +24,7 @@ struct ChatToolbar: ViewModifier {
           } else {
             Text(model.title).font(.headline).lineLimit(1)
               .contentShape(Rectangle())
+              .padHoverEffect()
               .onLongPressGesture(minimumDuration: 0.4) { model.beginTitleEdit() }
               .onTapGesture { renaming = true }
               .accessibilityAddTraits(.isButton)

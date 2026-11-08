@@ -47,6 +47,11 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSPhotoLibraryAddUsageDescription: "ImageGen saves the images you choose to your photo library."
         ITSAppUsesNonExemptEncryption: false
         # No UIBackgroundModes and no BGTaskSchedulerPermittedIdentifiers in v1 (D§10).

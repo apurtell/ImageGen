@@ -49,7 +49,11 @@ for runtime, devices in json.load(sys.stdin)["devices"].items():
 require_sim() {
   SIM_UDID="$(sim_udid)"
   if [ -z "$SIM_UDID" ]; then
-    echo "error: simulator $SIM_NAME not found; run scripts/sim.sh ensure" >&2
+    if [ -n "${IMAGEGEN_SIM:-}" ]; then
+      echo "error: simulator $SIM_NAME not found; see xcrun simctl list devices" >&2
+    else
+      echo "error: simulator $SIM_NAME not found; run scripts/sim.sh ensure" >&2
+    fi
     exit 1
   fi
   export SIM_UDID

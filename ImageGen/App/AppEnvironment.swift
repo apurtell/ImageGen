@@ -179,7 +179,7 @@ final class AppEnvironment {
       store: store, files: files, generation: service, settings: settings, log: log, connectivity: connectivity,
       activity: activity, notifications: notificationPermission, navigator: navigator, thumbnails: thumbnails,
       copyToPasteboard: { SystemPasteboard.general.string = $0 }, chatModels: chatModels,
-      keepsUnsentChats: Platform.keepsUnsentChats)
+      keepsUnsentChats: Platform.keepsUnsentChats, rebuildsChatOnLayoutChange: Platform.rebuildsChatOnLayoutChange)
   }
 
   /// Constructs view model dependencies for application settings presentation.
@@ -200,7 +200,7 @@ final class AppEnvironment {
 
   var chatActions: ChatActions {
     ChatActions(
-      store: store, generation: service, log: log, navigator: navigator, chatModels: chatModels,
+      store: store, generation: service, log: log, navigator: navigator, thumbnails: thumbnails, chatModels: chatModels,
       keepsUnsentChats: Platform.keepsUnsentChats)
   }
 

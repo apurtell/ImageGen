@@ -1,5 +1,6 @@
 #!/bin/bash
-# Manages the dedicated simulator: ensure | udid | boot | reset | erase
+# Manages the dedicated simulator, or the one IMAGEGEN_SIM names: ensure | udid | boot | reset | erase
+# RUN_SIM_BACKGROUND=1 keeps a boot from bringing the Simulator app to the front.
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 
@@ -36,7 +37,9 @@ for ds in json.load(sys.stdin)["devices"].values():
         if d["udid"] == sys.argv[1]: print(d["state"])' "$udid")"
   if [ "$state" != "Booted" ]; then xcrun simctl boot "$udid"; fi
   xcrun simctl bootstatus "$udid" -b >/dev/null
-  open -a Simulator --args -CurrentDeviceUDID "$udid" || true
+  open_flags=()
+  [ "${RUN_SIM_BACKGROUND:-}" = "1" ] && open_flags=(-g)
+  open ${open_flags[@]+"${open_flags[@]}"} -a Simulator --args -CurrentDeviceUDID "$udid" || true
 }
 
 cmd="${1:-ensure}"
@@ -44,6 +47,11 @@ case "$cmd" in
   ensure)
     udid="$(sim_udid)"
     if [ -z "$udid" ]; then
+      # Only the default named simulator is created automatically; explicit IMAGEGEN_SIM targets must already exist.
+      if [ -n "${IMAGEGEN_SIM:-}" ]; then
+        echo "error: simulator $SIM_NAME not found; see xcrun simctl list devices" >&2
+        exit 1
+      fi
       runtime="$(newest_runtime)"
       [ -n "$runtime" ] || { echo "error: no iOS 26+ runtime; run xcodebuild -downloadPlatform iOS" >&2; exit 1; }
       dtype="$(device_type_for "$runtime")"

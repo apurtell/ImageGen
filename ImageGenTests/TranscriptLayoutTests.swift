@@ -5,45 +5,99 @@ import Testing
 
 @Suite(.tags(.pure))
 struct TranscriptLayoutTests {
-  /// Computes resulting image height when scaled to maximum constrained width.
-  private func height(aspect: CGFloat, transcriptHeight: CGFloat?) -> CGFloat {
-    ReplyImageCap.maxWidth(aspect: aspect, transcriptHeight: transcriptHeight) / aspect
+  /// Computes image render dimensions for a given aspect ratio within specified viewport constraints.
+  private func imageSize(aspect: CGFloat, _ width: CGFloat, _ height: CGFloat, gutter: CGFloat = 0) -> CGSize {
+    let w = TranscriptLayout.imageWidth(aspect: aspect, viewport: CGSize(width: width, height: height), gutter: gutter)
+    return CGSize(width: w, height: w / aspect)
   }
 
-  @Test func squareImageFitsInTheTranscriptAtAnOrdinaryWindowSize() {
-    // Standard desktop window dimensions with available vertical transcript space.
-    #expect(height(aspect: 1, transcriptHeight: 708) == 425)
-    #expect(height(aspect: 1, transcriptHeight: 708) < 708 - 180)
+  @Test func columnGrowsWithTheWindowUpToItsLimit() {
+    #expect(TranscriptLayout.columnWidth(viewportWidth: 580) == 580)
+    #expect(TranscriptLayout.columnWidth(viewportWidth: 1400) == 1400)
+    #expect(TranscriptLayout.columnWidth(viewportWidth: 1632) == 1632)
+    #expect(TranscriptLayout.columnWidth(viewportWidth: 5000) == 1632)
   }
 
-  @Test func tallImageIsLimitedByHeightAndNarrower() {
-    #expect(height(aspect: 0.5, transcriptHeight: 708) == 425)
-    #expect(ReplyImageCap.maxWidth(aspect: 0.5, transcriptHeight: 708) == 212.5)
+  @Test func gutterIsReservedOnBothSidesAndKeepsTheColumnCentred() {
+    #expect(TranscriptLayout.columnWidth(viewportWidth: 780, gutter: 17) == 746)
+    #expect(TranscriptLayout.columnOrigin(viewportWidth: 780, gutter: 17) == 17)
+    let width: CGFloat = 780
+    for gutter: CGFloat in [0, 15, 17] {
+      let origin = TranscriptLayout.columnOrigin(viewportWidth: width, gutter: gutter)
+      let column = TranscriptLayout.columnWidth(viewportWidth: width, gutter: gutter)
+      #expect(origin + column / 2 == width / 2)
+    }
+    #expect(TranscriptLayout.columnOrigin(viewportWidth: 3000) == 684)
   }
 
-  @Test func wideImageKeepsTheWidthCapWhenItsHeightFits() {
-    #expect(ReplyImageCap.maxWidth(aspect: 16.0 / 9.0, transcriptHeight: 708) == 640)
-    #expect(ReplyImageCap.maxWidth(aspect: 3, transcriptHeight: 708) == 640)
+  @Test func columnNeverGoesNegative() {
+    #expect(TranscriptLayout.columnWidth(viewportWidth: 10, gutter: 17) == 0)
+    #expect(TranscriptLayout.imageWidth(aspect: 1, viewport: CGSize(width: 10, height: 500)) == 0)
   }
 
-  @Test func wideImageShrinksWhenItsHeightWouldNotFit() {
-    // Constrained transcript height.
-    let width = ReplyImageCap.maxWidth(aspect: 2, transcriptHeight: 400)
-    #expect(width == 480)
+  @Test func wideImageFillsTheColumn() {
+    let size = imageSize(aspect: 16.0 / 9.0, 1100, 1000)
+    #expect(size.width == 1100 - 2 * TranscriptLayout.sideMargin)
   }
 
-  @Test func aTallWindowNeverGoesPastTheFixedCap() {
-    #expect(ReplyImageCap.maxWidth(aspect: 1, transcriptHeight: 3000) == ReplyImageCap.maxEdge)
-    #expect(height(aspect: 0.5, transcriptHeight: 3000) == ReplyImageCap.maxEdge)
+  @Test func imageWidthStopsAtTheColumnLimit() {
+    #expect(TranscriptLayout.imageWidth(aspect: 3, viewport: CGSize(width: 4000, height: 2000)) == TranscriptLayout.maxContentWidth)
   }
 
-  @Test func anUnmeasuredTranscriptUsesTheFixedCap() {
-    #expect(ReplyImageCap.maxWidth(aspect: 1, transcriptHeight: nil) == ReplyImageCap.maxEdge)
-    #expect(ReplyImageCap.maxWidth(aspect: 0.5, transcriptHeight: nil) == ReplyImageCap.maxEdge / 2)
+  @Test func heightCapPreservesTheAspect() {
+    let size = imageSize(aspect: 1, 2000, 1250)
+    #expect(size.height == 1000)
+    #expect(size.width == 1000)
+    let tall = imageSize(aspect: 0.5, 2000, 1250)
+    #expect(tall.height == 1000)
+    #expect(tall.width == 500)
   }
 
-  @Test func aDegenerateAspectStaysPositive() {
-    #expect(ReplyImageCap.maxWidth(aspect: 0, transcriptHeight: 700) > 0)
+  @Test func fullDisplayIsMuchLargerThanTheOldCap() {
+    // Verifies expanded viewport scaling extends beyond legacy 640 pt constraints.
+    #expect(imageSize(aspect: 1, 1700, 1100).height == 880)
+    #expect(imageSize(aspect: 16.0 / 9.0, 1700, 1100).width > 1500)
+  }
+
+  @Test func shortWindowLeavesRoomForTheComposer() {
+    // Minimum window baseline: reserves composer clearance within constrained vertical bounds.
+    let height = TranscriptLayout.maxImageHeight(transcriptHeight: 508)
+    #expect(height == 508 - TranscriptLayout.composerReserve)
+    #expect(height + 147 <= 508)
+    #expect(TranscriptLayout.maxImageHeight(transcriptHeight: 1250) == 1000)
+  }
+
+  @Test func heightLimitHasAFloor() {
+    #expect(TranscriptLayout.maxImageHeight(transcriptHeight: 200) == TranscriptLayout.minimumImageHeight)
+  }
+
+  @Test func veryTallImageKeepsAMinimumWidthUnlessTheColumnIsNarrower() {
+    #expect(TranscriptLayout.imageWidth(aspect: 0.125, viewport: CGSize(width: 800, height: 700)) == TranscriptLayout.minimumImageWidth)
+    #expect(TranscriptLayout.imageWidth(aspect: 0.125, viewport: CGSize(width: 150, height: 700)) == 150 - 2 * TranscriptLayout.sideMargin)
+  }
+
+  @Test func imageDoesNotDependOnAGutterItFitsInside() {
+    let plain = TranscriptLayout.imageWidth(aspect: 1, viewport: CGSize(width: 1400, height: 800))
+    let barred = TranscriptLayout.imageWidth(aspect: 1, viewport: CGSize(width: 1400, height: 800), gutter: 17)
+    #expect(plain == barred)
+  }
+
+  @Test func unmeasuredHasASensibleLimit() {
+    #expect(TranscriptLayout.imageWidth(aspect: 1, viewport: nil) == 640)
+    #expect(TranscriptLayout.imageWidth(aspect: 0.5, viewport: nil) == 320)
+    #expect(TranscriptLayout.imageWidth(aspect: 2, viewport: nil) == 640)
+  }
+
+  @Test func degenerateAspectStaysPositive() {
+    #expect(TranscriptLayout.imageWidth(aspect: 0, viewport: CGSize(width: 800, height: 700)) > 0)
+  }
+
+  @Test func geminiShapesAreCloseToTheirNames() {
+    for ratio in AspectRatio.allCases {
+      let pixels = ratio.oneKPixels
+      let aspect = Double(pixels.width) / Double(pixels.height)
+      #expect(abs(aspect / ratio.ratio - 1) < 0.03, "\(ratio.rawValue)")
+    }
   }
 
   @Test func settlingStopsForAnyScrollByTheUser() {

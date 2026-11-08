@@ -8,6 +8,7 @@ import SwiftUI
 /// model context change propagation, isolating the presentation layer from transaction coordination.
 struct ChatListView: View {
   @Environment(AppEnvironment.self) private var env
+  @Environment(\.navigationLayout) private var layout
   /// Automatically refreshed query tracking all persisted conversations, sorted by update timestamp descending.
   @Query(sort: \Conversation.updatedAt, order: .reverse) private var conversations: [Conversation]
   /// Tracks the identifier and ephemeral draft string of the conversation currently undergoing in-place title editing.
@@ -30,9 +31,9 @@ struct ChatListView: View {
             .buttonStyle(.borderedProminent)
         }
       } else {
-        ChatListContainer(onDelete: { id in deleting = conversations.first { $0.id == id } }) {
+        ChatListContainer(isEditingRow: editingID != nil, onDelete: { id in deleting = conversations.first { $0.id == id } }) {
           // Leading standalone action row duplicating the primary creation trigger from the navigation bar.
-          if Platform.showsNewChatRow { NewChatRow { Task { await newChat() } } }
+          if Platform.showsNewChatRow && layout == .stack { NewChatRow { Task { await newChat() } } }
           ForEach(conversations) { conversation in
             Group {
               if editingID == conversation.id {
@@ -46,7 +47,7 @@ struct ChatListView: View {
                 ChatListLink(id: conversation.id) {
                   ChatRow(conversation: conversation)
                 }
-                // Attach contextual and gesture triggers for in-place title renaming and deletion.
+                // Configure gesture and context menu affordances for in-place title editing and conversation deletion.
                 .chatRowGestures(rename: { beginTitle(conversation) }, delete: { deleting = conversation })
               }
             }

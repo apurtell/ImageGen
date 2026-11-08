@@ -30,6 +30,8 @@ struct ViewerToolbar: View {
     }
     .buttonStyle(.plain)
     .contentShape(Rectangle())
+    .padHoverEffect()
+    .tooltip(label)
     .accessibilityLabel(label)
   }
 }

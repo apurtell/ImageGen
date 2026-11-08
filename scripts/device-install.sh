@@ -1,8 +1,8 @@
 #!/bin/bash
-# Builds, installs and launches on a connected iPhone (IMPLEMENTATION_PLAN.md M10).
+# Builds, installs and launches on a connected iPhone or iPad (IMPLEMENTATION_PLAN.md M10).
 #   scripts/device-install.sh [--release] [--no-launch]
-# DEVICE_UDID selects the phone (its hardware UDID, 00008…-…). Without it, the script picks the one
-# reachable iPhone, or lists them and stops when there are several. Signing needs DEVELOPMENT_TEAM in
+# DEVICE_UDID selects the device (its hardware UDID, 00008…-…). Without it, the script picks the one
+# reachable device, or lists them and stops when there are several. Signing needs DEVELOPMENT_TEAM in
 # Config/Local.xcconfig and the device registered once (the first Run from Xcode, or -allowProvisioningUpdates).
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
@@ -18,7 +18,7 @@ for arg in "$@"; do
 done
 
 if [ -z "${DEVICE_UDID:-}" ]; then
-  # Reachable iPhones only: a paired phone that isn't connected has no transport type.
+  # Reachable devices only: a paired device that isn't connected has no transport type.
   phones="$(xcrun devicectl list devices --json-output - 2>/dev/null | python3 -I -c '
 import json, sys
 for x in json.load(sys.stdin)["result"]["devices"]:
@@ -28,16 +28,16 @@ for x in json.load(sys.stdin)["result"]["devices"]:
 ')"
   count="$(printf '%s' "$phones" | grep -c . || true)"
   if [ "$count" -eq 0 ]; then
-    echo "device-install: no reachable iPhone (connect it, unlock it and trust this Mac)" >&2; exit 1
+    echo "device-install: no reachable iPhone or iPad (connect it, unlock it and trust this Mac)" >&2; exit 1
   elif [ "$count" -gt 1 ]; then
-    echo "device-install: several iPhones are reachable; set DEVICE_UDID to one of:" >&2
+    echo "device-install: several devices are reachable; set DEVICE_UDID to one of:" >&2
     printf '%s\n' "$phones" >&2; exit 1
   fi
   DEVICE_UDID="$(printf '%s' "$phones" | cut -f1)"
   mode="$(printf '%s' "$phones" | cut -f3)"
   if [ "$mode" = "disabled" ]; then
     echo "device-install: Developer Mode is off on $(printf '%s' "$phones" | cut -f2)." >&2
-    echo "  On the iPhone: Settings › Privacy & Security › Developer Mode › On, restart, confirm." >&2
+    echo "  On the device: Settings › Privacy & Security › Developer Mode › On, restart, confirm." >&2
     exit 1
   fi
 fi

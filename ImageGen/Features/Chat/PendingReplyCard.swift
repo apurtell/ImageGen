@@ -7,44 +7,56 @@ struct PendingReplyCard: View {
   let isNetworkUnavailable: Bool
   let onCancel: () -> Void
 
-  /// The requested ratio; "Auto" (no ratio) draws a square.
+  /// Target aspect ratio for placeholder geometry reservation, defaulting to square when unspecified.
   private var aspect: CGFloat {
-    CGFloat(request.aspectRatio.flatMap(AspectRatio.init(rawValue:))?.ratio ?? 1)
+    guard let pixels = request.aspectRatio.flatMap(AspectRatio.init(rawValue:))?.oneKPixels else { return 1 }
+    return CGFloat(pixels.width) / CGFloat(pixels.height)
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
-      TimelineView(.periodic(from: .now, by: 0.5)) { context in
-        ZStack {
-          RoundedRectangle(cornerRadius: 12)
-            .fill(.quaternary)
-          RoundedRectangle(cornerRadius: 12)
-            .fill(
-              LinearGradient(
-                colors: [.clear, .white.opacity(0.25), .clear],
-                startPoint: UnitPoint(x: shimmerPhase(context.date) - 0.3, y: 0),
-                endPoint: UnitPoint(x: shimmerPhase(context.date) + 0.3, y: 1)))
-          VStack(spacing: 6) {
-            Text("Generating… \(elapsed(at: context.date))")
-              .font(.callout.monospacedDigit())
-            if let label = label(at: context.date) {
-              Text(label).font(.caption).foregroundStyle(.secondary)
-            }
-          }
+      // Reserve identical aspect layout dimensions as the eventual completed image to prevent height shifts on completion.
+      shimmer
+      .aspectRatio(aspect, contentMode: .fit)
+      .overlay {
+        TimelineView(.periodic(from: request.startedAt ?? request.createdAt, by: 1)) { context in
+          status(at: context.date)
         }
-        // Pre-allocates target aspect ratio geometry to minimize visual layout shifts upon image delivery.
-        .aspectRatio(aspect, contentMode: .fit)
-        .replyImageSizing(aspect: aspect)
-        .animation(.linear(duration: 0.5), value: context.date)
       }
+      .clipped()
+      .replyImageSizing(aspect: aspect)
       Button("Cancel", systemImage: "xmark.circle", role: .cancel, action: onCancel)
         .font(.callout)
+        .replyFooterSizing(expectsText: request.includeTextModality)
     }
   }
 
-  /// A 2-second cycle from -0.3 to 1.3, so the bright band enters and leaves the card fully.
-  private func shimmerPhase(_ date: Date) -> CGFloat {
-    CGFloat(date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2) / 2) * 1.6 - 0.3
+  /// Placeholder surface rendering a GPU-driven shimmer animation.
+  private var shimmer: some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: ShimmerAnimation.cornerRadius)
+        .fill(.quaternary)
+      ShimmerBand(aspect: aspect)
+    }
+  }
+
+  /// Request status text formatted for compact or standard card heights.
+  private func status(at date: Date) -> some View {
+    let title = Text("Generating… \(elapsed(at: date))").font(.callout.monospacedDigit())
+    let detail = label(at: date).map { Text($0).font(.caption).foregroundStyle(.secondary) }
+    return ViewThatFits(in: .vertical) {
+      VStack(spacing: 6) {
+        title
+        detail
+      }
+      HStack(spacing: 8) {
+        title
+        detail
+      }
+    }
+    .lineLimit(1)
+    .minimumScaleFactor(0.6)
+    .padding(.horizontal, 8)
   }
 
   /// Formats the elapsed generation duration since request initialization.

@@ -21,6 +21,7 @@ struct ComposerInputRow: View {
         .framelessFieldStyle()
         .lineLimit(1...6)
         .focused($focused)
+        .marksComposerField()
         .padding(.horizontal, 12).padding(.vertical, 8)
         .glassEffect(in: .rect(cornerRadius: 18))
         .composerKeys(canSend: model.canSend) { Task { await model.send() } }
@@ -62,6 +63,7 @@ struct ComposerInputRow: View {
       case .files: showFiles = true
       }
     }
+    .onChange(of: showPhotos || showFiles) { _, isUp in model.isPickingAttachment = isUp }
     .onChange(of: model.isTextFieldFocused) { _, v in focused = v }
     .onChange(of: focused) { _, v in model.isTextFieldFocused = v }
   }

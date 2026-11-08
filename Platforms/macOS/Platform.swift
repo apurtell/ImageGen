@@ -97,7 +97,13 @@ enum Platform {
   /// Controls retention of uncommitted draft inputs and staging artifacts upon navigation.
   static var keepsUnsentChats: Bool { true }
 
-  /// Closes the image viewer window if presenting assets for the specified conversation.
+  static var choosePhotosCommandTitle: String { "Choose from Photos…" }
+  static var chooseFilesCommandTitle: String { "Choose File…" }
+
+  /// Indicates whether conversation views undergo teardown and recreation during layout transitions; false on macOS.
+  static var rebuildsChatOnLayoutChange: Bool { false }
+
+  /// Closes active image viewer windows associated with the specified conversation, or all viewers when nil.
   static func closeViewer(ofConversation id: UUID?) { ViewerWindowController.shared.close(ofConversation: id) }
 
   /// Hardware platform noun used in user-facing messaging.
@@ -105,6 +111,9 @@ enum Platform {
 
   /// Controls presence of a dedicated new conversation row in the list view.
   static var showsNewChatRow: Bool { false }
+
+  /// Enables adaptive multi-resolution thumbnail fetching for expanded desktop viewport displays.
+  static var sharpensLargeReplyImages: Bool { true }
 
   /// No-op orientation change request on macOS.
   static func requestLandscape() {}
@@ -273,10 +282,11 @@ extension View {
   /// Binds return key shortcut to the default action button.
   func defaultActionShortcut() -> some View { keyboardShortcut(.defaultAction) }
 
-  /// Layout presentation modifier for onboarding workflows on macOS.
-  func onboardingLayout() -> some View {
-    frame(maxWidth: 520).frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
+  /// Configures onboarding container to span full window geometry, ensuring titlebar visual vibrancy renders consistently.
+  func onboardingLayout() -> some View { self }
+
+  /// Constrains onboarding form content to optimal reading widths centered within the scroll view.
+  func onboardingFormWidth() -> some View { frame(maxWidth: 520).frame(maxWidth: .infinity) }
 
   /// Publishes active conversation command handlers to the focused environment.
   func publishesChatCommands(_ handle: @autoclosure () -> ChatCommandHandle) -> some View {

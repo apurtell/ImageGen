@@ -6,8 +6,19 @@ import UniformTypeIdentifiers
 /// iOS implementations for platform-specific queries and actions.
 @MainActor
 enum Platform {
-  /// Operating system name and version for the launch log.
-  static var osDescription: String { "iOS \(UIDevice.current.systemVersion)" }
+  /// Indicates whether the runtime environment is executing on an iPad idiom. Resolved non-isolated via system architecture inspection.
+  nonisolated static let isPad: Bool = {
+    if let simulated = ProcessInfo.processInfo.environment["SIMULATOR_MODEL_IDENTIFIER"] { return simulated.hasPrefix("iPad") }
+    var info = utsname()
+    uname(&info)
+    return withUnsafeBytes(of: &info.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }.hasPrefix("iPad")
+  }()
+
+  /// User-facing operating system platform identifier.
+  nonisolated private static var systemName: String { isPad ? "iPadOS" : "iOS" }
+
+  /// Operating system descriptor formatted for diagnostic launch logs.
+  static var osDescription: String { "\(systemName) \(UIDevice.current.systemVersion)" }
 
   /// URL for the app's page in the iOS Settings app.
   static var settingsURL: URL? { URL(string: UIApplication.openSettingsURLString) }
@@ -45,7 +56,7 @@ enum Platform {
   static func announce(_ text: String) {}
 
   nonisolated static var interruptedRequestMessage: String {
-    "iOS stopped the request (for example after a force-quit). Retry to send it again."
+    "\(systemName) stopped the request (for example after a force-quit). Retry to send it again."
   }
 
   static var notificationsDeniedStatus: String { "Off in system Settings" }
@@ -77,25 +88,34 @@ enum Platform {
   /// Controls presence of an explicit dismissal button on full-screen viewer presentations.
   static var viewerShowsCloseButton: Bool { true }
 
-  /// Recreates paging container upon orientation and viewport size transitions.
-  static var recreatesViewerOnResize: Bool { true }
+  /// Governs whether fullscreen viewer presentation reconstructs its page hierarchy upon container resize events.
+  static var recreatesViewerOnResize: Bool { !isPad }
 
   static func open(_ url: URL) { UIApplication.shared.open(url) }
 
   /// Maximum input attachment byte size permitted during import; unconstrained on iOS.
   nonisolated static var maxAttachmentBytes: Int? { nil }
 
-  /// Controls retention of uncommitted draft inputs and staging artifacts upon navigation.
-  static var keepsUnsentChats: Bool { false }
+  /// Governs whether empty conversations containing draft modifications or staged attachments are retained when navigated away.
+  static var keepsUnsentChats: Bool { isPad }
 
-  /// Closes detached image viewing windows; no-op on iOS.
+  static var choosePhotosCommandTitle: String { "Photo Library…" }
+  static var chooseFilesCommandTitle: String { "Files…" }
+
+  /// Indicates whether view hierarchies rebuild during adaptive layout transitions between split and stack presentations.
+  static var rebuildsChatOnLayoutChange: Bool { isPad }
+
+  /// Dismisses image viewer window instances; no-op on iOS where viewer presentation uses modal covers.
   static func closeViewer(ofConversation id: UUID?) {}
 
-  /// Hardware platform noun used in user-facing messaging.
-  static var deviceNoun: String { "iPhone" }
+  /// Localized device category noun utilized in contextual dialogs.
+  static var deviceNoun: String { isPad ? "iPad" : "iPhone" }
 
   /// Controls presence of a dedicated new conversation row in the list view.
   static var showsNewChatRow: Bool { true }
+
+  /// Indicates whether reply image presentation requests adaptive high-resolution display buckets beyond baseline dimensions.
+  static var sharpensLargeReplyImages: Bool { isPad }
 
   /// Standardized point diameter for circular overlay and composer controls.
   static var circleButtonSize: CGFloat { 36 }
@@ -216,16 +236,29 @@ extension View {
   /// Keyboard shortcut modifier for default sheet actions; no-op on iOS.
   func defaultActionShortcut() -> some View { self }
 
-  /// Layout presentation modifier for onboarding workflows.
-  func onboardingLayout() -> some View { self }
+  /// Applies adaptive presentation constraints to onboarding view hierarchies.
+  @ViewBuilder
+  func onboardingLayout() -> some View {
+    if Platform.isPad { frame(maxWidth: 560).frame(maxWidth: .infinity, maxHeight: .infinity) } else { self }
+  }
 
-  /// Command publication modifier binding conversation commands to platform menus; no-op on iOS.
-  func publishesChatCommands(_ handle: @autoclosure () -> ChatCommandHandle) -> some View { self }
+  /// Width constraint wrapper for onboarding form content.
+  func onboardingFormWidth() -> some View { self }
 
-  /// Full-screen cover presentation modifier for the image viewer.
+  /// Publishes contextual conversation commands to system menu bar hierarchies and keybinding dispatchers on iPad.
+  @ViewBuilder
+  func publishesChatCommands(_ handle: @autoclosure () -> ChatCommandHandle) -> some View {
+    if Platform.isPad { focusedSceneValue(\.chatCommands, handle()) } else { self }
+  }
+
+  /// Coordinates full-screen image viewer presentation detached from individual navigation controllers.
   func viewerCover<Content: View>(
     item: Binding<ViewerRequest?>, @ViewBuilder content: @escaping (ViewerRequest) -> Content
   ) -> some View {
-    fullScreenCover(item: item, content: content)
+    onChange(of: item.wrappedValue?.id) { _, _ in
+      guard let request = item.wrappedValue else { return }
+      ViewerCoverController.shared.show(AnyView(content(request)))
+      item.wrappedValue = nil
+    }
   }
 }

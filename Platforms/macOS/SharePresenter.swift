@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+extension ImageExportModel {
+  /// Indicates whether a modal file export sheet is currently presented.
+  var isPresenting: Bool { fileExport != nil }
+}
+
 extension View {
   /// Attaches a system sharing picker anchored to the pointer location.
   func sharePresentation(_ model: ImageExportModel) -> some View {

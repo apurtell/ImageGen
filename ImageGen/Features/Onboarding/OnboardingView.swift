@@ -75,6 +75,7 @@ struct OnboardingView: View {
           .onboardingButtonPlacement()
         }
         .padding(24)
+        .onboardingFormWidth()
       }
       .alert("Gemini 3.1 Flash Image not listed", isPresented: $showFlashWarning) {
         Button("OK") { onFinished() }

@@ -32,6 +32,11 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
   func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
+extension ImageExportModel {
+  /// Indicates whether an active modal share sheet or file export presentation is in progress.
+  var isPresenting: Bool { share != nil || fileExport != nil }
+}
+
 extension View {
   /// Presents the activity sheet for the model's share ticket.
   func sharePresentation(_ model: ImageExportModel) -> some View {

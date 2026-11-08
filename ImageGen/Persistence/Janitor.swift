@@ -95,7 +95,10 @@ struct Janitor: Sendable {
     // 3. Remove unreferenced images outside the freshness protection window.
     removeOrphanImages(images, referenced: snapshot.referencedPaths, now: now, &report)
 
-    // 4. Enforce thumbnail storage quotas via LRU eviction.
+    // 4. Purge orphaned cached thumbnails whose backing image records have been removed.
+    removeOrphanThumbnails(known: snapshot.imageIDs, now: now, &report)
+
+    // 5. Enforce thumbnail storage quotas via LRU eviction.
     trimThumbnails(&report)
 
     let removed = "staging \(report.staging) · requests \(report.requests) · images \(report.images) · thumbnails \(report.thumbnails) · \(Self.mb(report.bytesFreed)) freed"
@@ -141,6 +144,16 @@ struct Janitor: Sendable {
     // Remove empty conversation folders after file pruning, respecting recent modification grace periods.
     for (dir, modified) in listing.folders where now.timeIntervalSince(modified) >= thresholds.imageFreshness {
       _ = rmdir(dir.path)
+    }
+  }
+
+  /// Prunes disk thumbnails lacking corresponding image entity records, observing freshness thresholds to protect in-flight generation writes.
+  private func removeOrphanThumbnails(known: Set<UUID>, now: Date, _ report: inout Report) {
+    for file in Self.children(of: files.thumbnailsDir) {
+      guard let id = ThumbnailService.imageID(ofFile: file), !known.contains(id) else { continue }
+      let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+      if let modified, now.timeIntervalSince(modified) < thresholds.imageFreshness { continue }
+      remove(file, counting: \.thumbnails, into: &report)
     }
   }
 

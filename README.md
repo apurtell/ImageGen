@@ -1,15 +1,16 @@
 # ImageGen
 
-ImageGen is a native iOS and macOS client for multimodal image generation and iterative editing powered by Google's Gemini REST API (`generateContent`). Using direct client-to-API communication with user managed API credentials, the application provides a conversational interface for text-to-image and image-to-image generation, persisting conversation state and generated media locally on device. The iOS and macOS apps are separate native targets (UIKit-free SwiftUI shared code plus per-platform code), not Catalyst.
+ImageGen is a native macOS, iPhone and iPad client for multimodal image generation and iterative editing powered by Google's Gemini REST API (`generateContent`). Using direct client-to-API communication with user managed API credentials, the application provides a conversational interface for text-to-image and image-to-image generation, persisting conversation state and generated media locally on device. The macOS app and the iOS app, which is one universal target for iPhone and iPad, are separate native targets (UIKit-free SwiftUI shared code plus per-platform code), not Catalyst.
 
 ## Capabilities
 
 - **Text-to-Image Generation**: The default generation model is Gemini 3.1 Flash Image (`gemini-3.1-flash-image`), with support for per-conversation model selection across any compatible Gemini image models accessible to the user's API key.
 - **Iterative Image Editing**: Image-to-image workflows chain context from the most recent image synthesized in the chat. Any previous image can be designated as a new starting checkpoint via **Edit from here**.
-- **Multimodal Attachment Pipeline**: Supports importing up to 14 images per prompt across Photos, Files, and the system clipboard. The ingestion pipeline normalizes HEIC to JPEG, strips EXIF and GPS metadata, and rescales images to configurable dimension thresholds.
+- **Multimodal Attachment Pipeline**: Supports importing up to 14 images per prompt across Photos, Files, and the system clipboard, and on macOS and iPad by dropping images on the chat. The ingestion pipeline normalizes HEIC to JPEG, strips EXIF and GPS metadata, and rescales images to configurable dimension thresholds.
 - **Dimensional and Aspect Ratio Controls**: Aspect ratio (14 standard options) and output resolution (512, 1K, 2K, 4K) are governed by global defaults in Settings and can be overridden per conversation. Each dispatched request captures its exact operational parameters to guarantee deterministic re-execution upon **Regenerate**.
 - **Resilient Background Execution**: Dispatched requests run via a background `URLSession`. On iOS, background task assertions keep them running across app suspension and process termination; on macOS a `ProcessInfo` activity assertion prevents idle system sleep and App Nap from the moment a request is prepared until its reply arrives. Local notifications are delivered on completion.
 - **Bit-Identical Export Pipeline**: Export operations (Photos library or a save panel, Files filesystem, share sheet, pasteboard) deliver the uncompressed byte streams returned by the Gemini API without intermediate re-encoding.
+- **Layout for each device**: macOS and a regular-width iPad window show the chat list as a sidebar beside the chat, with text and the composer in a readable column and reply images sized to the window and loaded at the resolution they are drawn. The iPhone and narrow iPad windows show the chat list with a chat pushed on top of it, at full width. Resizing and rotating keep the reader's place.
 - **Structured Activity Logging**: Comprehensive activity instrumentation records request preparation parameters, transport phases, and terminal states in plain-text diagnostic logs, inspectable through an on device Developer menu without capturing sensitive credentials or binary image data.
 
 ## System Architecture
@@ -84,7 +85,7 @@ The application enforces Swift 6 complete concurrency checking, ensuring compile
 
 ### Prerequisites
 
-- macOS 26 with **Xcode 26** or later, configured with the iOS 26 simulator runtime (the macOS app needs no simulator).
+- macOS 26 with **Xcode 26** or later, configured with the iOS 26 simulator runtime for the iPhone and iPad apps (the macOS app needs no simulator).
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) 2.46 or later (`brew install xcodegen`). Project files are generated deterministically from `project.yml`.
 - An active Apple Developer Program team for on device installation and for running the macOS app, whose Keychain needs a signed build.
 - A Gemini API key obtained from Google AI Studio.
@@ -110,13 +111,20 @@ Launch the application in mock mode (bypassing external network calls and API ke
 scripts/run-sim.sh -UITestMockGemini 1 -SeedDemoData 1
 ```
 
+The scripts use a dedicated iPhone simulator, `ImageGen-Sim` (`scripts/sim.sh ensure` creates it). `IMAGEGEN_SIM`, the name or UDID of an existing simulator, picks another for `build.sh`, `run-sim.sh` and `test.sh`, such as an iPad. `run-sim.sh` boots it if it's shut down:
+
+```bash
+IMAGEGEN_SIM="iPad Pro 11-inch (M5)" scripts/run-sim.sh -UITestMockGemini 1 -SeedDemoData 1
+```
+
 ### Test Suites and Quality Gates
 
 Execute unit and integration tests under the Swift Testing framework:
 
 ```bash
-scripts/test.sh        # iOS simulator
-scripts/test-mac.sh    # macOS
+scripts/test.sh                                      # iPhone simulator
+IMAGEGEN_SIM="iPad Pro 11-inch (M5)" scripts/test.sh # iPad simulator
+scripts/test-mac.sh                                  # macOS
 ```
 
 Run static analysis checks for architectural rules and banned patterns:
@@ -148,22 +156,36 @@ scripts/run-mac.sh -UITestMockGemini 1 -SkipNotificationPrompt 1 -SeedDemoData 1
 scripts/test-mac.sh               # tests hosted in the signed app
 ```
 
-`run-mac.sh` quits any running copy, waits for it to exit, and opens the built Debug app through Launch Services, trying again for a few seconds if Launch Services is still tearing down the old instance. The Debug configuration has its own bundle ID (`<IMAGEGEN_BUNDLE_ID>.debug`) and so its own sandbox container (`~/Library/Containers/com.andrewpurtell.imagegen.debug`), keychain item and defaults, which makes `-ResetStore 1` safe: it can't reach a Release install's data.
+`run-mac.sh` quits any running copy, waits for it to exit, and opens the built Debug app through Launch Services, trying again for a few seconds if Launch Services is still tearing down the old instance. `RUN_MAC_BACKGROUND=1` opens it with `open -g`, which asks the system not to bring it to the front. The Debug configuration has its own bundle ID (`<IMAGEGEN_BUNDLE_ID>.debug`) and so its own sandbox container (`~/Library/Containers/com.andrewpurtell.imagegen.debug`), keychain item and defaults, which makes `-ResetStore 1` safe: it can't reach a Release install's data.
 
 Two layout rules hold on the Mac, explained in `doc/DESIGN.md` section 3.11:
 
 - **The transcript's width doesn't depend on the scroll bar.** With "Show scroll bars: Always", a bar takes width while content overflows, and an image's height follows its width, so content can overflow only when the bar is absent. Left alone, the bar toggles on every layout pass and hangs the app. So the width is capped from the scroll view's outer frame with the bar's width always reserved. It's a cap and not a fixed width, because a fixed width would become the window's minimum width.
-- **The composer is an opaque system-background bar.** Its pills and chips sit directly on that background, outlined by a hairline capsule, instead of the glass they use on iOS.
+- **The composer is an opaque system-background bar.** Its pills and chips sit directly on that background, outlined by a hairline capsule, instead of the glass they use on iPhone and iPad.
+
+Typing a character while the sidebar has the keyboard starts a prompt in the composer, with the caret after any draft; arrow keys, Return, Tab and menu shortcuts stay with the list and the menus.
+
+### iPad
+
+The iPhone and iPad share the `ImageGen` target (`TARGETED_DEVICE_FAMILY = 1,2`). The iPad has all four orientations; the iPhone keeps portrait and the two landscapes. `doc/DESIGN.md` section 3.12 has the details.
+
+- **Navigation follows the window.** A window of regular width is a sidebar and a detail; a narrow one, such as Slide Over or a small Stage Manager window, is the iPhone's stack. Crossing between them keeps the selected chat, the draft and the attachment tray. The viewer stays up and the reader's place comes across. The crossing rebuilds the chat's screen, so a sheet open on it closes.
+- **The transcript in the sidebar layout follows the Mac's policy**, with the composer floating on glass as on the iPhone. The stack layout is the same as on the iPhone.
+- **A hardware keyboard:** Return sends and Shift-Return inserts a newline. The on-screen keyboard's Return inserts a newline. The menu bar has New Chat (Cmd-N), Settings (Cmd-comma), Delete Chat, Jump to Latest and the Chat menu.
+- **A pointer:** hover effects and tooltips on icon controls, a secondary click for the context menus, and a double click (or double tap) to open an image.
+- **Images can be dropped on the chat** from another app.
 
 ### Physical Device Installation
 
 1. Create `Config/Local.xcconfig` from `Config/Local.xcconfig.example` and set `DEVELOPMENT_TEAM` to your Apple Developer team ID.
-2. Enable Developer Mode on the target iOS device (**Settings › Privacy & Security › Developer Mode**) and connect via USB or trusted Wi-Fi.
+2. Enable Developer Mode on the target iPhone or iPad (**Settings › Privacy & Security › Developer Mode**) and connect via USB or trusted Wi-Fi.
 3. Deploy the release build:
 
 ```bash
 scripts/device-install.sh --release
 ```
+
+With several devices connected, `DEVICE_UDID` selects one.
 
 ## Architectural Specifications
 

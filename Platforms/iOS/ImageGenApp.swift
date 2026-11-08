@@ -32,6 +32,9 @@ struct ImageGenApp: App {
           .modelContainer(AppEnvironment.shared.container)
       }
     }
+    .commands {
+      if Platform.isPad && !AppEnvironment.isTestHost { PadCommands(env: AppEnvironment.shared) }
+    }
     .onChange(of: scenePhase) { _, phase in
       guard !AppEnvironment.isTestHost else { return }
       AppEnvironment.shared.scenePhaseChanged(isActive: phase == .active, isBackground: phase == .background)

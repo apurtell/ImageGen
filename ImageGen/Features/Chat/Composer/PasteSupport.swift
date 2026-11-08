@@ -40,3 +40,14 @@ struct ComposerPasteButton: View {
     .accessibilityLabel("Paste image")
   }
 }
+
+/// Visual boundary highlight presented during active drag-and-drop operations containing image assets.
+struct ImageDropHighlight: View {
+  var body: some View {
+    RoundedRectangle(cornerRadius: 12)
+      .strokeBorder(Color.accentColor, lineWidth: 3)
+      .background(Color.accentColor.opacity(0.08), in: .rect(cornerRadius: 12))
+      .padding(6)
+      .allowsHitTesting(false)
+  }
+}

@@ -57,6 +57,7 @@ struct ChatScreenModelTests {
 
     init(
       keepsUnsentChats: Bool = false,
+      rebuildsChatOnLayoutChange: Bool = false,
       prepareUpload: (@Sendable (URL, Int, URL, UUID) async throws -> PreparedImage)? = nil
     ) async throws {
       s = try InMemoryStore()
@@ -72,6 +73,7 @@ struct ChatScreenModelTests {
         copyToPasteboard: { _ in }, draftDebounce: .milliseconds(100))
       if let prepareUpload { services.prepareUpload = prepareUpload }
       services.keepsUnsentChats = keepsUnsentChats
+      services.rebuildsChatOnLayoutChange = rebuildsChatOnLayoutChange
       model = ChatScreenModel(conversationID: conv, services: services)
       await model.load()
     }
@@ -101,6 +103,111 @@ struct ChatScreenModelTests {
     await r.model.onDisappear()
     #expect(r.navigator.path.isEmpty)
     #expect((try? await r.s.store.conversationTitle(r.conv)) == nil)
+  }
+
+  @Test func rebuildingAStillSelectedChatKeepsItEvenWhenEmpty() async throws {
+    let r = try await Rig(rebuildsChatOnLayoutChange: true)
+    r.model.isTextFieldFocused = true
+    await r.model.onDisappear()
+    #expect(r.navigator.path == [r.conv])
+    #expect((try? await r.s.store.conversationTitle(r.conv)) != nil)
+    #expect(!r.model.isTextFieldFocused)
+    #expect(r.activity.visibleConversationID == nil || r.activity.visibleConversationID == r.conv)
+  }
+
+  @Test func rebuildingSavesTheDraft() async throws {
+    let r = try await Rig(rebuildsChatOnLayoutChange: true)
+    r.model.composerText = "a lighthouse"
+    await r.model.onDisappear()
+    #expect(try await r.s.store.draftText(conv: r.conv) == "a lighthouse")
+    #expect(r.model.composerText == "a lighthouse")
+  }
+
+  @Test func leavingAChatThatCanBeRebuiltStillDeletesItWhenEmpty() async throws {
+    let r = try await Rig(rebuildsChatOnLayoutChange: true)
+    r.navigator.path = []
+    await r.model.onDisappear()
+    #expect((try? await r.s.store.conversationTitle(r.conv)) == nil)
+  }
+
+  @Test func deletingAChatOrAMessageRemovesItsThumbnails() async throws {
+    let r = try await Rig()
+    let (_, first) = try await r.imageTurn()
+    let (second, secondImage) = try await r.imageTurn()
+    let thumbnails = r.model.services.thumbnails
+    let source = try FixtureLoader.url("Images/tiny_16x9.png")
+    _ = await thumbnails.thumbnail(for: source, id: first, px: 240)
+    _ = await thumbnails.thumbnail(for: source, id: secondImage, px: 240)
+    await r.model.deleteMessage(second.replyMessageID)
+    #expect(!FileManager.default.fileExists(atPath: await thumbnails.fileURL(id: secondImage, px: 240).path))
+    #expect(FileManager.default.fileExists(atPath: await thumbnails.fileURL(id: first, px: 240).path))
+    await r.model.deleteChat()
+    #expect(!FileManager.default.fileExists(atPath: await thumbnails.fileURL(id: first, px: 240).path))
+  }
+
+  @Test func editFromHereAndNewChatAskForTheComposer() async throws {
+    let r = try await Rig()
+    let (_, image) = try await r.imageTurn()
+    await r.model.pin(image)
+    #expect(r.navigator.pendingComposerFocus == r.conv)
+    await r.model.newChat()
+    let new = try #require(r.navigator.path.last)
+    #expect(new != r.conv)
+    #expect(r.navigator.pendingComposerFocus == new)
+  }
+
+  @Test func aRebuildKeepsTheReadersPlaceAndLeavingForgetsIt() async throws {
+    let r = try await Rig(rebuildsChatOnLayoutChange: true)
+    let place = TranscriptPlace(rowID: UUID(), offsetIntoRow: 50, rowHeight: 100)
+    r.model.placeAcrossRebuild = place
+    await r.model.onDisappear()
+    #expect(r.model.placeAcrossRebuild == place)
+    r.navigator.path = []
+    await r.model.onDisappear()
+    #expect(r.model.placeAcrossRebuild == nil)
+  }
+
+  @Test func removingTheKeyIsLeavingEvenWithTheChatStillSelected() async throws {
+    let r = try await Rig(rebuildsChatOnLayoutChange: true)
+    r.navigator.needsOnboarding = true
+    await r.model.onDisappear()
+    #expect(r.activity.visibleConversationID == nil)
+  }
+
+  @Test func aKeyTypedBeforeTheSavedDraftLoadsKeepsBoth() async throws {
+    let r = try await Rig()
+    try await r.s.store.setDraft(r.conv, text: "a lighthouse ")
+    let model = ChatScreenModel(conversationID: r.conv, services: r.model.services)
+    model.composerText = "a"
+    await model.load()
+    #expect(model.composerText == "a lighthouse a")
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(try await r.s.store.draftText(conv: r.conv) == "a lighthouse a")
+  }
+
+  @Test func onlyTheFirstLoadCanAddTheSavedDraft() async throws {
+    let r = try await Rig()
+    try await r.s.store.setDraft(r.conv, text: "a lighthouse")
+    let model = ChatScreenModel(conversationID: r.conv, services: r.model.services)
+    await model.load()
+    #expect(model.composerText == "a lighthouse")
+    model.composerText = "a lighthouse at dusk"
+    await model.flushDraft()
+    await model.load()
+    #expect(model.composerText == "a lighthouse at dusk")
+    // External draft modifications do not overwrite active composer contents on subsequent reload passes.
+    try await r.s.store.setDraft(r.conv, text: "something else")
+    await model.load()
+    #expect(model.composerText == "a lighthouse at dusk")
+  }
+
+  @Test func aDraftTheComposerAlreadyHasIsNotDoubled() async throws {
+    let r = try await Rig()
+    try await r.s.store.setDraft(r.conv, text: "a lighthouse")
+    let model = ChatScreenModel(conversationID: r.conv, services: r.model.services)
+    model.composerText = "a lighthouse"
+    await model.load()
+    #expect(model.composerText == "a lighthouse")
   }
 
   @Test func leavingWithADraftDeletesTheChatByDefault() async throws {

@@ -45,6 +45,26 @@ enum AspectRatio: String, Sendable, Codable, CaseIterable {
     return sides[0] / sides[1]
   }
 
+  /// Reference pixel dimensions returned by Gemini generation endpoints for this aspect ratio at 1K resolution baseline.
+  var oneKPixels: (width: Int, height: Int) {
+    switch self {
+    case .r1x1: (1024, 1024)
+    case .r3x4: (896, 1200)
+    case .r16x9: (1376, 768)
+    case .r2x3: (848, 1264)
+    case .r4x3: (1200, 896)
+    case .r9x16: (768, 1376)
+    case .r3x2: (1264, 848)
+    case .r4x5: (928, 1152)
+    case .r21x9: (1584, 672)
+    case .r1x4: (512, 2048)
+    case .r5x4: (1152, 928)
+    case .r1x8: (384, 3072)
+    case .r4x1: (2048, 512)
+    case .r8x1: (3072, 384)
+    }
+  }
+
   /// Standard aspect ratio options, excluding extreme panoramic ratios (1:4, 4:1, 1:8, 8:1).
   static let standard: [AspectRatio] = allCases.filter { $0.group != .extreme }
 }

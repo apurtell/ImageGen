@@ -127,6 +127,7 @@ struct UserBubble: View {
         .foregroundStyle(.secondary)
       }
     }
+    .readableMeasure(alignment: .trailing)
     .frame(maxWidth: .infinity, alignment: .trailing)
     .padding(.leading, 48)
   }
@@ -181,6 +182,7 @@ struct ModelReplyView: View {
         case .details: actions.showDetails(request.details ?? "")
         }
       }
+      .readableMeasure()
     case .success:
       parts
       if !message.parts.contains(where: { $0.kind == .image }) {
@@ -205,9 +207,10 @@ struct ModelReplyView: View {
       case .text:
         MarkdownView(part.text ?? "")
           .selectableTextMenu { MessageSection(message: message, request: request, actions: actions) }
+          .readableMeasure()
       case .image:
         if let id = part.imageID, let asset = assets[id] {
-          let thumbnail = ImageThumbnailView(asset: asset)
+          let thumbnail = ImageThumbnailView(asset: asset, followsDisplayedSize: Platform.sharpensLargeReplyImages)
           thumbnail
             .replyImageSizing(aspect: thumbnail.aspect)
             .clipShape(RoundedRectangle(cornerRadius: 12))

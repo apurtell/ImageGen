@@ -80,45 +80,7 @@ private struct NewChatItems: View {
   }
 }
 
-/// Contextual menu commands targeting the active conversation and prompt composer.
-private struct ChatItems: View {
-  let chat: ChatCommandHandle?
-
-  private var isBlocked: Bool { chat == nil || chat?.isPresenting == true }
-
-  var body: some View {
-    Button("Send") { chat?.send() }
-      .keyboardShortcut(.return, modifiers: .command)
-      .disabled(chat?.canSend != true || isBlocked)
-    Button("Stop Generating") { chat?.stop() }
-      .keyboardShortcut(".")
-      .disabled(chat?.canStop != true)
-    Divider()
-    Button("Choose from Photos…") { chat?.choosePhotos() }
-      .disabled(chat?.canAddImages != true || isBlocked)
-    Button("Choose File…") { chat?.chooseFiles() }
-      .keyboardShortcut("o")
-      .disabled(chat?.canAddImages != true || isBlocked)
-    Divider()
-    Button("Regenerate Last Reply") { chat?.regenerateLastReply?() }
-      .disabled(chat?.regenerateLastReply == nil || isBlocked)
-    Button("Edit and Resend Last Prompt") { chat?.editLastPrompt?() }
-      .disabled(chat?.editLastPrompt == nil || isBlocked)
-    Button("Last Reply Info") { chat?.lastReplyInfo?() }
-      .disabled(chat?.lastReplyInfo == nil || isBlocked)
-    Button("Delete Last Message…") { chat?.deleteLastMessage?() }
-      .disabled(chat?.deleteLastMessage == nil || isBlocked)
-    Divider()
-    Button("Rename") { chat?.rename() }
-      .keyboardShortcut("r", modifiers: [.command, .shift])
-      .disabled(isBlocked)
-    Button("Chat Settings…") { chat?.showSettings() }
-      .keyboardShortcut(",", modifiers: [.command, .option])
-      .disabled(isBlocked)
-  }
-}
-
-/// Resolves the active dispatch target for image operations based on window key status.
+/// Contextual dispatch target for Image menu operations, resolving either the key viewer window asset or the active conversation's latest image.
 @MainActor
 private struct ImageCommandTarget {
   let export: (ImageExportAction) -> Void

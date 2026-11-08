@@ -27,6 +27,8 @@ struct JanitorSnapshot: Sendable {
 
   /// Relative file paths actively referenced across persistent image entities and request inputs.
   let referencedPaths: Set<String>
+  /// Asset identifiers of all persisted images, used to detect and prune orphaned cached thumbnails.
+  var imageIDs: Set<UUID> = []
   let requests: [UUID: RequestInfo]
 }
 
@@ -95,10 +97,12 @@ actor DataStore: ModelActor {
     let conversation = try fetchConversation(id)
     let live = conversation.requests.filter { $0.requestState.isLive }.map(\.id)
     let requestIDs = conversation.requests.map(\.id)
+    let imageIDs = Set(conversation.messages.flatMap(\.images).map(\.id))
     modelContext.delete(conversation)
     try modelContext.save()
     var result = files.removeConversationFiles(id, requestIDs: requestIDs)
     result.liveRequestIDs = live
+    result.imageIDs = imageIDs
     return result
   }
 
@@ -428,6 +432,7 @@ actor DataStore: ModelActor {
   func deleteMessage(_ id: UUID) throws -> DeletionResult {
     guard let message = try fetchMessage(id) else { throw DataStoreError.messageNotFound(id) }
     var result = DeletionResult()
+    result.imageIDs = Set(message.images.map(\.id))
     var paths = message.images.flatMap { [$0.relativePath, $0.preparedRelativePath].compactMap { $0 } }
     var requestDirs: [UUID] = []
     if message.messageRole == .model {
@@ -471,7 +476,9 @@ actor DataStore: ModelActor {
   /// Gathers all active file references and request lifecycle states in a single atomic transaction.
   func janitorSnapshot() throws -> JanitorSnapshot {
     var paths = Set<String>()
+    var imageIDs = Set<UUID>()
     for asset in try modelContext.fetch(FetchDescriptor<ImageAsset>()) {
+      imageIDs.insert(asset.id)
       paths.insert(asset.relativePath)
       if let p = asset.preparedRelativePath { paths.insert(p) }
     }
@@ -480,7 +487,7 @@ actor DataStore: ModelActor {
       for input in r.inputs { paths.insert(input.preparedRelativePath) }
       requests[r.id] = .init(isTerminal: r.requestState.isTerminal, finishedOrCreatedAt: r.completedAt ?? r.createdAt)
     }
-    return JanitorSnapshot(referencedPaths: paths, requests: requests)
+    return JanitorSnapshot(referencedPaths: paths, imageIDs: imageIDs, requests: requests)
   }
 
   /// Fetches real-time status info for an individual request during garbage collection evaluation.

@@ -11,6 +11,7 @@ struct ChatActions {
   let generation: any GenerationServicing
   let log: ActivityLog
   let navigator: Navigator
+  let thumbnails: ThumbnailService
   var chatModels: ChatModelCache?
   /// Controls retention of empty conversation entities containing uncommitted draft inputs.
   var keepsUnsentChats = false
@@ -75,6 +76,7 @@ struct ChatActions {
     if let live { await generation.cancel(requestID: live.id) }
     do {
       let result = try await store.deleteConversation(id)
+      await thumbnails.remove(imageIDs: result.imageIDs)
       // Cancel generation tasks that may have transitioned after initial state inspection.
       for request in result.liveRequestIDs where request != live?.id { await generation.cancel(requestID: request) }
       let removed = "files removed \(result.filesRemoved) (\(Format.mb(Int(result.bytesFreed))))"

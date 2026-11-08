@@ -200,15 +200,37 @@ struct JanitorTests {
     let thumbs = (0..<5).map { _ in f.s.files.thumbnailsDir.appendingPathComponent("\(UUID().uuidString)-240.jpg") }
     for (i, url) in thumbs.enumerated() {
       // Designates lowest indexed thumbnail entry as least recently accessed.
-      try f.write(url, bytes: 1000, age: TimeInterval(1000 - i * 100))
+      try f.write(url, bytes: 1000, age: TimeInterval(500 - i * 100))
       var values = URLResourceValues()
-      values.contentAccessDate = f.s.clock.now.addingTimeInterval(-TimeInterval(1000 - i * 100))
+      values.contentAccessDate = f.s.clock.now.addingTimeInterval(-TimeInterval(500 - i * 100))
       var u = url
       try? u.setResourceValues(values)
     }
     let report = await f.janitor.run()
     #expect(report.thumbnails == 2)
     #expect(thumbs.map(f.exists) == [false, false, true, true, true])
+  }
+
+  @Test func removesThumbnailsOfImagesThatAreGone() async throws {
+    let f = try Fixture()
+    let conv = try await f.s.store.createConversation()
+    let record = try await f.s.send(conv, prompt: "x", attachments: [try f.s.stage()])
+    let image = try #require(try await f.s.store.imageSnapshots(messageID: record.userMessageID).first)
+    let dir = f.s.files.thumbnailsDir
+    let known = dir.appendingPathComponent("\(image.imageID.uuidString)-1200.jpg")
+    let orphan = dir.appendingPathComponent("\(UUID().uuidString)-3200.jpg")
+    let fresh = dir.appendingPathComponent("\(UUID().uuidString)-240.jpg")
+    let stray = dir.appendingPathComponent("not-a-thumbnail.jpg")
+    try f.write(known, age: 3600)
+    try f.write(orphan, age: 3600)
+    try f.write(fresh, age: 60)
+    try f.write(stray, age: 3600)
+    let report = await f.janitor.run()
+    #expect(report.thumbnails == 1)
+    #expect(f.exists(known))
+    #expect(!f.exists(orphan))
+    #expect(f.exists(fresh))
+    #expect(f.exists(stray))
   }
 
   @Test func neverTouchesLogs() async throws {

@@ -225,6 +225,8 @@ struct ReplyImage: Sendable, Equatable {
 struct DeletionResult: Sendable, Equatable {
   /// Identifiers of live requests interrupted by record deletion.
   var liveRequestIDs: [UUID] = []
+  /// Identifiers of deleted image entities eligible for thumbnail cache invalidation.
+  var imageIDs: Set<UUID> = []
   var filesRemoved = 0
   var bytesFreed: Int64 = 0
   var failures = 0

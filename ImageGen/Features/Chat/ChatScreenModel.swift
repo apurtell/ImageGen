@@ -19,6 +19,8 @@ struct ChatServices {
   var chatModels: ChatModelCache?
   /// Governs whether empty conversations containing draft modifications are retained upon dismissal.
   var keepsUnsentChats = false
+  /// Indicates whether conversation views undergo teardown and recreation during layout transitions while preserving selection.
+  var rebuildsChatOnLayoutChange = false
   /// Debounce threshold applied before persisting draft prompt modifications.
   var draftDebounce: Duration = .milliseconds(500)
   /// Preprocessing hook transforming candidate uploads into target ingestion dimensions.
@@ -28,7 +30,9 @@ struct ChatServices {
 
   /// Factory providing conversation-level lifecycle dispatchers.
   var actions: ChatActions {
-    ChatActions(store: store, generation: generation, log: log, navigator: navigator, chatModels: chatModels, keepsUnsentChats: keepsUnsentChats)
+    ChatActions(
+      store: store, generation: generation, log: log, navigator: navigator, thumbnails: thumbnails, chatModels: chatModels,
+      keepsUnsentChats: keepsUnsentChats)
   }
 }
 
@@ -67,8 +71,12 @@ final class ChatScreenModel {
   }
   /// Bidirectional focus binding for the primary input field.
   var isTextFieldFocused = false
-  /// Pending modal picker presentation requested via application menu dispatch.
+  /// Cached scroll position preserved across layout reflows and view reconstructions.
+  @ObservationIgnored var placeAcrossRebuild: TranscriptPlace?
+  /// Contextual attachment picker presentation requested by application commands.
   var requestedPicker: AttachmentPicker?
+  /// Indicates whether a modal system attachment picker is currently presented.
+  var isPickingAttachment = false
   /// Pending request coordinates requiring user confirmation prior to draft replacement.
   var pendingEdit: (userMessageID: UUID, requestID: UUID?)?
   /// User-facing alert message payload presented upon exceptional workflow failures.
@@ -101,6 +109,7 @@ final class ChatScreenModel {
   private(set) var isStarting = false
 
   @ObservationIgnored private var loadingDraft = false
+  @ObservationIgnored private var hasLoadedDraft = false
   @ObservationIgnored private var draftTask: Task<Void, Never>?
   @ObservationIgnored private var connectivityTask: Task<Void, Never>?
   @ObservationIgnored private var lastLiveID: UUID?
@@ -124,6 +133,13 @@ final class ChatScreenModel {
   /// Lifecycle dismissal hook cleaning up visibility state, terminating monitoring streams,
   /// committing pending draft modifications, and pruning unpopulated conversations.
   func onDisappear() async {
+    // Preserve state when disappearing during adaptive navigation restructuring, except when onboarding displaces the root interface.
+    if services.rebuildsChatOnLayoutChange && services.navigator.path.last == conversationID && !services.navigator.needsOnboarding {
+      isTextFieldFocused = false
+      await flushDraft()
+      return
+    }
+    placeAcrossRebuild = nil
     isOnScreen = false
     services.activity.setVisible(nil, leaving: conversationID)
     connectivityTask?.cancel()
@@ -144,12 +160,20 @@ final class ChatScreenModel {
     if !isStarting { await services.actions.discardIfEmpty(conversationID) }
   }
 
-  /// Populates initial draft content and re-syncs conversation metadata.
+  /// Loads persisted draft text and synchronizes conversation state. When keystrokes forwarded from the sidebar precede draft retrieval,
+  /// prepends the stored draft to buffered input and schedules persistence.
   func load() async {
-    if let draft = try? await services.store.draftText(conv: conversationID), !draft.isEmpty, composerText.isEmpty {
-      loadingDraft = true
-      composerText = draft
-      loadingDraft = false
+    let isFirstLoad = !hasLoadedDraft
+    hasLoadedDraft = true
+    if let draft = try? await services.store.draftText(conv: conversationID), !draft.isEmpty {
+      if composerText.isEmpty {
+        loadingDraft = true
+        composerText = draft
+        loadingDraft = false
+      } else if isFirstLoad, composerText != draft {
+        composerText = draft + composerText
+        noteProgrammaticTextEdit()
+      }
     }
     await reload()
   }
@@ -440,6 +464,7 @@ final class ChatScreenModel {
     if let live { await services.generation.cancel(requestID: live.id) }
     do {
       let result = try await services.store.deleteMessage(id)
+      await services.thumbnails.remove(imageIDs: result.imageIDs)
       for request in result.liveRequestIDs where request != live?.id { await services.generation.cancel(requestID: request) }
       let removed = "files removed \(result.filesRemoved) (\(Format.mb(Int(result.bytesFreed))))"
       services.log.result(action, result.failures == 0 ? .success : .failed, "done · \(removed)")
@@ -463,6 +488,7 @@ final class ChatScreenModel {
     pinCount += 1
     await adoptSettings(ofImage: imageID)
     await reload()
+    services.navigator.requestComposerFocus(for: conversationID)
     showToast("Editing from this image · \(aspectPillLabel) · \(sizePillLabel)")
   }
 
@@ -513,6 +539,7 @@ final class ChatScreenModel {
   func newChat() async {
     guard let id = await services.actions.newChat() else { return }
     services.navigator.replaceTop(with: id)
+    services.navigator.requestComposerFocus(for: id)
   }
 
   func rename(to name: String) async {
