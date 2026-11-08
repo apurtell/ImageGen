@@ -167,7 +167,7 @@ Typing a character while the sidebar has the keyboard starts a prompt in the com
 
 ### iPad
 
-The iPhone and iPad share the `ImageGen` target (`TARGETED_DEVICE_FAMILY = 1,2`). The iPad has all four orientations; the iPhone keeps portrait and the two landscapes. `doc/DESIGN.md` section 3.12 has the details.
+The iPhone and iPad share the `ImageGen` target (`TARGETED_DEVICE_FAMILY = 1,2`). The iPad has all four orientations; the iPhone is in portrait except in the full-screen viewer, which also turns to the two landscapes. `doc/DESIGN.md` section 3.12 has the details.
 
 - **Navigation follows the window.** A window of regular width is a sidebar and a detail; a narrow one, such as Slide Over or a small Stage Manager window, is the iPhone's stack. Crossing between them keeps the selected chat, the draft and the attachment tray. The viewer stays up and the reader's place comes across. The crossing rebuilds the chat's screen, so a sheet open on it closes.
 - **The transcript in the sidebar layout follows the Mac's policy**, with the composer floating on glass as on the iPhone. The stack layout is the same as on the iPhone.

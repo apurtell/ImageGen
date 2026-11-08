@@ -114,8 +114,8 @@ enum Platform {
   /// Controls presence of a dedicated new conversation row in the list view.
   static var showsNewChatRow: Bool { true }
 
-  /// Indicates whether reply image presentation requests adaptive high-resolution display buckets beyond baseline dimensions.
-  static var sharpensLargeReplyImages: Bool { isPad }
+  /// Determines whether the Jump to Latest control is integrated into the composer accessory row rather than presented as a floating overlay.
+  static func jumpToLatestInComposer(layout: NavigationLayout) -> Bool { layout == .split }
 
   /// Standardized point diameter for circular overlay and composer controls.
   static var circleButtonSize: CGFloat { 36 }

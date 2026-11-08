@@ -40,7 +40,17 @@ enum TranscriptLayout {
     max(minimumImageHeight, min((height * imageHeightFraction).rounded(), height - composerReserve))
   }
 
-  /// Computes the maximum display width for an image of specified aspect ratio within the measured viewport.
+  /// Vertical layout budget reserved for navigation chrome, composer controls, and prompt text in stack layouts.
+  static let stackChromeReserve: CGFloat = 280
+
+  /// Calculates maximum image width in stack navigation layouts to ensure reply height fits the viewport, or unconstrained if unmeasured.
+  static func heightFitWidth(aspect: CGFloat, viewport: CGSize?) -> CGFloat {
+    guard let viewport else { return .infinity }
+    let height = max(minimumImageHeight, viewport.height - stackChromeReserve)
+    return max(height * max(aspect, 0.1), minimumImageWidth)
+  }
+
+  /// Computes the maximum display width for an image of specified aspect ratio within the measured viewport and gutter.
   static func imageWidth(aspect: CGFloat, viewport: CGSize?, gutter: CGFloat = 0) -> CGFloat {
     let aspect = max(aspect, 0.1)
     guard let viewport else { return min(unmeasuredImageEdge, unmeasuredImageEdge * aspect) }
@@ -134,6 +144,11 @@ enum TranscriptSettling {
     userScrolled || isUserScrolling || sinceLastWheel <= wheelQuietPeriod
   }
 
-  /// Determines whether the distance from the viewport trailing edge exceeds minimum repositioning thresholds.
+  /// Evaluates whether the distance from the transcript bottom exceeds container height, indicating the user has scrolled away.
+  static func isAwayFromBottom(distanceFromBottom: CGFloat, containerHeight: CGFloat) -> Bool {
+    distanceFromBottom > containerHeight
+  }
+
+  /// Determines whether content is sufficiently offset from the trailing edge to require programmatic scrolling.
   static func needsScroll(distanceFromBottom: CGFloat) -> Bool { distanceFromBottom > 1 }
 }

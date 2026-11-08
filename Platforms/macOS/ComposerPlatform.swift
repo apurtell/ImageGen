@@ -204,6 +204,34 @@ extension View {
       })
   }
 
+  /// No-op viewer dismissal handler on macOS, where the image viewer is hosted in an independent window.
+  func onViewerClosed(perform action: @escaping () -> Void) -> some View { self }
+
+  /// No-op row visibility tracking on macOS, where transcript layout remains stable without container transitions.
+  func tracksFirstVisibleRow(in reflow: TranscriptReflow) -> some View { self }
+
+  /// Suppresses bottom scroll edge bounce effects behind the opaque composer bar.
+  func composerScrollEdge() -> some View { scrollEdgeEffectHidden(true, for: .bottom) }
+
+  /// Background styling and border divider for the desktop composer bar.
+  func composerBarSurface() -> some View {
+    background(Color(nsColor: .windowBackgroundColor)).overlay(alignment: .top) { Divider() }
+  }
+
+  /// Applies bottom content margin to scrollable transcript content.
+  func transcriptBottomMargin() -> some View { contentMargins(.bottom, 16, for: .scrollContent) }
+}
+
+/// Measures outer viewport dimensions and legacy scroller gutter clearance, propagating layout geometry to child transcript views.
+private struct TranscriptViewportProvider: ViewModifier {
+  let onChange: () -> Void
+  @State private var size: CGSize?
+  @State private var gutter = Self.currentGutter
+
+  private static var currentGutter: CGFloat {
+    NSScroller.preferredScrollerStyle == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : 0
+  }
+
   func body(content: Self.Content) -> some View {
     content
       .environment(\.transcriptViewport, size)

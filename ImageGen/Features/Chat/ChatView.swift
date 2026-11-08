@@ -35,6 +35,8 @@ struct ChatView: View {
   @State private var holdingForRetry = false
   /// Tracks user-initiated scroll gestures to coordinate programmatic scroll settling.
   @State private var userScrolling = TranscriptUserScrolling()
+  /// Preserved transcript scroll position prior to presenting the full-screen viewer, restored upon dismissal.
+  @State private var placeBeforeViewer: TranscriptPlace?
   /// Action counter triggering programmatic scroll to the latest transcript message.
   @State private var jumpRequests = 0
 
@@ -225,7 +227,9 @@ struct ChatView: View {
     .composerScrollEdge()
     .tracksFirstVisibleRow(in: reflow)
     .onScrollGeometryChange(for: Bool.self) { geo in
-      geo.contentSize.height - geo.contentOffset.y - geo.containerSize.height > geo.containerSize.height
+      TranscriptSettling.isAwayFromBottom(
+        distanceFromBottom: geo.contentSize.height + geo.contentInsets.bottom - geo.visibleRect.maxY,
+        containerHeight: geo.containerSize.height)
     } action: { _, away in
       awayFromBottom = away
     }
@@ -252,12 +256,12 @@ struct ChatView: View {
       positionWasMoved()
     }
     .overlay(alignment: .bottomTrailing) {
-      if layout != .split { jumpToLatestButton(proxy).padding() }
+      if !Platform.jumpToLatestInComposer(layout: layout) { jumpToLatestButton(proxy).padding() }
     }
     .safeAreaBar(edge: .bottom) {
-      // In split navigation layouts, anchor the Jump button inside the composer accessory row to avoid content overlap.
+      // Anchor the Jump button inside the composer accessory row when floating overlay placement would occlude content.
       ComposerView(model: model) {
-        if layout == .split { jumpToLatestButton(proxy) }
+        if Platform.jumpToLatestInComposer(layout: layout) { jumpToLatestButton(proxy) }
       }
       .readableColumn()
       .composerBarSurface()
@@ -268,6 +272,11 @@ struct ChatView: View {
         isAtBottom = atBottom
         if followedTail { followedResizes += 1 }
       }
+    }
+    .onViewerClosed {
+      guard let place = placeBeforeViewer else { return }
+      placeBeforeViewer = nil
+      Task { await returnToPlace(place, proxy) }
     }
     .onChange(of: jumpRequests) {
       guard let last = messages.last else { return }
@@ -412,7 +421,10 @@ struct ChatView: View {
       showDetails: { details = DetailsText(text: $0) },
       deleteMessage: { deletingMessage = $0 },
       pin: { id in Task { await model.pin(id) } },
-      view: { id in viewer = viewerRequest(startingAt: id) },
+      view: { id in
+        placeBeforeViewer = isAtBottom ? nil : reflow.readersPlace
+        viewer = viewerRequest(startingAt: id)
+      },
       export: { asset, action in exporter.perform(action, exportItem(asset, files: files)) },
       exportItem: { exportItem($0, files: files) },
       regenerateUnavailableReason: { request in

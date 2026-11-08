@@ -17,6 +17,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     return true
   }
 
+  /// Returns supported interface orientations governed by `OrientationPolicy` across device form factors.
+  func application(
+    _ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?
+  ) -> UIInterfaceOrientationMask {
+    OrientationPolicy.mask
+  }
+
   /// Handles background URLSession wake events, capturing the system completion callback within
   /// `BackgroundEventsRelay` until all payload downloads are processed and persisted.
   func application(

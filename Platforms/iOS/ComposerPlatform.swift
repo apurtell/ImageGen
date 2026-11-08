@@ -87,8 +87,8 @@ extension View {
   /// Adjusts composer column width between full window extent in stack layouts and constrained reading widths in split layouts.
   func readableColumn() -> some View { inSplitLayout(ReadableColumn()) }
 
-  /// Applies responsive reply image constraints, expanding to full container width in stack layouts while following TranscriptLayout rules in split layouts.
-  func replyImageSizing(aspect: CGFloat) -> some View { inSplitLayout(ReplyImageFrame(aspect: aspect)) }
+  /// Applies responsive reply image constraints across stack and split navigation layouts.
+  func replyImageSizing(aspect: CGFloat) -> some View { modifier(PhoneOrPadReplyImage(aspect: aspect)) }
 
   /// Computes placeholder reply card footer height based on navigation layout presentation.
   func replyFooterSizing(expectsText: Bool) -> some View { inSplitLayout(ReplyFooterHeight(expectsText: expectsText)) }
@@ -96,19 +96,22 @@ extension View {
   /// Constrains text lines and status cards to optimal line-length bounds in split view presentation while utilizing full width in stack presentation.
   func readableMeasure(alignment: Alignment = .leading) -> some View { inSplitLayout(ReadableMeasure(alignment: alignment)) }
 
-  /// Propagates outer viewport dimensions to the transcript view hierarchy in split navigation layouts.
-  func measuresTranscriptViewport(onChange: @escaping () -> Void) -> some View { inSplitLayout(PadTranscriptViewport(onChange: onChange)) }
+  /// Propagates outer transcript viewport dimensions to descendant views, notifying observers upon dimension changes.
+  func measuresTranscriptViewport(onChange: @escaping () -> Void) -> some View { modifier(PadTranscriptViewport(onChange: onChange)) }
 
   /// Propagates row layout geometry to coordinate scroll anchor reflow in split navigation layouts.
   func reportsTranscriptRow(id: UUID, to reflow: TranscriptReflow) -> some View { inSplitLayout(TranscriptRowReport(id: id, reflow: reflow)) }
 
-  /// Tracks the first visible message row identifier in stack layouts to seed scroll anchor restoration upon transitioning to split layouts.
+  /// Tracks the first visible message row identifier to preserve scroll position across layout transitions and viewer presentations.
   @ViewBuilder
   func tracksFirstVisibleRow(in reflow: TranscriptReflow) -> some View {
-    if Platform.isPad {
-      onScrollTargetVisibilityChange(idType: UUID.self, threshold: 0.01) { reflow.firstVisibleRow = $0.first }
-    } else {
-      self
+    onScrollTargetVisibilityChange(idType: UUID.self, threshold: 0.01) { reflow.firstVisibleRow = $0.first }
+  }
+
+  /// Triggers the specified action upon dismissal of the full-screen image viewer.
+  func onViewerClosed(perform action: @escaping () -> Void) -> some View {
+    onChange(of: ViewerCoverController.shared.cover?.id) { old, new in
+      if old != nil, new == nil { action() }
     }
   }
 
@@ -221,6 +224,21 @@ private struct ReadableMeasure: ViewModifier {
 
   func body(content: Self.Content) -> some View {
     content.frame(maxWidth: TranscriptLayout.readableWidth, alignment: alignment)
+  }
+}
+
+/// Constrains reply image display geometry using `TranscriptLayout` rules in split views and viewport height-fitted bounds in stack views.
+private struct PhoneOrPadReplyImage: ViewModifier {
+  let aspect: CGFloat
+  @Environment(\.navigationLayout) private var layout
+  @Environment(\.transcriptViewport) private var viewport
+
+  func body(content: Self.Content) -> some View {
+    if layout == .split {
+      content.modifier(ReplyImageFrame(aspect: aspect))
+    } else {
+      content.frame(maxWidth: TranscriptLayout.heightFitWidth(aspect: aspect, viewport: viewport), alignment: .leading)
+    }
   }
 }
 

@@ -12,6 +12,9 @@ enum Platform {
     return "macOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
   }
 
+  /// Determines whether the Jump to Latest control is integrated into the composer accessory row.
+  static func jumpToLatestInComposer(layout: NavigationLayout) -> Bool { true }
+
   /// System Settings deep link for application notification preferences.
   static var settingsURL: URL? {
     URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(Bundle.main.bundleIdentifier ?? "")")
@@ -111,9 +114,6 @@ enum Platform {
 
   /// Controls presence of a dedicated new conversation row in the list view.
   static var showsNewChatRow: Bool { false }
-
-  /// Enables adaptive multi-resolution thumbnail fetching for expanded desktop viewport displays.
-  static var sharpensLargeReplyImages: Bool { true }
 
   /// No-op orientation change request on macOS.
   static func requestLandscape() {}

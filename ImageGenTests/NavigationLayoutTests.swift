@@ -25,7 +25,6 @@ struct NavigationLayoutTests {
     #expect(Platform.isPad == isPad)
     #expect(Platform.deviceNoun == (isPad ? "iPad" : "iPhone"))
     #expect(Platform.keepsUnsentChats == isPad)
-    #expect(Platform.sharpensLargeReplyImages == isPad)
     #expect(Platform.interruptedRequestMessage.hasPrefix(isPad ? "iPadOS stopped" : "iOS stopped"))
   }
   #endif

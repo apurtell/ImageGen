@@ -22,6 +22,7 @@ struct PrimaryNavigation: View {
     }
     .environment(\.navigationLayout, layout)
     .fullScreenCover(item: $viewers.cover) { $0.content }
+    .onChange(of: viewers.cover?.id) { _, id in OrientationPolicy.viewerChanged(isUp: id != nil) }
   }
 }
 
@@ -161,5 +162,20 @@ struct APIKeySourceLink: View {
     Text("Get a key at aistudio.google.com/apikey")
       .font(.callout.monospaced())
       .textSelection(.enabled)
+  }
+}
+
+/// Manages supported interface orientations, restricting iPhone to portrait mode outside active
+/// full screen viewer presentation.
+enum OrientationPolicy {
+  nonisolated(unsafe) static var mask: UIInterfaceOrientationMask = Platform.isPad ? .all : .portrait
+
+  @MainActor
+  static func viewerChanged(isUp: Bool) {
+    guard !Platform.isPad else { return }
+    mask = isUp ? .allButUpsideDown : .portrait
+    let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+    scene?.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+    if !isUp { scene?.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) }
   }
 }

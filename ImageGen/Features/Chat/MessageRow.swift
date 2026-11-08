@@ -210,7 +210,7 @@ struct ModelReplyView: View {
           .readableMeasure()
       case .image:
         if let id = part.imageID, let asset = assets[id] {
-          let thumbnail = ImageThumbnailView(asset: asset, followsDisplayedSize: Platform.sharpensLargeReplyImages)
+          let thumbnail = ImageThumbnailView(asset: asset, followsDisplayedSize: true)
           thumbnail
             .replyImageSizing(aspect: thumbnail.aspect)
             .clipShape(RoundedRectangle(cornerRadius: 12))
