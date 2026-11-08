@@ -87,6 +87,9 @@ final class AppEnvironment {
   let chatModels: ChatModelCache?
 
   @ObservationIgnored private let launchStarted = ContinuousClock.now
+  /// Demarcates prior application sessions from the current launch lifecycle. Recorded during initialization
+  /// ahead of view hierarchy presentation so conversations created during early launch are not treated as stale.
+  @ObservationIgnored private let launchDate = Date.now
   @ObservationIgnored private var reconcilerTask: Task<Void, Never>?
   // Janitor execution is gated on completion of both Reconciler and the initial presentation frame.
   @ObservationIgnored private var reconcilerFinished = false
@@ -206,7 +209,13 @@ final class AppEnvironment {
   func didFinishLaunching(applicationState: LaunchState) {
     log.step(launchAction, "application state \(applicationState.rawValue)")
     let reconciler = self.reconciler
+    let store = self.store
+    let log = self.log
+    let launchDate = self.launchDate
     reconcilerTask = Task.detached(priority: .utility) { [weak self] in
+      if let deleted = try? await store.deleteEmptyConversations(createdBefore: launchDate), deleted > 0 {
+        log.result(log.begin("Delete empty chats", origin: .system, "left by an earlier run"), .success, "\(deleted) deleted")
+      }
       await reconciler.run()
       await self?.reconcilerDidFinish()
     }

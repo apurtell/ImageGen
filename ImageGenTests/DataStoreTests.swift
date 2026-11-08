@@ -382,6 +382,29 @@ struct DataStoreTests {
       #expect(FileManager.default.fileExists(atPath: original.path))
     }
   }
+
+  @Test func launchSweepTakesOnlyOlderChatsWithNothingInThem() async throws {
+    let s = try InMemoryStore()
+    let empty = try await s.store.createConversation()
+    let blankDraft = try await s.store.createConversation()
+    try await s.store.setDraft(blankDraft, text: "  \n")
+    let withDraft = try await s.store.createConversation()
+    try await s.store.setDraft(withDraft, text: "a lighthouse")
+    let withMessage = try await s.store.createConversation()
+    _ = try await s.send(withMessage, prompt: "x")
+    s.clock.advance(60)
+    let launch = s.clock.now
+    s.clock.advance(1)
+    let madeSinceLaunch = try await s.store.createConversation()
+
+    #expect(try await s.store.deleteEmptyConversations(createdBefore: launch) == 2)
+
+    #expect((try? await s.store.conversationTitle(empty)) == nil)
+    #expect((try? await s.store.conversationTitle(blankDraft)) == nil)
+    #expect((try? await s.store.conversationTitle(withDraft)) != nil)
+    #expect((try? await s.store.conversationTitle(withMessage)) != nil)
+    #expect((try? await s.store.conversationTitle(madeSinceLaunch)) != nil)
+  }
 }
 
 extension DataStore {

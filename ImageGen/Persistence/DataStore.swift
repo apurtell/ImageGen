@@ -115,6 +115,18 @@ actor DataStore: ModelActor {
     return true
   }
 
+  /// Purges empty conversations created before a cutoff timestamp that contain no messages or drafts.
+  /// Reclaims abandoned conversation records left behind following abrupt process termination. Returns
+  /// the number of deleted conversations.
+  func deleteEmptyConversations(createdBefore date: Date) throws -> Int {
+    let older = try modelContext.fetch(FetchDescriptor<Conversation>(predicate: #Predicate { $0.createdAt < date }))
+    var deleted = 0
+    for conversation in older where conversation.messages.isEmpty {
+      if try deleteIfEmpty(conversation.id, keepingDrafts: true) { deleted += 1 }
+    }
+    return deleted
+  }
+
   func setPin(_ id: UUID, imageID: UUID?) throws {
     try fetchConversation(id).pinnedImageID = imageID
     try modelContext.save()

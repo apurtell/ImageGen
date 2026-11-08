@@ -50,6 +50,18 @@ struct AppEnvironmentLaunchTests {
     await env.log.close()
   }
 
+  /// Verifies that conversations created during early view lifecycle execution prior to system launch completion are preserved.
+  @Test func aChatMadeBeforeLaunchFinishesIsNotAnEarlierRuns() async throws {
+    let rig = Rig()
+    let env = AppEnvironment(rig.configuration())
+    let conv = try await env.store.createConversation()
+    env.didFinishLaunching(applicationState: .active)
+    await env.waitForReconciler()
+    _ = try await env.store.conversationTitle(conv)
+    env.transport.invalidateAndWait()
+    await env.log.close()
+  }
+
   @Test func janitorWaitsForReconciler() async throws {
     let rig = Rig()
     rig.useManualGrace = true

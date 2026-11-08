@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs the built Debug macOS app with the given launch options, e.g.
 #   scripts/run-mac.sh -UITestMockGemini 1 -SkipNotificationPrompt 1 -SeedDemoData 1
-# Build first with scripts/build-mac.sh.
+# Build first with scripts/build-mac.sh. Specifying RUN_MAC_BACKGROUND=1 launches in the background without activating the application (open -g).
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 
@@ -25,8 +25,10 @@ fi
 
 # Launch via Launch Services (`open`) to configure window server session state.
 # Retry to accommodate process termination delays from previous runs.
+open_flags=()
+[ "${RUN_MAC_BACKGROUND:-}" = "1" ] && open_flags=(-g)
 for attempt in 1 2 3 4 5; do
-  open "$app" --args "$@" && exit 0
+  open ${open_flags[@]+"${open_flags[@]}"} "$app" --args "$@" && exit 0
   [ "$attempt" -lt 5 ] && sleep 1
 done
 echo "error: couldn't open $app" >&2
