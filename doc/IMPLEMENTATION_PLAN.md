@@ -1,9 +1,6 @@
 # ImageGen for iPhone: Implementation Plan
 
-Status: v1 plan, execution roadmap
 Date: 2026-10-15
-
-This document specifies the milestone progression, subsystem dependencies, verification criteria, and milestone completion definitions. In the event of discrepancy between this document and `DESIGN.md`, `DESIGN.md` serves as the authoritative specification.
 
 ---
 
@@ -17,19 +14,17 @@ This document specifies the milestone progression, subsystem dependencies, verif
 6. Commit changes at milestone boundaries using the convention `M<n>: <title>`. Avoid committing local configuration (`Config/Local.xcconfig`), generated projects, or build artifacts.
 
 ### 0.1 Cross-cutting requirement: aspect ratio and resolution
-Aspect ratio and output resolution are **configurable**, with defaults of **16:9** and **2K**. This shows up in several milestones, so it is spelled out once here:
+Aspect ratio and output resolution are configurable, defaulting to 16:9 and 2K across the architecture:
 
-| Layer | Where | Milestone | Proof |
-|---|---|---|---|
-| Vocabulary | `AspectRatio` (14 cases), `ImageSize` (`512`, `1K`, `2K`, `4K`) with exact API strings | M0 | compiles; `VocabularyTests` |
-| Defaults | `AppSettings.defaultAspectRatio = .r16x9`, `defaultImageSize = .s2K` | M2 | `AppSettingsTests.defaultsAre16x9And2K` |
-| Resolution order + coercion | `GenerationSettingsResolver` (D§2.5) | M1 | `SettingsResolverTests` |
-| Wire format | `generationConfig.imageConfig = {"aspectRatio":"16:9","imageSize":"2K"}` always sent | M1 | golden `flash_text_only_16x9_2k.json`; `PipeParityTests` |
-| Recorded per request | `GenerationRequest.aspectRatio` / `.imageSize` are the values sent | M2, M4 | `DataStoreTests`, `GenerationServiceTests.recordsSentValues` |
-| Regenerate reproduces | Regenerate reuses the recorded values, not the current settings | M4, M5 | `GenerationServiceTests.regenerateUsesRecordedSettings` |
-| Per-chat override | Composer pills: Model, Aspect, Resolution; each menu's first item is "Default (<current global default>)" | M5 | screenshots `M5/05-aspect-menu.png`, `M5/06-resolution-menu.png`; `ChatScreenModelTests.defaultItemLabelFollowsGlobalDefault` |
-| Global defaults UI | Settings › Generation defaults | M8 | screenshot `M8/03-generation-defaults.png`; `M8/04-defaults-changed.png` (menus read "Default (1:1)" / "Default (1K)") |
-| Honored by the API | metadata line shows actual pixels; ⚠︎ when the class or ratio is off | M5, M10 | mock scenario `lowRes`; device test D3 |
+- **Vocabulary Layer (M0)**: `AspectRatio` (14 standard cases) and `ImageSize` (`512`, `1K`, `2K`, `4K`) define exact Gemini wire format strings, verified by `VocabularyTests`.
+- **Application Defaults (M2)**: `AppSettings` initializes default values to `16:9` and `2K`, verified by `AppSettingsTests.defaultsAre16x9And2K`.
+- **Resolution and Coercion (M1)**: `GenerationSettingsResolver` resolves overrides and enforces model capabilities (D§2.5), verified by `SettingsResolverTests`.
+- **Wire Serialization (M1)**: `RequestBodyWriter` explicitly serializes `generationConfig.imageConfig` specifying `aspectRatio` and `imageSize`, verified by golden fixtures and `PipeParityTests`.
+- **Persistence Auditing (M2, M4)**: `GenerationRequest` captures operative `aspectRatio` and `imageSize` values committed to `DataStore`, verified by `GenerationServiceTests.recordsSentValues`.
+- **Deterministic Regeneration (M4, M5)**: Regeneration operations reconstruct requests from historical snapshots rather than active settings, verified by `GenerationServiceTests.regenerateUsesRecordedSettings`.
+- **Composer Controls (M5)**: The composer surfaces Model, Aspect, and Resolution selector pills, dynamically displaying current global defaults, verified by `ChatScreenModelTests` and UI captures.
+- **Settings Management (M8)**: Global generation defaults are configured under Settings › Generation defaults, verified by UI captures and persistence tests.
+- **Runtime Verification (M5, M10)**: Reply metadata displays synthesized pixel dimensions with warning indicators for non-conforming dimensions, verified via mock scenarios and physical device testing.
 
 ---
 
@@ -37,21 +32,15 @@ Aspect ratio and output resolution are **configurable**, with defaults of **16:9
 
 ### 1.1 Toolchain prerequisites (checked by `scripts/doctor.sh`)
 
-What was found on this Mac on 2026-10-15:
-- macOS 26.5.2.
-- `xcode-select -p` points at `/Library/Developer/CommandLineTools`, so `xcodebuild` doesn't run.
-- **Xcode 26.6** is at `~/Downloads/Xcode.app`. Its license hasn't been accepted yet.
-- There are no iOS simulator runtimes, and XcodeGen isn't installed.
+Development and verification require the following toolchain components:
 
-| Requirement | Minimum | Check | How to install | Needs the user? |
-|---|---|---|---|---|
-| Xcode | 26.0 (26.6 is present) | `xcodebuild -version` → `Xcode 26.x` or later | Move `~/Downloads/Xcode.app` to `/Applications/Xcode.app` (optional but recommended) | yes (drag in Finder, or `mv`) |
-| Active developer dir | that Xcode | `xcode-select -p` | `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`, **or** export `DEVELOPER_DIR` (scripts do this automatically, see `scripts/env.sh`) | `sudo` needs the user |
-| License + first launch | accepted | `xcodebuild -checkFirstLaunchStatus` exits 0 | `sudo xcodebuild -license accept` then `xcodebuild -runFirstLaunch` | yes (`sudo`) |
-| iOS simulator runtime | iOS 26.0+ | `xcrun simctl list runtimes` shows `iOS 26.x` | `xcodebuild -downloadPlatform iOS` (several GB) | no, but slow |
-| XcodeGen | 2.46.0 | `xcodegen --version` | `brew install xcodegen` | no |
-| Python 3 | any 3.9+ | `python3 --version` | already present (miniconda) | no; only for `scripts/gen_pipe_fixtures.py` |
-| Apple developer account in Xcode | the user's paid Apple Developer Program team | Xcode › Settings › Accounts shows the team | sign in in Xcode | yes (M10 only) |
+- **Xcode**: Version 26.0 or later (`xcodebuild -version`), located in `/Applications/Xcode.app` or specified via `DEVELOPER_DIR`.
+- **Active Developer Directory**: Configured via `xcode-select -s /Applications/Xcode.app/Contents/Developer` or exported in the environment (`scripts/env.sh`).
+- **Xcode License and First Launch**: License accepted via `sudo xcodebuild -license accept` and core components installed via `xcodebuild -runFirstLaunch`.
+- **iOS Simulator Runtime**: iOS 26.0 or later runtime (`xcrun simctl list runtimes`), installed via `xcodebuild -downloadPlatform iOS`.
+- **XcodeGen**: Version 2.46.0 or later (`xcodegen --version`), installed via Homebrew (`brew install xcodegen`).
+- **Python 3**: Python 3.9 or later (`python3 --version`) utilized for generating reference parity fixtures (`scripts/gen_pipe_fixtures.py`).
+- **Apple Developer Account**: Enrolled Apple Developer Program team signed into Xcode Accounts for signing and on-device deployment.
 
 Privileged system commands (`sudo`) and Apple account authentication require manual user execution. Step 0 lists the required setup commands and verifies readiness via `scripts/doctor.sh`.
 
@@ -203,30 +192,20 @@ DEVELOPMENT_TEAM = ABCDE12345
 // IMAGEGEN_BUNDLE_ID = com.andrewpurtell.imagegen
 ```
 
-### 1.4 Standard commands
+### 1.4 Standard automation commands
 
-All scripts `source scripts/env.sh`, which:
-- picks `DEVELOPER_DIR`: `$IMAGEGEN_XCODE`, then `/Applications/Xcode.app`, then `~/Downloads/Xcode.app`, keeping the first whose version is 26 or later;
-- sets `SIM_NAME=ImageGen-Sim` (or `$IMAGEGEN_SIM`, a simulator name or UDID, to use an already-booted simulator instead), `BUNDLE_ID=com.andrewpurtell.imagegen`, `DERIVED=build/DerivedData`, `LOGS=build/logs`.
+All scripts source `scripts/env.sh`, configuring `DEVELOPER_DIR`, simulator identifiers (`ImageGen-Sim`), bundle identifiers, and output paths. Common workflows include:
 
-| Purpose | Command | Underlying invocation |
-|---|---|---|
-| Doctor | `scripts/doctor.sh` | version checks of section 1.1 |
-| Simulator | `scripts/sim.sh ensure` | `xcrun simctl create ImageGen-Sim "iPhone 17 Pro" <newest iOS ≥ 26 runtime>` if missing (falls back to the newest iPhone Pro device type the runtime supports), then `simctl boot` and `open -a Simulator` |
-| Generate | `scripts/gen.sh` | `xcodegen generate --spec project.yml` |
-| Build (sim) | `scripts/build.sh` | `xcodebuild -project ImageGen.xcodeproj -scheme ImageGen -configuration Debug -destination "id=$SIM_UDID" -derivedDataPath build/DerivedData build \| tee build/logs/build.log` |
-| Build (sim, Release) | `scripts/build.sh --release` | the same with `-configuration Release`, logging to `build/logs/build-release.log`. This catches DEBUG-only references long before M10 |
-| Test (all) | `scripts/test.sh` | `xcodebuild ... -destination "id=$SIM_UDID" -resultBundlePath build/logs/Test-<timestamp>.xcresult test \| tee build/logs/test.log` |
-| Test (one suite) | `scripts/test.sh -only-testing:ImageGenTests/ResponseParserTests` | the same, with arguments passed through |
-| Warnings | `scripts/check-warnings.sh` | runs its own **clean** build (`xcodebuild ... -derivedDataPath build/DerivedData-warnings clean build`, so every file is recompiled and re-emits its warnings) into `build/logs/warnings.log`, then `grep -E '/ImageGen/.*: warning:' build/logs/warnings.log` must be empty. It never reads the incremental `build.log` |
-| Lint | `scripts/lint.sh` | section 2.7 |
-| Run (sim) | `scripts/run-sim.sh -UITestMockGemini 1 -SeedDemoData 1 -Scene chatList` | `simctl terminate`; `simctl install $UDID build/DerivedData/Build/Products/Debug-iphonesimulator/ImageGen.app`; `simctl launch $UDID $BUNDLE_ID <args>` |
-| Screenshot | `scripts/shot.sh M5 01-chat-list` | `xcrun simctl io $UDID screenshot artifacts/M5/01-chat-list.png` (status bar overridden to 9:41, full battery) |
-| Appearance | `xcrun simctl ui $UDID appearance dark` / `light` | |
-| Dynamic Type | `xcrun simctl ui $UDID content_size accessibility-extra-extra-extra-large` / `large` | |
-| Photos permission | `xcrun simctl privacy $UDID grant photos-add $BUNDLE_ID` | for unattended Save to Photos checks |
-| Add test photos | `xcrun simctl addmedia $UDID ImageGenTests/Fixtures/Images/sample.heic` | for PhotosPicker checks |
-| Device | `scripts/device-install.sh [--release]` | section 9 |
+- **Environment Diagnostics (`scripts/doctor.sh`)**: Validates local developer directory, SDK versions, runtime simulators, and XcodeGen installations.
+- **Simulator Provisioning (`scripts/sim.sh ensure`)**: Provisions and boots the dedicated test simulator (`ImageGen-Sim`), creating an iPhone 17 Pro device with the newest available iOS 26 runtime.
+- **Project Generation (`scripts/gen.sh`)**: Generates deterministic Xcode project files from `project.yml` via XcodeGen.
+- **Compilation (`scripts/build.sh [--release]`)**: Invokes `xcodebuild` targeting simulator destinations under Debug or Release configurations, capturing full build transcripts to `build/logs/`.
+- **Test Execution (`scripts/test.sh [options]`)**: Executes Swift Testing suites against the simulator, streaming output and generating structured `.xcresult` bundles.
+- **Static Analysis and Linting (`scripts/lint.sh`)**: Validates structural boundaries, layer separation rules, and architectural invariants.
+- **Compiler Warning Verification (`scripts/check-warnings.sh`)**: Executes a clean build pass into an isolated derived data path, enforcing zero-warning compilation across the codebase.
+- **Simulator Execution (`scripts/run-sim.sh [args]`)**: Deploys the Debug build to the simulator and executes with specified launch options.
+- **Automated Screenshot Capture (`scripts/shot.sh <milestone> <name>`)**: Captures standardized device screenshots with normalized status bar geometry into `artifacts/`.
+- **Physical Device Deployment (`scripts/device-install.sh [--release]`)**: Builds, signs, and deploys release binaries to connected physical hardware via `devicectl`.
 
 **Interactive simulator driving.** Use the iOS Simulator tool (`control` actions `attach`, `screenshot`, `tap`, `swipe`, `text`) for taps and gestures, and `scripts/run-sim.sh` for launches that need launch options. The simulator tool's `launch` takes no arguments; to use it, persist the options first with `xcrun simctl spawn $UDID defaults write com.andrewpurtell.imagegen UITestMockGemini -bool YES` (and so on). `LaunchOptions` reads `UserDefaults.standard`, which holds both launch arguments and persisted defaults. Clear them with `defaults delete com.andrewpurtell.imagegen <key>`.
 
@@ -257,21 +236,19 @@ All scripts `source scripts/env.sh`, which:
 - **App host isolation.** Unit tests are hosted by the app. `AppEnvironment` detects the test host (`ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil`). Under test it does **not** create the background `URLSession` or the activity log file, run the Reconciler or Janitor, or request notification permission, and `ImageGenApp` shows an empty `Color.clear` scene.
 
 ### 2.3 Golden JSON fixtures (request building)
-Location: `ImageGenTests/Fixtures/Requests/`. Each golden file holds the full request body with base64 data replaced by the token `"<b64:FILENAME>"`. The test expands the token from `Fixtures/Images/` or `ImageFactory` output, then compares with `JSONSerialization`, structurally (key order doesn't matter, array order does).
+Location: `ImageGenTests/Fixtures/Requests/`. Each golden file holds the full request body with base64 data replaced by the token `"<b64:FILENAME>"`. Tests expand tokens against test image assets and compare payloads structurally via `JSONSerialization`:
 
-| Fixture | Inputs | Asserts |
-|---|---|---|
-| `flash_text_only_16x9_2k.json` | defaults, but with `includeTextModality = true` set explicitly (pipe parity, so the R3 flip in M9 task 8 doesn't change this golden), prompt "a lighthouse at dusk" | one text part; `imageConfig` 16:9/2K; 5 safety categories at BLOCK_NONE; `["TEXT","IMAGE"]` |
-| `flash_three_images.json` | 3 inputs (jpeg, png, jpeg), prompt | 3 `inlineData` parts in order, then text |
-| `flash_image_only.json` | 1 attachment, empty prompt | no text part |
-| `flash_512_9x16.json` | override 9:16 / 512 | `"imageSize":"512"` exactly |
-| `pro_16x9_1k.json` | a hand-built `EffectiveSettings` for 3 Pro at 16:9 / 1K (what the resolver produces for an override of 1:8 / 512; that coercion is proven in `SettingsResolverTests` and, end to end, in the M1 integration step) | the URL path uses `gemini-3-pro-image`; `imageConfig` 16:9 / 1K |
-| `flash25_no_image_size.json` | 2.5 Flash Image at 16:9 (capability with no `imageSize`) | `imageConfig` has `aspectRatio` and no `imageSize` key |
-| `flash_no_civic.json` | `omitCivicIntegrity = true` | 4 categories |
-| `flash_image_modality_only.json` | "Request text alongside images" off | `["IMAGE"]` |
-| `flash_threshold_only_high.json`, `flash_threshold_medium.json`, `flash_threshold_low.json` | one parameterized test over BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE and BLOCK_LOW_AND_ABOVE (BLOCK_NONE is covered by `flash_text_only_16x9_2k.json`) | every category at that exact threshold string |
-| `flash_escaping.json` | prompt with `"`, `\`, newlines, tab, emoji, and U+2028 | round-trips exactly |
-| `custom_model_4k.json` | custom ID `gemini-x-test`, 21:9 / 4K | the URL path uses the custom ID; the values are passed through |
+- **`flash_text_only_16x9_2k.json`**: Baseline text-only prompt verifying single text part serialization, `imageConfig` parameters (16:9, 2K), five safety categories at `BLOCK_NONE`, and `["TEXT", "IMAGE"]` modalities.
+- **`flash_three_images.json`**: Multimodal request verifying three ordered `inlineData` parts preceding the prompt text part.
+- **`flash_image_only.json`**: Single-attachment request with empty prompt text, verifying omission of text parts.
+- **`flash_512_9x16.json`**: Request override testing exact serialization of 9:16 aspect ratio and `"imageSize": "512"`.
+- **`pro_16x9_1k.json`**: Pro model request verifying routing to `gemini-3-pro-image` and parameter coercion to 16:9 / 1K.
+- **`flash25_no_image_size.json`**: Legacy Gemini 2.5 Flash request verifying serialization of `aspectRatio` with complete omission of the `imageSize` key.
+- **`flash_no_civic.json`**: Fallback request body verifying omission of the deprecated `CIVIC_INTEGRITY` safety category.
+- **`flash_image_modality_only.json`**: Request verifying modality restriction to `["IMAGE"]` when text response generation is disabled.
+- **`flash_threshold_only_high.json`, `flash_threshold_medium.json`, `flash_threshold_low.json`**: Parameterized safety threshold tests verifying exact serialization across `BLOCK_ONLY_HIGH`, `BLOCK_MEDIUM_AND_ABOVE`, and `BLOCK_LOW_AND_ABOVE`.
+- **`flash_escaping.json`**: Prompt string sanitization test verifying exact round-trip escaping for quotes, backslashes, line breaks, tabs, emoji, and Unicode line separators.
+- **`custom_model_4k.json`**: Custom model endpoint test verifying path routing to user-defined model identifiers with pass-through aspect and resolution settings.
 
 **Pipe parity fixtures** (`Fixtures/PipeReference/`). These are generated once by `scripts/gen_pipe_fixtures.py` and checked in. The script:
 - imports `doc/openwebui_gemini_filter.py` with stub `pydantic` and `requests` modules injected into `sys.modules` (so it needs no third-party packages);
@@ -280,69 +257,56 @@ Location: `ImageGenTests/Fixtures/Requests/`. Each golden file holds the full re
 
 Run it as `python3 -I scripts/gen_pipe_fixtures.py --pipe doc/openwebui_gemini_filter.py --out ImageGenTests/Fixtures/PipeReference`.
 
-| Case | Pipe input | App-side equivalent (built by hand in Track 1B) | Selection check (M1 integration step) |
-|---|---|---|---|
-| `p1_text_only` | one user message, text | prompt, no images | `.noImage` |
-| `p2_upload_and_text` | user message with one image_url + text | one input whose prepared file **is the same PNG bytes** (the writer is tested directly, without the preprocessor) | `.attachments` |
-| `p3_edit_latest` | user, then an assistant reply with a Markdown data-URI image, then user text | one input: that model image's original bytes | `.latest` picks the model image |
-| `p4_image_only` | user message with an image and no text | one input, empty prompt | `.attachments` |
-| `p5_threshold_only_high` | valve `SAFETY_THRESHOLD=BLOCK_ONLY_HIGH` | threshold `.blockOnlyHigh` | `.noImage` |
-| `p6_latest_is_user_upload` | a user upload, an assistant text-only reply, then user text | one input: the user's upload | `.latest` picks the upload |
-| `p7_latest_of_two_outputs` | user, then an assistant reply with **two** Markdown data-URI images (`tiny_16x9.png`, then `tiny_square.jpg`), then user text | one input: the **second** image (the pipe's `images[-1]`) | `.latest` picks ordinal 1 of the model message |
-| `p8_latest_of_two_uploads` | a user message with **two** uploads, an assistant text-only reply, then user text | one input: the **last** upload | `.latest` picks ordinal 1 of the user message |
+Pipe parity verification scenarios evaluate input selection and wire parity against reference pipeline outputs:
+- **`p1_text_only`**: Single text message; verified against `.noImage` selection reason.
+- **`p2_upload_and_text`**: Text message with single image URL; verified against `.attachments` selection reason with identical image payload bytes.
+- **`p3_edit_latest`**: Conversation turn following assistant image output; verifies `.latest` selection of the model output asset.
+- **`p4_image_only`**: Image attachment without prompt text; verifies `.attachments` selection.
+- **`p5_threshold_only_high`**: Pipeline configuration testing `BLOCK_ONLY_HIGH` safety threshold serialization under `.noImage`.
+- **`p6_latest_is_user_upload`**: Conversation turn following assistant text reply; verifies `.latest` fallback to the preceding user upload asset.
+- **`p7_latest_of_two_outputs`**: Conversation turn following assistant reply containing multiple images; verifies `.latest` selection of the final ordinal image.
+- **`p8_latest_of_two_uploads`**: Conversation turn following user message with multiple attachments; verifies `.latest` selection of the final user attachment.
 
-`PipeParityTests` (Track 1B) asserts: `appBody` with `generationConfig.imageConfig` removed **deep-equals** `pipeBody`, and the app URL equals the pipe URL with `?key=<KEY>` removed. Every other difference fails the test. That is the proof of D§1.2 goal 1, with only the D§2.6 deviations allowed. Track 1B builds each app-side input list by hand, so it doesn't depend on Track 1A. `PipeParitySelectionTests` (M1 integration step, after all tracks merge) builds the equivalent `SelectionInput` history for each case, with ordinals assigned as D§4.3 says, runs `InputSelector.select`, and asserts that the selected image is the one the pipe sent.
+`PipeParityTests` (Track 1B) asserts: `appBody` with `generationConfig.imageConfig` removed deep-equals `pipeBody`, and the app URL equals the pipe URL with `?key=<KEY>` removed. Every other difference fails the test. That is the proof of D§1.2 goal 1, with only the D§2.6 deviations allowed. Track 1B builds each app-side input list by hand, so it doesn't depend on Track 1A. `PipeParitySelectionTests` (M1 integration step, after all tracks merge) builds the equivalent `SelectionInput` history for each case, with ordinals assigned as D§4.3 says, runs `InputSelector.select`, and asserts that the selected image is the one the pipe sent.
 
 ### 2.4 Response fixtures (parsing)
-Location: `ImageGenTests/Fixtures/Responses/` and `Errors/`. The images inside them are small real PNG/JPEG files (16×9 or 8×8 px) so they decode for real.
+Location: `ImageGenTests/Fixtures/Responses/` and `Errors/`. Image payloads contain small valid PNG and JPEG byte streams to verify complete decode pipelines:
 
-| Fixture | Expected `ParsedOutcome` |
-|---|---|
-| `resp_text_image.json` | `.success([.text, .image(png)])`, finish STOP |
-| `resp_image_text.json` | `.success([.image, .text])` (order kept) |
-| `resp_two_images.json` | `.success([.image, .image])` |
-| `resp_adjacent_text.json` | two text parts concatenated verbatim with no separator into one `.text`; only the run's two ends trimmed |
-| `resp_split_sentence.json` | parts `"The lighthouse stands "` + `"on a rocky point."` + an image + `"- item 1\n"` + `"- item 2"` → `.success([.text("The lighthouse stands on a rocky point."), .image, .text("- item 1\n- item 2")])`: text inside each run unchanged, no inserted breaks |
-| `resp_whitespace_run.json` | text `"  "`, then an image → the whitespace-only run dropped: `.success([.image])` |
-| `resp_thought_parts.json` | `thought:true` text and image dropped; the final image kept |
-| `resp_no_mime.json` | image with MIME type defaulted to `image/jpeg` |
-| `resp_bad_image.json` | image part dropped; notice "1 image could not be decoded"; the text kept |
-| `resp_text_only.json` | `.success([.text])` with no image part, finish `STOP` (the UI derives the "No image returned" badge from that, D§2.7 rule 8) |
-| `resp_finish_no_image.json` | text + finish `NO_IMAGE` → `.refused(NO_IMAGE)`; the text is only in `details`, not in any part (D§2.7 rule 6) |
-| `resp_prompt_refused.json` | `promptFeedback.blockReason = PROHIBITED_CONTENT` → `.refused(PROHIBITED_CONTENT)` |
-| `resp_image_safety.json` | candidate with no parts, `IMAGE_SAFETY`, `finishMessage` → `.refused(IMAGE_SAFETY, message)` (the message is stored as `errorMessage`) |
-| `resp_image_other.json` | candidate with no parts, finish `IMAGE_OTHER` → `.refused(IMAGE_OTHER)` |
-| `resp_no_image_no_parts.json` | candidate with no parts, finish `NO_IMAGE` → `.refused(NO_IMAGE)` |
-| `resp_refused_with_text.json` | finish `IMAGE_SAFETY` with a text part and no image → `.refused(IMAGE_SAFETY)`; the text is kept only in `details` |
-| `resp_unknown_finish_reason.json` | no parts, finish `IMAGE_SOMETHING_NEW` (not a known value) → `.refused("IMAGE_SOMETHING_NEW")`, verbatim |
-| `resp_escalation.json` | no parts, finish `ESCALATION` → `.refused(ESCALATION)` |
-| `resp_pup_limited.json` | no parts, finish `PUP_LIMITED_DISABLED` → `.refused(PUP_LIMITED_DISABLED)` (card without Retry) |
-| `resp_empty_candidates.json` | `.empty(nil)` |
-| `resp_no_parts_other.json` | no parts, finish `OTHER` → `.refused(OTHER)` |
-| `resp_no_parts_stop.json` | no parts, finish `STOP` → `.empty(STOP)` |
-| `resp_no_parts_max_tokens.json` | no parts, finish `MAX_TOKENS` → `.empty(MAX_TOKENS)` (not a refusal) |
-| `resp_no_parts_unspecified.json` | no parts, finish `FINISH_REASON_UNSPECIFIED` → `.empty(FINISH_REASON_UNSPECIFIED)` (not a refusal) |
-| `resp_no_parts_no_finish.json` | no parts, no `finishReason` → `.empty(nil)` (not a refusal) |
-| `resp_text_only_max_tokens.json` | text part, finish `MAX_TOKENS` → `.success([.text])`, footnote "Finished: MAX_TOKENS", badge derived (D§2.7 rule 8) |
-| `resp_text_only_unspecified.json` | text part, finish `FINISH_REASON_UNSPECIFIED` → `.success([.text])` with the badge |
-| `resp_text_only_no_finish.json` | text part, no `finishReason` → `.success([.text])` with the badge |
-| `resp_image_with_safety_finish.json` | a decodable image (and a text part) with finish `IMAGE_SAFETY` → `.success([.text, .image])`, footnote "Finished: IMAGE_SAFETY": a surviving image is never a refusal (D§2.7 rule 6) |
-| `resp_bad_image_refused.json` | only an undecodable image part, finish `IMAGE_SAFETY` → `.refused(IMAGE_SAFETY)`, with the "1 image could not be decoded" notice kept |
-| `resp_malformed.txt` | truncated JSON → `.malformed` |
-| `resp_html.html` | captive-portal HTML with status 200 → `.malformed` |
-| `resp_unexpected_shape.json` | valid JSON `{"foo":1}` → `.empty(nil)` (decodes with every field optional; no candidates) |
-| `Errors/err_400_invalid_argument.json` | `.apiError(400, INVALID_ARGUMENT, msg)` |
-| `Errors/err_400_civic.json` | `.apiError(400, INVALID_ARGUMENT)` whose message mentions `HARM_CATEGORY_CIVIC_INTEGRITY` |
-| `Errors/err_400_api_key_invalid.json` | `.apiError(400, INVALID_ARGUMENT)` with reason `API_KEY_INVALID` in `details` |
-| `Errors/err_402.json` | `.apiError(402, ...)` |
-| `Errors/err_403.json` | `.apiError(403, PERMISSION_DENIED)` |
-| `Errors/err_404.json` | `.apiError(404, NOT_FOUND)` |
-| `Errors/err_429_retryinfo.json` | `.apiError(429, RESOURCE_EXHAUSTED)`; `RetryPolicy` reads `retryDelay "30s"` |
-| `Errors/err_500_text.txt` | non-JSON body → message is the first 2 KB of the text |
-| `Errors/err_503.json` | `.apiError(503, UNAVAILABLE)` |
-| `Models/models_page1.json`, `models_page2.json` | paging via `nextPageToken`; Flash present on page 2 |
-| `Models/models_no_flash.json` | triggers the "doesn't list Gemini 3.1 Flash Image" warning |
-| `Models/model_get_custom.json` | single-model GET for custom-ID validation |
+- **Successful Multimodal Responses**:
+  - `resp_text_image.json`: Verifies `.success([.text, .image])` with `STOP` finish reason.
+  - `resp_image_text.json`: Verifies part ordering preservation when image precedes text.
+  - `resp_two_images.json`: Verifies parsing of multiple synthesized image parts.
+  - `resp_adjacent_text.json`: Verifies verbatim concatenation of contiguous text segments into a single `.text` part, trimming only outer boundaries.
+  - `resp_split_sentence.json`: Verifies interleaved text and image parts maintain internal whitespace and line breaks without spurious paragraph breaks.
+  - `resp_whitespace_run.json`: Verifies whitespace-only text parts are discarded when preceding image content.
+  - `resp_thought_parts.json`: Verifies filtering and omission of thought parts (`thought: true`), retaining final synthesized images.
+  - `resp_no_mime.json`: Verifies fallback to `image/jpeg` when the MIME type is unspecified.
+  - `resp_bad_image.json`: Verifies unparseable image parts are omitted with non-blocking diagnostic notices while retaining valid text parts.
+- **Text-Only Responses and Finish Reason Boundaries**:
+  - `resp_text_only.json`, `resp_text_only_max_tokens.json`, `resp_text_only_unspecified.json`, `resp_text_only_no_finish.json`: Verifies text-only model replies parse as `.success([.text])` with appropriate metadata footnotes and UI badge derivation.
+  - `resp_image_with_safety_finish.json`: Verifies candidate responses retaining valid images are evaluated as `.success` regardless of safety finish reasons.
+- **Safety and Policy Refusals**:
+  - `resp_prompt_refused.json`: Verifies prompt-level blocks (`promptFeedback.blockReason = PROHIBITED_CONTENT`) parse as `.refused(PROHIBITED_CONTENT)`.
+  - `resp_image_safety.json`: Verifies candidate safety blocks without image parts parse as `.refused(IMAGE_SAFETY, finishMessage)`.
+  - `resp_finish_no_image.json`, `resp_image_other.json`, `resp_no_image_no_parts.json`, `resp_escalation.json`, `resp_no_parts_other.json`: Verifies various non-standard finish reasons without images evaluate as `.refused`.
+  - `resp_refused_with_text.json`: Verifies text returned alongside refused image requests is captured in inspector details rather than rendered as successful reply parts.
+  - `resp_unknown_finish_reason.json`: Verifies unrecognized finish reasons pass through verbatim.
+  - `resp_pup_limited.json`: Verifies account-level restrictions evaluate as `.refused(PUP_LIMITED_DISABLED)` with retry suppression.
+- **Empty and Malformed Payloads**:
+  - `resp_empty_candidates.json`, `resp_no_parts_stop.json`, `resp_no_parts_max_tokens.json`, `resp_no_parts_unspecified.json`, `resp_no_parts_no_finish.json`: Verifies empty candidate structures evaluate as `.empty`.
+  - `resp_unexpected_shape.json`: Verifies JSON structures missing required Gemini response fields decode as `.empty(nil)`.
+  - `resp_malformed.txt`, `resp_html.html`: Verifies truncated JSON or captive-portal HTML payloads evaluate as `.malformed`.
+- **API Error Payloads**:
+  - `Errors/err_400_invalid_argument.json`: Verifies decoding of HTTP 400 `INVALID_ARGUMENT`.
+  - `Errors/err_400_civic.json`: Verifies extraction of `HARM_CATEGORY_CIVIC_INTEGRITY` rejection messages.
+  - `Errors/err_400_api_key_invalid.json`: Verifies extraction of `API_KEY_INVALID` reason codes.
+  - `Errors/err_402.json`, `Errors/err_403.json`, `Errors/err_404.json`, `Errors/err_503.json`: Verifies extraction of standard API status domains.
+  - `Errors/err_429_retryinfo.json`: Verifies extraction of `google.rpc.RetryInfo` backoff delay intervals.
+  - `Errors/err_500_text.txt`: Verifies non-JSON server error text truncation to 2 KB.
+- **Model Discovery Responses**:
+  - `Models/models_page1.json`, `Models/models_page2.json`: Verifies catalog pagination traversal via `nextPageToken`.
+  - `Models/models_no_flash.json`: Verifies catalog parsing triggering unlisted default warnings.
+  - `Models/model_get_custom.json`: Verifies single-model endpoint validation.
 
 ### 2.5 Live smoke test (opt-in)
 - `LiveSmokeTests` is tagged `.live` and enabled only when `GEMINI_API_KEY` is in the test process environment.
@@ -354,20 +318,18 @@ Location: `ImageGenTests/Fixtures/Responses/` and `Errors/`. The images inside t
 - Executed on demand when the API key is supplied in the environment. It is excluded from the default `scripts/test.sh` suite via execution tags.
 
 ### 2.6 DEBUG harness (`ImageGen/DebugSupport/`, all `#if DEBUG`)
-This makes simulator verification deterministic without a key or network.
+Deterministic testing and simulator execution operate via launch arguments and persisted user defaults without requiring network access or live credentials:
 
-| Option (launch argument or persisted default) | Effect |
-|---|---|
-| `-UITestMockGemini 1` | `AppEnvironment` builds `URLSessionTransport` and `ModelsClient` on an **ephemeral** configuration with `MockGeminiURLProtocol` (retry delays then come from the transport's deferred resume, D§4.6), and uses an `InMemoryKeyStore` holding `"mock-key"` as its `APIKeyStore` (the Keychain isn't touched, not even by onboarding Save or Remove Key; onboarding is skipped) |
-| `-MockScenario <name>` | `success` (default, finish `STOP`), `textOnly` (one text part, finish `STOP`), `twoImages` (finish `STOP`), `promptRefused` (`promptFeedback.blockReason = PROHIBITED_CONTENT`), `imageSafety` (no parts, finish `IMAGE_SAFETY`, `finishMessage` "Mock: image blocked by safety filter"), `imageSafetyThenSuccess` (the first request as `imageSafety`, every later one as `success`), `imageOther` (no parts, finish `IMAGE_OTHER`), `empty` (no candidates), `malformed`, `rateLimitThenSuccess` (429 with RetryInfo 2s, then 200), `badRequest`, `notFound`, `keyRejected`, `civicRejectedOnce`, `lowRes` (returns 1K pixels for any request), `wrongAspect` (returns 1:1) |
-| `-MockLatency <seconds>` | response delay (default 2; use 15 to capture pending cards) |
-| `-SeedDemoData 1` | on launch, if the store is empty, `DemoSeeder` creates the chats below |
-| `-ResetStore 1` | deletes the store, the files and the `Logs/` folder at the very start of `AppEnvironment.init`, through `DebugHooks.resetBeforeLaunchIfRequested(root:)`, **before** the `ActivityLog` is created (M4). It doesn't use Clear Log, so no Log cleared action is written; the run's log file starts with its own Launch Begin (D§4.13). Seeding (`-SeedDemoData`) runs later, on the empty store. To keep a log across runs (M9 task 10), relaunch without this option |
-| `-Scene <name>` | after launch, navigate to `chatList`, `chat:<seedKey>`, `settings`, `settings:models`, `viewer:<seedKey>`, `onboarding` (forces onboarding even with a key) |
-| `-SeedPasteboardImage 1` | writes a generated JPEG to `UIPasteboard.general` at launch (writing never prompts), so `PasteButton` appears |
-| `-ForceNotificationState denied` | shows the denied state in Settings without changing the system |
-| `-SkipNotificationPrompt 1` | defers the first-send notification permission request, so unattended runs aren't blocked by the system alert |
-| `-SeedLargeChat 1` | adds a chat with 60 messages and 40 images, for scrolling and performance checks (M9) |
+- **`-UITestMockGemini 1`**: Configures `AppEnvironment` with `MockGeminiURLProtocol` over an ephemeral transport and substitutes `InMemoryKeyStore` holding `"mock-key"`, bypassing Keychain access and onboarding screens.
+- **`-MockScenario <name>`**: Specifies active mock behavior: `success` (default completion), `textOnly`, `twoImages`, `promptRefused`, `imageSafety`, `imageSafetyThenSuccess`, `imageOther`, `empty`, `malformed`, `rateLimitThenSuccess` (HTTP 429 with 2 s backoff before 200), `badRequest`, `notFound`, `keyRejected`, `civicRejectedOnce`, `lowRes` (1K pixels response), or `wrongAspect` (1:1 response).
+- **`-MockLatency <seconds>`**: Configures mock response latency (default 2 seconds; 15 seconds used to capture in-flight progress cards).
+- **`-SeedDemoData 1`**: Pre-populates the persistence store with representative test conversations upon initial launch.
+- **`-ResetStore 1`**: Wipes local databases, asset directories, and log files prior to initialization via `DebugHooks.resetBeforeLaunchIfRequested(root:)`.
+- **`-Scene <name>`**: Directs navigation immediately post-launch (`chatList`, `chat:<seedKey>`, `settings`, `settings:models`, `viewer:<seedKey>`, `onboarding`).
+- **`-SeedPasteboardImage 1`**: Seeds a generated test image into `UIPasteboard.general` at launch.
+- **`-ForceNotificationState denied`**: Simulates denied system notification permissions in settings interfaces.
+- **`-SkipNotificationPrompt 1`**: Defers notification permission requests during automated runs.
+- **`-SeedLargeChat 1`**: Generates a high-volume conversation (60 messages, 40 images) to evaluate scrolling and layout reflow performance.
 
 - **`MockGeminiURLProtocol`** builds its responses in code:
   - It parses `imageConfig` from the request body and makes a JPEG at the pixel size from `MockImageSizes` for that aspect and size. The image is a gradient whose hue comes from the prompt's hash, with the prompt and the settings drawn as text.
@@ -457,19 +419,21 @@ graph LR
   M9 --> M10[M10 Device install + on-device validation]
 ```
 
-| Milestone | Depends on | Can run in parallel with | Owner folders (to avoid merge conflicts) |
-|---|---|---|---|
-| M0 | none | none (gate) | everything (scaffold), including `Pipeline/SharedTypes.swift`, `Support/ActivityLogTypes.swift`, `Support/Logging.swift`, `App/DebugHooks.swift` (stubs; M4 and M5 fill in its DEBUG branch) and the shared test support files |
-| M1 | M0 | M2, M3 | `Gemini/`, `Pipeline/{InputSelector,GenerationSettingsResolver,RetryPolicy}.swift`, its tests and fixtures |
-| M2 | M0 | M1, M3 | `Persistence/`, `Security/`, `Settings/`, `Support/ActivityLog{,Store,Query,Formatter}.swift`, `ImageGenTests/Support/ActivityLogProbe.swift`, their tests |
-| M3 | M0 | M1, M2 | `Imaging/`, `Support/MarkdownBlocks*.swift`, their tests |
-| M4 | M1, M2, M3 | none | `Networking/`, `Pipeline/` (the rest), `App/`, `DebugSupport/MockGemini*` |
-| M5 | M4 | none (M5 can begin views against `-SeedDemoData` once M2 lands, but it merges after M4) | `Features/ChatList`, `Features/Chat`, `Features/Onboarding`, `Features/Developer`, `DebugSupport/DemoSeeder`, `DebugSupport/LaunchOptions` |
-| M6 | M5 | M7, M8 | `Features/Chat/Composer/*Attachment*`, `AttachmentTray.swift`, `PasteSupport.swift`, `Features/Chat/ChatScreenModel+Attachments.swift`, the Edit and Resend item in `MessageActionsMenu.swift` |
-| M7 | M5 | M6, M8 | `Export/`, `Features/Viewer/`, the item bodies in `Features/Chat/ImageContextMenu.swift` |
-| M8 | M5 | M6, M7 | `Features/Settings/`, `Pipeline/ModelAvailabilityService.swift` UI bindings |
-| M9 | M6, M7, M8 | none | fixes anywhere; no new features |
-| M10 | M9 | none | none (device) |
+### Milestone Execution Sequence and Module Ownership
+
+Milestone dependencies, concurrency allowances, and module directory boundaries structure development to prevent merge conflicts:
+
+- **Milestone M0 (Toolchain, Scaffold, and Shared Vocabulary):** Acts as the foundational gating milestone with no prerequisites. Owns project scaffolding across the repository, establishing `Pipeline/SharedTypes.swift`, `Support/ActivityLogTypes.swift`, `Support/Logging.swift`, `App/DebugHooks.swift` stubs, and shared test infrastructure.
+- **Milestone M1 (API Pipeline Foundation):** Depends on M0. Can execute in parallel with M2 and M3. Owns `Gemini/`, `Pipeline/InputSelector.swift`, `Pipeline/GenerationSettingsResolver.swift`, `Pipeline/RetryPolicy.swift`, along with associated unit test suites and JSON fixtures.
+- **Milestone M2 (Persistence, Security, and Activity Log Storage):** Depends on M0. Can execute in parallel with M1 and M3. Owns `Persistence/`, `Security/`, `Settings/`, `Support/ActivityLog.swift`, `Support/ActivityLogStore.swift`, `Support/ActivityLogQuery.swift`, `Support/ActivityLogFormatter.swift`, and `ImageGenTests/Support/ActivityLogProbe.swift`.
+- **Milestone M3 (Image Processing and UI Primitives):** Depends on M0. Can execute in parallel with M1 and M2. Owns `Imaging/`, `Support/MarkdownBlocks*.swift`, and their respective test suites.
+- **Milestone M4 (Networking, Service Integration, and Transport Parity):** Depends on M1, M2, and M3. Operates sequentially without parallel tracks. Owns `Networking/`, remaining `Pipeline/` components, `App/`, and `DebugSupport/MockGemini*`.
+- **Milestone M5 (Core UI, Chat Screen, and Developer Menu):** Depends on M4. View prototyping against seeded demo data can begin once M2 completes, but final integration merges strictly after M4. Owns `Features/ChatList`, `Features/Chat`, `Features/Onboarding`, `Features/Developer`, `DebugSupport/DemoSeeder`, and `DebugSupport/LaunchOptions`.
+- **Milestone M6 (Attachments, Import, and Multimodal Composer):** Depends on M5. Can execute concurrently with M7 and M8. Owns `Features/Chat/Composer/*Attachment*`, `AttachmentTray.swift`, `PasteSupport.swift`, `Features/Chat/ChatScreenModel+Attachments.swift`, and the Edit and Resend actions in `MessageActionsMenu.swift`.
+- **Milestone M7 (Image Actions, Export, and Full-Screen Viewer):** Depends on M5. Can execute concurrently with M6 and M8. Owns `Export/`, `Features/Viewer/`, and item action implementations in `Features/Chat/ImageContextMenu.swift`.
+- **Milestone M8 (Settings, Model Availability, and Storage Management):** Depends on M5. Can execute concurrently with M6 and M7. Owns `Features/Settings/` and UI data bindings for `Pipeline/ModelAvailabilityService.swift`.
+- **Milestone M9 (Hardening, Accessibility, Performance, and Regression):** Depends on M6, M7, and M8. Operates sequentially across the entire codebase focusing exclusively on quality, accessibility, performance bounds, and stability fixes without introducing new features.
+- **Milestone M10 (Device Installation and On-Device Validation):** Depends on M9. Performs physical hardware validation and on-device execution checks.
 
 **Activity log.** Its vocabulary is in M0, and its storage, facade, queries and formatter are in M2. The first code that logs is M2's Janitor. M1 and M3 are pure and don't log (section 2.8 rule 7). From M4 on, every milestone instruments its own actions under the section 2.8 contract. M5 adds the Developer menu and the log viewer. No new dependency edges are needed: everything that logs depends on M2 already.
 
@@ -1302,34 +1266,32 @@ One small branch, `m1-integration`, adds the tests that need two tracks together
 - `AutoTitleTests`: the 48-character word-boundary cut.
 - `ReplyPresentationTests`: one parameterized test with a row per line of the D§3.4 card table, plus each pending state (preparing, waiting for network, retrying with countdown, retry scheduled without countdown). Each row asserts the SF Symbol, the title, the message line and the buttons exactly. The refusal rows assert the title "Request refused: <reason>" for `IMAGE_SAFETY`, `IMAGE_OTHER`, `PROHIBITED_CONTENT` (prompt-level) and an unrecognized reason (verbatim), no message line, and the buttons `[Retry, Edit, New Chat]` in that order; `PUP_LIMITED_DISABLED` asserts "Request refused: PUP_LIMITED_DISABLED", the note "This API account is limited by Google; retrying won't help." and `[Edit, New Chat]`. With the originating user message deleted, a refusal asserts `[Retry, New Chat]` and `PUP_LIMITED_DISABLED` asserts `[New Chat]` (the D§3.4 "originating user message deleted" rows). The notification body for a refusal is "Request refused: <reason>". A second parameterized test covers the D§3.3 chat-row status: a red dot when the latest request is `failed` or `refused`, none for `succeeded`, `empty`, `cancelled` or `interrupted`, and the activity indicator for in-flight states.
 
-**Simulator verification.** Run `scripts/build.sh`, then capture these with `scripts/run-sim.sh <args>` followed by `scripts/shot.sh M5 <name>`. Use the simulator tool for the taps. Every row lists its **complete** launch arguments; nothing carries over from an earlier row. `$BASE` stands for `-UITestMockGemini 1 -SkipNotificationPrompt 1`, so no row reaches onboarding by accident and the notification permission alert never covers a capture.
+**Simulator verification.** Execute `scripts/build.sh`, then capture verification states using `scripts/run-sim.sh <args>` followed by `scripts/shot.sh M5 <name>`, utilizing the simulator tool for user interactions. Each scenario specifies complete launch arguments independently, where `$BASE` denotes `-UITestMockGemini 1 -SkipNotificationPrompt 1` to isolate screens and suppress permission dialogs:
 
-| Screenshot | Launch args / steps | Must show |
-|---|---|---|
-| `01-onboarding` | `$BASE -ResetStore 1 -Scene onboarding` | "Connect Gemini", a secure field, a "Validate and Save" prominent glass button |
-| `02-chat-list-empty` | `$BASE -ResetStore 1` | "No chats yet" and a New Chat button |
-| `03-chat-list-seeded` | `$BASE -ResetStore 1 -SeedDemoData 1` | 5 rows with titles, snippets and times; thumbnails on `lighthouse`, `uploads` and `refused`, the placeholder glyph on `textonly` and `empty-overrides`; a red dot on "refused" (its latest request failed with 429); the toolbar with the gear leading and the hammer then New Chat trailing |
-| `04-chat-lighthouse` | `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:lighthouse` | the hammer next to the chat menu in the navigation bar; user bubbles right, replies left, the metadata line `3.1 Flash · 16:9 · 2K · 2752×1536`, the "↻ Regenerated" header, the composer with pills `3.1 Flash`, `16:9`, `2K` and the pin chip (turn 1 is pinned by the seed) |
-| `05-aspect-menu` | as 04, then tap the Aspect pill | "Default (16:9)" first; Landscape/Square/Portrait/Extreme sections |
-| `06-resolution-menu` | as 04, then tap the Resolution pill | "Default (2K)" first; 512 px, 1K, 2K, 4K |
-| `07-pro-menus` | `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:empty-overrides`, tap Aspect | no 1:4/4:1/1:8/8:1; accent dots on the overridden pills (9:16, 4K, 3 Pro) |
-| `08-pending` | `$BASE -ResetStore 1 -MockLatency 15`, New Chat, type "a red fox", Send, capture within 5 s | an aspect-shaped shimmer card, "Generating… 0:0x", Cancel; Send has become Stop; no permission alert |
-| `09-success` | continue from 08 and wait for completion | the reply image, metadata line, and the "Editing latest image" chip in the composer, with no ✕ |
-| `10-refused-and-error` | `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:refused` | a "Request refused: IMAGE_SAFETY" card with no message line and exactly the buttons Retry, Edit, New Chat; an "Error 429 RESOURCE_EXHAUSTED" card with Retry, Details (both as in the D§3.4 table) |
-| `11-retrying` | `$BASE -ResetStore 1 -MockScenario rateLimitThenSuccess -MockLatency 1`, New Chat, send "a red fox" | "Retrying in 2 s (attempt 2/3)" (the transport's deferred resume really waits 2 s), then success |
-| `12-lowres-warning` | `$BASE -ResetStore 1 -MockScenario lowRes`, New Chat, send "a red fox" | ⚠︎ "returned 1K" on the metadata line |
-| `13-edit-from-here` | `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:lighthouse`; first tap ✕ on the pin chip and confirm the chip is gone (capture `13a-unpinned`); then long-press the **turn-2** reply image → Edit from here | `13a`: no pin chip; the informational "Editing latest image" chip shows instead. `13`: the context menu with preview, then the "Editing from pinned image" chip whose thumbnail is the turn-2 image |
-| `14-dark` | `xcrun simctl ui $UDID appearance dark`, then the 04 arguments | legible dark rendering |
-| `18-markdown` | `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:textonly` | the reply rendered as Markdown: a heading, a bulleted list and a monospaced code block; the "No image returned" badge |
-| `20-developer-menu` | `$BASE -ResetStore 1 -SeedDemoData 1`, tap the hammer on the chat list | Last Action, Last Error (disabled: the reset log holds no error), Full Log, and Clear Log… in red |
-| `21-log-last-action` | `$BASE -ResetStore 1`, New Chat, send "a red fox", wait for the reply, then hammer (chat screen) › Last Action | the "Last Action" sheet in monospaced lines: `[Send xxxx] Begin: gemini-3.1-flash-image · 16:9 · 2K · safety BLOCK_NONE · modalities TEXT+IMAGE · input none · prompt "a red fox"`; the Prepare request, Attempt 1 and Parse sub-actions indented; `Result: success in … · HTTP 200 · 1 image 2752×1536 JPEG …`; Copy and Share in the toolbar |
-| `22-log-last-error` | `$BASE -ResetStore 1 -MockScenario imageOther`, New Chat, send "a red fox", wait for the card, then hammer › Last Error | the Send with its sub-actions and `Result: refused · IMAGE_OTHER · HTTP 200 in …` |
-| `23-log-full` | `$BASE -ResetStore 1 -MockScenario rateLimitThenSuccess -MockLatency 1`, New Chat, send "a red fox", wait for success, then hammer › Full Log | opened at the bottom, the Send's `Result: success` last; above it Attempt 1 ending `HTTP 429`, the step `auto-retry 1/2 in …: HTTP 429 RESOURCE_EXHAUSTED`, and Attempt 2 ending `HTTP 200`. Scroll to the top for `23a-log-full-top`: the Launch and Reconcile actions first |
-| `24-clear-log` | continue from 23: hammer › Clear Log… (capture the dialog), tap Clear Log, then hammer › Full Log (capture `24b-log-after-clear`) | `24`: the "Clear the activity log?" dialog with a destructive Clear Log and Cancel. `24b`: only the `[Log cleared xxxx]` Begin (stating the size and entries removed) and its `Result: success` |
+- `01-onboarding`: Launch with `$BASE -ResetStore 1 -Scene onboarding`. Displays "Connect Gemini", a secure key input field, and a prominent "Validate and Save" glass button.
+- `02-chat-list-empty`: Launch with `$BASE -ResetStore 1`. Displays the "No chats yet" empty state message alongside a New Chat button.
+- `03-chat-list-seeded`: Launch with `$BASE -ResetStore 1 -SeedDemoData 1`. Displays five chat rows containing titles, message snippets, and timestamps; thumbnails for `lighthouse`, `uploads`, and `refused`; placeholder glyphs for `textonly` and `empty-overrides`; a red status indicator on `refused` reflecting an HTTP 429 error; and a toolbar configured with a leading Settings gear, a trailing Developer hammer, and a New Chat button.
+- `04-chat-lighthouse`: Launch with `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:lighthouse`. Displays the Developer hammer adjacent to the chat menu in the navigation bar, trailing user bubbles, leading model replies, metadata indicating `3.1 Flash · 16:9 · 2K · 2752×1536`, the "↻ Regenerated" header, composer pills for `3.1 Flash`, `16:9`, and `2K`, and the pin chip referencing turn 1.
+- `05-aspect-menu`: From the 04 state, activate the Aspect pill. Displays "Default (16:9)" as the first option followed by Landscape, Square, Portrait, and Extreme sections.
+- `06-resolution-menu`: From the 04 state, activate the Resolution pill. Displays "Default (2K)" as the first option followed by 512 px, 1K, 2K, and 4K options.
+- `07-pro-menus`: Launch with `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:empty-overrides` and activate Aspect. Omits extreme ratios (1:4, 4:1, 1:8, 8:1) and displays accent indicators on overridden pills (9:16, 4K, 3 Pro).
+- `08-pending`: Launch with `$BASE -ResetStore 1 -MockLatency 15`, initiate a new chat, send "a red fox", and capture within 5 seconds. Displays an aspect-shaped shimmer card, "Generating… 0:0x" timer, and Cancel button; Send transitions to Stop, while system permission alerts remain suppressed.
+- `09-success`: Continue from 08 through request completion. Displays the generated reply image, full metadata line, and the composer informational chip "Editing latest image" without a dismiss control.
+- `10-refused-and-error`: Launch with `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:refused`. Displays a "Request refused: IMAGE_SAFETY" card without a message line, offering Retry, Edit, and New Chat buttons; displays an "Error 429 RESOURCE_EXHAUSTED" card offering Retry and Details buttons.
+- `11-retrying`: Launch with `$BASE -ResetStore 1 -MockScenario rateLimitThenSuccess -MockLatency 1`, initiate a new chat, and send "a red fox". Displays "Retrying in 2 s (attempt 2/3)" during deferred transport pause, culminating in successful generation.
+- `12-lowres-warning`: Launch with `$BASE -ResetStore 1 -MockScenario lowRes`, initiate a new chat, and send "a red fox". Displays a warning reading "returned 1K" within the metadata line.
+- `13-edit-from-here`: Launch with `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:lighthouse`. Dismissing the pin chip (`13a-unpinned`) leaves the informational "Editing latest image" chip. Activating "Edit from here" on the turn 2 reply displays the context menu preview and pins turn 2 with an "Editing from pinned image" thumbnail chip (`13`).
+- `14-dark`: Configure dark appearance via `xcrun simctl ui $UDID appearance dark` with 04 launch arguments. Verifies legible contrast and styling across dark interface components.
+- `18-markdown`: Launch with `$BASE -ResetStore 1 -SeedDemoData 1 -Scene chat:textonly`. Displays reply rendered as Markdown with a heading, bulleted list, and monospaced code block, accompanied by a "No image returned" badge.
+- `20-developer-menu`: Launch with `$BASE -ResetStore 1 -SeedDemoData 1` and tap the hammer on the chat list. Displays menu items for Last Action, Last Error (disabled when the reset log contains no error), Full Log, and destructive Clear Log… in red.
+- `21-log-last-action`: Launch with `$BASE -ResetStore 1`, create a new chat, send "a red fox", wait for completion, then select Developer menu > Last Action. Displays monospaced lines detailing Begin parameters (model, aspect, resolution, safety threshold, modalities, input selector, prompt), indented sub-actions for preparation, attempt, and parsing, followed by paired Result stating duration, HTTP 200, and image dimensions, with Copy and Share toolbar items.
+- `22-log-last-error`: Launch with `$BASE -ResetStore 1 -MockScenario imageOther`, send "a red fox", and open Last Error after card renders. Displays the Send action with sub-actions and refusal Result detailing `IMAGE_OTHER` and HTTP status.
+- `23-log-full`: Launch with `$BASE -ResetStore 1 -MockScenario rateLimitThenSuccess -MockLatency 1`, send "a red fox", wait for success, and select Full Log. Displays log scrolled to bottom with final success Result, preceding 429 attempt, retry countdown step, and second attempt; scrolling to the top (`23a-log-full-top`) reveals initial Launch and Reconcile actions.
+- `24-clear-log`: Continuing from 23, open Clear Log… dialog (`24`), confirm deletion, and inspect Full Log (`24b-log-after-clear`). Displays confirmation dialog, followed by a cleared log containing only the `Log cleared` Begin event and success Result.
 
 **Done when**
 - [ ] All unit suites pass. No warnings; lint passes. `scripts/build.sh --release` succeeds.
-- [ ] All 20 screenshots in the table (plus `13a-unpinned`, `23a-log-full-top` and `24b-log-after-clear`) exist in `artifacts/M5/`, and `REVIEW.txt` marks each PASS against the "Must show" column.
+- [ ] All 20 verification screenshots (including `13a-unpinned`, `23a-log-full-top`, and `24b-log-after-clear`) exist in `artifacts/M5/`, and `REVIEW.txt` marks each PASS against the verification requirements.
 - [ ] After the screenshot runs, `grep -c 'mock-key' "$(xcrun simctl get_app_container $UDID $BUNDLE_ID data)/Library/Application Support/ImageGen/Logs/activity.jsonl"` prints 0 (the mock key never reaches the log).
 - [ ] A manual flow in the simulator works (launched with `$BASE -ResetStore 1`): send in a new chat, wait for the success, send "make it night" with no attachment, and the second request's input is the first output. Check with the reply Info sheet, which shows "Input: Edited latest image" and its thumbnail.
 - [ ] A live refusal flow works (launched with `$BASE -ResetStore 1 -MockScenario imageSafetyThenSuccess`): New Chat, send "a red fox"; the reply is the "Request refused: IMAGE_SAFETY" card with only Retry, Edit, New Chat (capture `19-live-refused`). Long-press the reply → Info shows "Message: Mock: image blocked by safety filter" and the Details JSON; the card itself shows neither. Tap Edit: the composer holds "a red fox", the text field is focused, nothing is sent; clear the composer. Tap New Chat: an empty chat opens; Back shows the chat list with a red dot on the refused chat. Reopen it and tap Retry: the same reply card becomes a success with an image (attempt 2) and the red dot is gone. The notification body is covered by `GenerationServiceTests.notificationPostedWhenInactive`.
@@ -1373,18 +1335,16 @@ One small branch, `m1-integration`, adds the tests that need two tracks together
 - `GenerationServiceTests.multipleAttachmentsInOrder` (already exists) and a new `heicUploadSentAsJpeg` (the body's `mimeType` is `image/jpeg`; the original kept on disk is HEIC).
 - Log assertions: `ComposerAttachmentsTests.attachLogsSourceAndPreparation` (3 Photos items: an Attach Begin with `Photos · 3 items · tray 0 · max long edge 2048`, and three Prepare attachment sub-actions, for example `HEIC 4032×3024 2.1 MB` → `success … JPEG 2048×1536 …`; the Attach Result comes after all three children's Results, and no `parent finished first` result is written); `attachPartialFailureEndsFailed` (3 items, one unsupported: an Attach step `import failed: …` gives the reason, no Prepare attachment is begun for it, the Attach ends `failed · 2 of 3 imported and prepared · 1 failed: …`, and `lastError` returns the Attach); `attachCapDropIsNotFailure` (the Files cap logs a step `dropped 2 over the 14-image cap` and the Attach ends `success` with the dropped count); `removeWhilePreparingCancelsChild` (removing a preparing item ends its Prepare attachment `cancelled` and logs a Tray change); `trayReorderLogged` (Move Left logs `img … · position 2 → 1 · tray 3`); `EditAndResendTests.editAndResendLogged` (clones and re-prepares counted in the Result, which follows the re-prepare children; paired).
 
-**Simulator verification.** Unless a row says otherwise, launch with `-UITestMockGemini 1 -SkipNotificationPrompt 1 -ResetStore 1 -SeedDemoData 1 -Scene chat:lighthouse`.
+**Simulator verification.** Verification scenarios default to launch arguments `-UITestMockGemini 1 -SkipNotificationPrompt 1 -ResetStore 1 -SeedDemoData 1 -Scene chat:lighthouse` unless specified otherwise:
 
-| Screenshot | Steps | Must show |
-|---|---|---|
-| `01-plus-menu` | tap + | "Photo Library" and "Files" |
-| `02-photos-picker` | first `simctl addmedia` with `sample.heic` and 2 generated JPEGs, then + › Photo Library | the system picker with ordered multi-select |
-| `03-tray` | pick 3 | 3 tray thumbnails, caption "3 images · x.x MB of 19 MB"; the pin chip dimmed ("Pinned image replaced by attachments") in `lighthouse` |
-| `04-tray-menu` | long-press a tray item | Move Left, Move Right, Remove |
-| `05-sent-grid` | Send | the user bubble with a 2-column grid of 3; the reply follows |
-| `06-paste` | the default arguments plus `-SeedPasteboardImage 1` | the PasteButton is visible; tapping it adds a tray item with no system paste prompt |
-| `07-files-importer` | + › Files | the system document picker (tapping into it is optional) |
-| `08-edit-resend` | long-press an earlier user message → Edit and Resend | the composer filled with that text and the cloned tray items |
+- `01-plus-menu`: Tap the plus button in the composer. Must display actions for "Photo Library" and "Files".
+- `02-photos-picker`: Provision test media using `simctl addmedia` with `sample.heic` and two generated JPEGs, then select Photo Library from the plus menu. Must display the system photo picker supporting ordered multi-selection.
+- `03-tray`: Select three images from the picker. Must display three attachment tray thumbnails, accompanied by size status reading "3 images · x.x MB of 19 MB", with the composer pin chip transitioning to a dimmed state ("Pinned image replaced by attachments").
+- `04-tray-menu`: Perform a long-press gesture on any tray item. Must display contextual operations: Move Left, Move Right, and Remove.
+- `05-sent-grid`: Dispatch message via Send. Must display the user message bubble rendering a 2-column grid of three image thumbnails, followed by the model reply.
+- `06-paste`: Launch with default arguments augmented with `-SeedPasteboardImage 1`. The `PasteButton` must be visible, and activating it must add a tray item without displaying a system pasteboard prompt.
+- `07-files-importer`: Select Files from the plus menu. Must display the system document picker interface.
+- `08-edit-resend`: Long-press a previously sent user message and select Edit and Resend. Must populate the composer with the original prompt text and restore cloned tray items in order.
 
 **Done when**
 - [ ] All unit suites pass. No warnings; lint passes.
@@ -1429,21 +1389,17 @@ One small branch, `m1-integration`, adds the tests that need two tracks together
 - `ZoomMathTests`: fit scale, maximum scale (the larger of 1:1×2 and 4× fit), and the double-tap target rect.
 - Log assertions in `ExportTests`: `saveToPhotosLogged` (with the fake library: the Begin has `img …`, the MIME type, bytes and pixel size of the original; the Result is `success` with `authorization authorized`; a denied fake gives `failed` with `authorization denied`); `saveToFilesLogged` (saved with the file name; cancelled gives `cancelled`); `copyLogged` (bytes and type equal to the original); `shareLogged` (calling the Share button's action begins Share with the image's MIME type and bytes; driving `ActivityShareSheet`'s `onComplete` with `(.airDrop, true, nil)` ends it `success · via com.apple.UIKit.activity.AirDrop`, with `(nil, false, nil)` ends it `cancelled`, and a second completion call writes nothing); `shareProviderCarriesOriginalType` (the item provider's registered type identifiers are exactly the original's UTType); each paired.
 
-**Simulator verification**
-- Before starting: `xcrun simctl privacy $UDID grant photos-add com.andrewpurtell.imagegen`.
-- Unless a row says otherwise, launch with `-UITestMockGemini 1 -SkipNotificationPrompt 1 -ResetStore 1 -SeedDemoData 1 -Scene chat:lighthouse`.
+**Simulator verification.** Grant Photos add permission prior to testing via `xcrun simctl privacy $UDID grant photos-add com.andrewpurtell.imagegen`. Scenarios execute with `-UITestMockGemini 1 -SkipNotificationPrompt 1 -ResetStore 1 -SeedDemoData 1 -Scene chat:lighthouse` unless specified otherwise:
 
-| Screenshot | Steps | Must show |
-|---|---|---|
-| `01-image-menu` | long-press a reply image | Edit from here, Save to Photos, Save to Files…, Share…, Copy, View |
-| `02-saved-toast` | Save to Photos | the "Saved to Photos" toast |
-| `03-photos-app` | open the Photos app in the simulator (`xcrun simctl launch $UDID com.apple.mobileslideshow`) | the saved image appears; Info shows JPEG at 2752×1536 |
-| `04-files-exporter` | Save to Files… | the exporter with the filename `ImageGen-YYYY-MM-DD-HHMM-xxxxxx.jpg` |
-| `05-share-sheet` | Share… | the share sheet with a preview |
-| `06-viewer` | View | the full-screen image with the glass toolbar |
-| `07-viewer-zoomed` | double-tap | zoomed in at the tap point |
-| `08-viewer-landscape` | rotate (simulator tool or `Device › Rotate`) | fits in landscape |
-| `09-viewer-paging` | `uploads` seed, View on image 1, swipe | page 2 of 3 |
+- `01-image-menu`: Perform a long-press gesture on a model reply image. Must display contextual menu items: Edit from here, Save to Photos, Save to Files…, Share…, Copy, and View.
+- `02-saved-toast`: Select Save to Photos. Must present the "Saved to Photos" confirmation toast overlay.
+- `03-photos-app`: Launch the Photos application via `xcrun simctl launch $UDID com.apple.mobileslideshow`. The saved asset must appear in the library with metadata matching 2752×1536 JPEG.
+- `04-files-exporter`: Select Save to Files… from the context menu. Must present the system document exporter displaying the structured filename format `ImageGen-YYYY-MM-DD-HHMM-xxxxxx.jpg`.
+- `05-share-sheet`: Select Share… from the context menu. Must display the system share sheet complete with image preview thumbnail.
+- `06-viewer`: Select View from the context menu. Must present the full-screen image viewer with the liquid glass toolbar.
+- `07-viewer-zoomed`: Double-tap within the image viewer. Must zoom into the image centered at the tap coordinate.
+- `08-viewer-landscape`: Trigger device orientation change to landscape. Image presentation must fit smoothly within landscape bounds.
+- `09-viewer-paging`: Launch with the `uploads` seed, invoke View on the first image, and swipe horizontally. Must paginate to page 2 of 3.
 
 - **Byte check in the simulator.**
   1. `APP=$(xcrun simctl get_app_container $UDID $BUNDLE_ID data)`.
@@ -1498,18 +1454,16 @@ One small branch, `m1-integration`, adds the tests that need two tracks together
   - `deleteAllChatsLogged` (chat and image counts, MB freed; a fake `FileStore` that fails one removal makes the action end `failed` with the counts).
 - `ModelAvailabilityServiceTests`: `refreshesAtMostEvery24h` (injectable clock; the foreground check logs a `system` Models refresh, pull to refresh a `user` one); `unlistedModelLeftOutOfMenuButFlashSelectable`; `uncheckedModelsOfferedUntilFirstCheck` (before the first check every enabled model is offered except the `.legacyIfListed` preview alias, which is offered only once `models.list` lists it).
 
-**Simulator verification.** Unless a row says otherwise, launch with `-UITestMockGemini 1 -SkipNotificationPrompt 1 -ResetStore 1 -SeedDemoData 1` plus the row's arguments.
+**Simulator verification.** Verification scenarios execute with baseline launch arguments `-UITestMockGemini 1 -SkipNotificationPrompt 1 -ResetStore 1 -SeedDemoData 1` combined with scenario-specific arguments:
 
-| Screenshot | Steps | Must show |
-|---|---|---|
-| `01-settings-top` | `-Scene settings` | the API Key "Saved (…-key)" (mock), Models, Generation defaults |
-| `02-models` | `-Scene settings:models` | Flash fixed; every other catalog model's toggle on (3 Pro, 2.1, Flash Lite, 2.5 Flash, 3 Pro preview); Flash Lite, 2.5 Flash and 3 Pro preview labeled "Not listed for this key" (the mock list); "Last checked" |
-| `03-generation-defaults` | scroll | Aspect ratio **16:9**, Resolution **2K**, Safety "Block none", and the footnote |
-| `04-defaults-changed` | set 1:1 and 1K, then open a new chat and open the Aspect and Resolution menus | the pills show `1:1` and `1K` with no override dot; the menus' first items read "Default (1:1)" and "Default (1K)" |
-| `05-uploads-advanced` | scroll | 2048 selected; both Advanced toggles ("Request text alongside images" on, unless M9 task 8 has flipped the default) |
-| `05b-max-edge-4096` | select 4096; in a new chat attach **one** 8064×6048 image (made with `xcrun swift scripts/gen_image_fixtures.swift --large build/large_8064x6048.jpg` and added with `simctl addmedia`; a single image stays under 19 MB, so the budget shrink doesn't hide the setting), send, open the reply Info sheet | the input listed as `image/jpeg` with a 4096 px long edge; then set 2048 back |
-| `06-storage` | scroll | the sizes and the destructive buttons |
-| `07-notifications-denied` | `-ForceNotificationState denied` | the denied status with an Open Settings button |
+- `01-settings-top`: Launch with `-Scene settings`. Displays the API Key status as "Saved (…-key)" (mock mode), followed by navigation links to Models and Generation defaults.
+- `02-models`: Launch with `-Scene settings:models`. Gemini 3.1 Flash Image displays as the fixed non-toggleable default. Catalog toggles for Gemini 3 Pro, 2.1, Flash Lite, 2.5 Flash, and the 3 Pro preview alias default to enabled. Unlisted models (Flash Lite, 2.5 Flash, 3 Pro preview) display the "Not listed for this key" status label, accompanied by the "Last checked" timestamp.
+- `03-generation-defaults`: Scroll within settings. Displays default Aspect ratio set to 16:9, Resolution set to 2K, Safety threshold set to "Block none", and explanatory footnotes.
+- `04-defaults-changed`: Update global defaults to 1:1 aspect ratio and 1K resolution, open a new chat, and inspect the Aspect and Resolution menus. Composer pills display `1:1` and `1K` without override accent indicators; the leading menu items reflect "Default (1:1)" and "Default (1K)".
+- `05-uploads-advanced`: Scroll to upload settings. Displays 2048 px selected for max long edge, with both Advanced toggles visible (including "Request text alongside images" enabled by default).
+- `05b-max-edge-4096`: Select 4096 px max long edge. In a new chat, attach an 8064×6048 image generated via test fixture scripts and provisioned via `simctl addmedia`. Send the message and verify the reply Info sheet records the input as `image/jpeg` with a 4096 px long edge, then restore the setting to 2048 px.
+- `06-storage`: Scroll to storage settings. Displays local storage disk usage broken down by category, accompanied by destructive wipe actions.
+- `07-notifications-denied`: Launch with `-ForceNotificationState denied`. Displays notification status as denied alongside an Open Settings action button.
 
 **Done when**
 - [ ] All unit suites pass. No warnings; lint passes.
@@ -1600,43 +1554,41 @@ Notes:
 - Release builds exclude `DebugSupport/`.
 
 ### Manual on-device test script
-Record each result in `artifacts/M10/DEVICE_RESULTS.txt` (`D<n>: PASS|FAIL notes`). Where a screenshot is useful, the user takes it on the phone (side + volume up).
+Record each result in `artifacts/M10/DEVICE_RESULTS.txt` (`D<n>: PASS|FAIL notes`). Where a screenshot is useful, capture on the device:
 
-| # | Area | Steps | Expected |
-|---|---|---|---|
-| D1 | Install | Install as above, then launch | Onboarding "Connect Gemini" |
-| D2 | Key | The user pastes their key and taps Validate and Save | Saved; chat list; Settings shows "Saved (…last4)". No Flash warning. |
-| D3 | Defaults 16:9 / 2K | New chat, "a lighthouse at dusk, cinematic", Send | Reply in about 10–60 s; metadata `3.1 Flash · 16:9 · 2K · 2752×1536` (or within the 2K class); **no ⚠︎**. If ⚠︎ "returned 1K" appears while text is on (and M9 task 8 didn't already settle R3), turn off Advanced › "Request text alongside images", send the same prompt again (Regenerate would reuse the recorded modality), and record both sizes. If the cap is confirmed, apply the M9 task 8 flip and reinstall. |
-| D4 | Per-chat override | Pills → 9:16 and 4K, then send "same scene, vertical" | Portrait output, metadata `9:16 · 4K`, about 3072×5504 |
-| D5 | Global defaults | Settings: 1:1 / 1K. New chat; send | Pills show 1:1 / 1K; output about 1024×1024. Then **restore 16:9 / 2K**. |
-| D6 | Edit latest | In the D3 chat, send "make it night" with no attachment | The caption "Edited latest image"; the output is the night version of the D3 image |
-| D7 | Edit from here | Long-press the first image → Edit from here; send "add a boat" | The chip appears and then clears after the send; the boat is added to the **first** image |
-| D8 | Regenerate reproduces | Change the pills to 1:1, then Regenerate the D3 reply | The new reply records `16:9 · 2K`, and the earlier reply is kept |
-| D9 | Multi-attach + HEIC | + › Photo Library, pick 2 iPhone camera photos (HEIC, 48 MP if available) and 1 screenshot | The tray shows 3 items, size under 19 MB; the send succeeds; the Info sheet shows inputs as `image/jpeg` at 2048 px long edge |
-| D9b | Max long edge setting | Settings › Uploads › 4096. New chat; attach **one** camera photo; send. Then set 2048 back | The Info sheet shows the input as `image/jpeg` at a 4096 px long edge (a single photo stays under 19 MB, so no shrinking hides the setting) |
-| D10 | Files import | + › Files, pick an image from iCloud Drive or On My iPhone | It's added to the tray and sent |
-| D11 | Paste | In Photos, Copy a photo; return to the app | The PasteButton appears; tapping it adds the image **without** the "Allow Paste" prompt |
-| D12 | Background, lock | Request 4K, then lock the phone right away | Within about 2 min, a local notification "Image ready" on the lock screen; tapping it opens the chat with the result |
-| D12b | Background, lock during preparation | Settings › Uploads › 4096. Attach 5 camera photos (enough that the body needs budget shrinking), Send, and lock the phone **immediately** | The request still goes out while locked (the background-task assertion covers preparation) and the notification arrives; it doesn't wait for the app to be reopened. Then set 2048 back |
-| D13 | Background, app switch | Send, switch to another app for 2 min | Notification; result present on return |
-| D13b | App switch during preparation | As D12b, but switch to another app immediately instead of locking | Same as D12b |
-| D14 | Foreground, no banner | Send and stay in the chat | No banner; a success haptic |
-| D15 | Force-quit | Send at 4K, then swipe the app away in the app switcher right away; relaunch after 1 min | The card reads "Interrupted…"; Retry succeeds |
-| D16 | Offline | Airplane mode on; send; stay in the chat for 30 s; airplane mode off | "Waiting for network" (shown in the foreground from `ConnectivityMonitor`), then it completes by itself |
-| D17 | Save to Photos | Long-press the D3 image → Save to Photos; grant Add Only | Toast; in Photos, Info (ⓘ) shows the **same type, pixel size and file size** as the app's Info sheet for that image (the API may return JPEG or PNG; either passes as long as they match) |
-| D18 | Save to Files + bytes | Save to Files → On My iPhone. On the Mac: `xcrun devicectl device copy from --device $DEVICE_UDID --domain-type appDataContainer --domain-identifier com.andrewpurtell.imagegen --source "Library/Application Support/ImageGen/Images" --destination /tmp/ig-images`, then AirDrop the exported file to the Mac and compare `shasum -a 256` | Hashes equal |
-| D19 | Share, Copy | Share → Messages (or AirDrop to the Mac); Copy → paste into Notes | Full-resolution image is received or pasted |
-| D20 | Viewer | View; pinch; double-tap; rotate; swipe down | Smooth zoom; landscape fit; dismisses |
-| D21 | Markdown | Ask "describe this image in a bulleted list" on an existing image | Bulleted Markdown text shows with the image (or as text only, with the "No image returned" badge) |
-| D22 | Model switch | Open the Model pill and note the list (compare with Settings › Models labels); pick 3 Pro; check the Aspect menu; send | The menu lists every catalog model the key can use (those "Available", plus Flash) and none labeled "Not listed for this key"; with 3 Pro, no extreme ratios and no 512; the reply metadata shows `3 Pro` |
-| D23 | Bad key | Settings › Replace Key with a deliberately wrong value; Validate | "Key rejected", not saved; the original key remains |
-| D24 | Message actions | Copy Prompt; Edit and Resend; Delete a user message; Delete a reply | Each behaves as in D§3.6 |
-| D25 | Chats | Rename, delete a chat (the confirmation shows the image count); relaunch the app | The list persists; deleted data is gone (Settings › Storage shrinks) |
-| D26 | Memory | Optional: Xcode › Debug Navigator memory during D9 with a 48 MP photo | Peak under 300 MB; no jetsam |
-| D27 | Dark mode and Dynamic Type | System dark mode plus the largest text size | The layout stays usable |
-| D28 | Developer log after a background completion | Right after D12 (open the chat from the notification), tap the hammer › Last Action | The D12 Send: its Begin with `4K`, the other settings and the full prompt; the Prepare request, Attempt and Parse sub-actions; a step that the result arrived while the app was in the background; the notification step "Image ready"; `Result: success … HTTP 200 · 1 image …`. (This relies on Last Action skipping system actions, as the user confirmed in D§11 Q5.) |
-| D29 | Developer log after a failure | After D15 (force-quit) and again after D23 (bad key), tap the hammer › Last Error | D15: the Send ending `Result: interrupted`, with the force-quit cancel reason or "the app was closed before this finished". D23: Save API key ending `failed`, with Validate key `HTTP 400` and `API_KEY_INVALID`; no part of the key is shown |
-| D30 | Share and clear the log | Hammer › Full Log › Share, AirDrop the `.txt` to the Mac; then hammer › Clear Log… › Clear Log, then Full Log | On the Mac, `grep -c AIza ImageGen-log-*.txt` prints 0 (Gemini keys start with `AIza`), and the file is the same text as the view. After clearing (with nothing running), Full Log holds only the Log cleared action |
+- **D1 (Installation):** Install application via device installation script and launch. Confirms presentation of the onboarding "Connect Gemini" interface.
+- **D2 (API Key Configuration):** Input user API key and trigger Validate and Save. Confirms key saved, navigation to chat list, Settings showing masked key "Saved (…last4)", and absence of Flash fallback warning.
+- **D3 (Default Aspect Ratio and Resolution Parity):** In a new chat, send "a lighthouse at dusk, cinematic". Confirms reply generated within 10–60 seconds, metadata reading `3.1 Flash · 16:9 · 2K · 2752×1536` without resolution warnings. If a 1K fallback warning appears under dual text and image modalities, disable "Request text alongside images" in Advanced Settings and verify full resolution.
+- **D4 (Per-Chat Override):** Adjust composer pills to 9:16 aspect ratio and 4K resolution, then send "same scene, vertical". Confirms portrait output with metadata `9:16 · 4K` at approximately 3072×5504 pixels.
+- **D5 (Global Settings Defaults):** Set global defaults to 1:1 and 1K in Settings, initiate a new chat, and send prompt. Confirms composer pills display 1:1 and 1K, output rendered at 1024×1024, followed by restoring 16:9 and 2K defaults.
+- **D6 (Edit Latest Reference Pipeline):** Within D3 chat, send "make it night" without attachments. Confirms informational chip and caption indicate "Edited latest image", with output derived directly from the D3 image.
+- **D7 (Edit From Here Pinning):** Long-press the initial turn image, select "Edit from here", and send "add a boat". Confirms pin chip activates, clears upon transmission, and applies edits directly to the pinned image.
+- **D8 (Regeneration Settings Reproduction):** Change composer aspect pill to 1:1, then select Regenerate on the D3 reply. Confirms the regenerated reply preserves original `16:9 · 2K` settings alongside previous output.
+- **D9 (Multiple Attachments and HEIC Ingestion):** Attach two iPhone camera HEIC photos and one screenshot via Photo Library. Confirms attachment tray displays three items under the 19 MB total payload limit, send succeeds, and request inputs are recorded as `image/jpeg` at 2048 px max edge.
+- **D9b (Configurable Maximum Long Edge):** Configure Uploads max long edge to 4096 px, attach a camera photo, and send. Confirms input recorded as `image/jpeg` at 4096 px long edge, followed by resetting to 2048 px.
+- **D10 (Files Document Importer):** Attach an image via Files picker from local or iCloud storage. Confirms staged attachment joins tray and sends successfully.
+- **D11 (System Pasteboard Ingestion):** Copy a photo in Photos and switch to the application. Confirms `PasteButton` displays and ingests image into attachment tray without triggering a system security alert.
+- **D12 (Background Processing Under Device Lock):** Request a 4K generation and lock the device immediately. Confirms local notification "Image ready" arrives on the lock screen within two minutes, navigating directly to the completed chat turn upon activation.
+- **D12b (Background Processing During Attachment Preparation):** With max edge set to 4096 px, attach five camera photos, send, and lock device immediately. Confirms background assertion sustains upload preparation and transmission to completion while locked.
+- **D13 (Background Processing Under Application Switch):** Send prompt and transition to another application for two minutes. Confirms local notification fires and result is present upon returning to foreground.
+- **D13b (Application Switch During Attachment Preparation):** Attach multiple images, send, and transition immediately to another application. Confirms preparation assertion completes processing and notification fires.
+- **D14 (Foreground Notification Suppression):** Send generation prompt while remaining active in chat. Confirms system notification banner is suppressed while haptic feedback acknowledges completion.
+- **D15 (Process Termination and Reconciliation):** Dispatch 4K request, terminate application immediately via app switcher, and relaunch after one minute. Confirms card renders "Interrupted…" status and user-triggered Retry recovers generation.
+- **D16 (Offline Queuing and Reconnection):** Enable Airplane mode, dispatch message, hold in chat for 30 seconds, then disable Airplane mode. Confirms interface displays "Waiting for network" until connectivity restores and transmission succeeds.
+- **D17 (Photos Library Export Fidelity):** Long-press generated image, select Save to Photos, and grant Add Only permission. Confirms toast confirmation and verifies saved asset in Photos matches original MIME type, pixel dimensions, and file byte size.
+- **D18 (Files Export Byte Identical Verification):** Export image to Files on device, extract stored sandbox asset via `devicectl`, and verify SHA-256 hash equivalence against exported file.
+- **D19 (Sharing and System Clipboard):** Trigger Share to Messages or AirDrop, and Copy to Notes. Confirms full-resolution image data transfers without transcoding.
+- **D20 (Interactive Full-Screen Viewer):** Open image in viewer, perform pan, pinch, double-tap zoom, rotation, and swipe dismissal. Confirms smooth scaling, landscape container fit, and gesture handling.
+- **D21 (Multimodal Markdown Output):** Request textual description on an existing image. Confirms model response renders formatted Markdown elements, or presents "No image returned" badge if text only.
+- **D22 (Model Switching Parity):** Open model selector, switch to Gemini 3 Pro, verify unsupported extreme aspect ratios and 512 px resolution are hidden, and execute generation. Confirms reply metadata indicates Gemini 3 Pro.
+- **D23 (Credential Rejection Handling):** Enter invalid API key in Settings and execute Validate. Confirms key is rejected, unsaved, and prior active key remains preserved.
+- **D24 (Message Action Lifecycle):** Exercise Copy Prompt, Edit and Resend, Delete user message, and Delete reply. Confirms UI and persistence states match design specifications.
+- **D25 (Chat Session Management):** Rename and delete chats, verifying modal confirmation details image counts, with disk storage reflecting reclaimed space.
+- **D26 (Memory Footprint Validation):** Monitor resident memory in Debug Navigator during high-resolution multi-attachment workflows. Confirms peak memory remains under 300 MB without jetsam events.
+- **D27 (Accessibility and Dark Mode Compliance):** Verify layout stability and readability under dark mode and accessibility Dynamic Type sizes.
+- **D28 (Activity Log Background Traceability):** Open Developer menu > Last Action immediately following background completion (D12). Confirms Begin line details 4K parameters, nested preparation and attempt sub-actions, background arrival event, local notification step, and success Result.
+- **D29 (Activity Log Error Inspection):** Inspect Developer menu > Last Error following forced termination (D15) and invalid credentials (D23). Confirms interrupted and failed states record appropriate diagnostic contexts while completely omitting API key material.
+- **D30 (Activity Log Export and Clearing):** Share log as plaintext file and clear log history via Developer menu. Confirms zero occurrences of API keys in exported text and verifies cleared log resets to initial clear event.
 
 **Done when**
 - [x] D1–D25, including D9b, D12b and D13b, and D28–D30 are PASS in `DEVICE_RESULTS.txt` (D26 and D27 are recommended). Any FAIL has a filed fix, or is accepted by the user.
@@ -1646,69 +1598,71 @@ Record each result in `artifacts/M10/DEVICE_RESULTS.txt` (`D<n>: PASS|FAIL notes
 
 ## 4. Risks and mitigations (plan-level; product risks are in D§11)
 
-| ID | Risk | Likelihood | Impact | Mitigation | Milestone |
-|---|---|---|---|---|---|
-| P1 | The toolchain isn't ready: the license isn't accepted, there's no simulator runtime, XcodeGen is missing, and `sudo` is needed | certain | blocks everything | `doctor.sh`; M0 step 0 lists the user commands; `env.sh` uses `DEVELOPER_DIR`, so `xcode-select` is optional | M0 |
-| P2 | Provisioning profile expiry | low | the app stops launching | Resolved: the user has a paid Apple Developer Program team, so profiles last a year (D§11 R9); free-team 7-day profiles don't apply. `device-install.sh` reinstalls in one command if ever needed; data persists | M10 |
-| P3 | `MockURLProtocol` can't attach to background sessions | certain | background code untested | The transport takes the configuration as a parameter (D§9); a production config unit test; background behavior proven on the device (D12–D16) | M4, M10 |
-| P4 | Swift 6 strictness with `NSObject` delegates, SwiftData and `@ModelActor` | high | compile errors or warnings | Default isolation set explicitly to nonisolated; models `nonisolated`; snapshots across actors; `Mutex` state; `@unchecked Sendable` only with a justification | M2, M4 |
-| P5 | Swift Testing parallel runs sharing the global `MockURLProtocol` state | high | flaky tests | Per-test token header and a `Mutex` registry; `.serialized` as a fallback | M1, M4 |
-| P6 | The test host app starts the background session, Reconciler or Janitor during unit tests | medium | flaky tests, side effects | `AppEnvironment` detects the test host (section 2.2) | M0, M4 |
-| P7 | `PasteButton` with `Data` doesn't match image pasteboard types | medium | paste silently does nothing | Custom `PastedImage: Transferable` with `.image`, `.png`, `.jpeg` and `.heic` representations; a unit test; device test D11 | M6 |
-| P8 | iOS 26 API names (`safeAreaBar`, `glassEffect`, `GlassEffectContainer`, `@concurrent`) differ in the installed SDK | low–medium | build breaks | M0 adds `Support/PlatformProbe.swift`, which uses each API once in an unused view or function, so a naming mismatch fails the M0 build rather than M5's; adjust DESIGN if a name differs | M0, M5 |
-| P9 | The simulator can't exercise real PhotosPicker HEIC, Files or Photos flows fully | medium | gaps in verification | `simctl addmedia` and `privacy grant`; unit tests on helpers; device tests D9–D19 | M6, M7, M10 |
-| P10 | The `.fileExporter` and Files byte check in the simulator is awkward to locate | medium | unverified "original bytes" | The `ImageFile` export unit test with SHA; a simulator `find`; device D18 | M7 |
-| P11 | Concurrent development tracks editing the same chat files | medium | merge conflicts | The ownership table in section 3; menus created with `MARK` sections; merge order | M6–M8 |
-| P12 | Large images make the simulator slow or tests time out (48 MP, 30 MB JSON) | medium | slow CI | Generate the large fixtures once per suite into a temporary cache; tag them `.io`; time limits `.timeLimit(.minutes(1))` | M1, M3 |
-| P13 | Keychain error -34018 in a simulator test host without signing | low | Keychain tests fail | Simulator ad-hoc signing (`CODE_SIGN_IDENTITY[sdk=iphonesimulator*] = -`); the tests are hosted by the app | M2 |
-| P14 | Live API costs during the smoke and device tests | low | spend | The smoke test uses 512 and 2K only; the device script has about 15 generations, 3 at 4K | M9, M10 |
-| P15 | Capturing a screenshot that contains the API key | low | key leak | The key field is a `SecureField`; Settings shows only the last 4; mock mode uses `"mock-key"`; automated runs never input the real key | all |
-| P16 | Notification permission prompt blocks unattended simulator runs | medium | blocked automation | Permission is asked on first send; in mock mode, `-SkipNotificationPrompt 1` (DEBUG) defers it; every M5–M8 screenshot row passes it | M5 |
-| P17 | A Release-only compile error (an unguarded reference to DEBUG-only code) surfaces only at the M10 device install | medium | late, on-device breakage | All DEBUG access goes through `App/DebugHooks.swift` (lint rule); `scripts/build.sh --release` for the simulator is in the M0, M4, M5 and M9 "Done when" lists | M0–M9 |
-| P18 | Background behavior that unit tests can't show (relaunch delivery, discretionary retries, force-quit cancel reasons) | medium | results late or mislabeled on the device | One ordered event stream, append-only accumulation, persisted retry counters and cancel-reason mapping, each unit-tested with fakes; device tests D12–D16 (with D12b, D13b). A background-created retry can only be forced on the device with a real 429, so it's noted as untested there unless one occurs | M4, M10 |
-| P19 | Later milestones skip instrumentation, or log a Begin with no Result on an error path | medium | the Developer log misses steps exactly when debugging needs them | Section 2.8 contract; each milestone's log assertions with `assertPaired()`; the store's pairing backstop and launch-time closing of orphans; the M9 task 10 coverage review and code review item | M2, M4–M9 |
+## 4. Risks and mitigations
+
+The engineering plan identifies key technical and execution risks across development milestones, establishing explicit architectural mitigations:
+
+- **P1: Toolchain and Environment Readiness (Milestone M0):** Unaccepted Xcode licenses, missing iOS simulator runtimes, or uninstalled XcodeGen binaries block initial compilation. Mitigation relies on `scripts/doctor.sh` diagnosing pre-conditions and providing manual setup instructions, while `scripts/env.sh` targets `DEVELOPER_DIR` directly without requiring privileged `xcode-select` overrides.
+- **P2: Provisioning Profile Expiration (Milestone M10):** Expired development profiles can prevent device launching. Mitigated by using an active Apple Developer Program team with standard one-year provisioning profiles. In addition, `scripts/device-install.sh` enables direct single-command re-installation while preserving persistent container data.
+- **P3: Background URLSession Protocol Interception (Milestones M4, M10):** Foundation `URLProtocol` subclasses cannot intercept system background `URLSession` instances directly. Mitigated by parameterizing session configurations across transport components to support mock injection during testing, validating production configuration semantics in unit suites, and confirming background lifecycle behaviors on physical hardware (scenarios D12–D16).
+- **P4: Swift 6 Concurrency Strictness Across Legacy Frameworks (Milestones M2, M4):** Concurrency isolation conflicts with `NSObject` delegate protocols, SwiftData models, and `@ModelActor` boundaries risk compiler failures. Mitigated by declaring non-isolated default boundaries, keeping persistence models nonisolated, transferring immutable snapshots across actors, protecting shared mutable state with `Mutex`, and restricting `@unchecked Sendable` strictly to audited boundaries.
+- **P5: Parallel Test Execution State Contention (Milestones M1, M4):** Concurrent test execution contending on shared `MockURLProtocol` handlers produces flaky suites. Mitigated by tagging HTTP requests with unique per-test token headers registered in a thread-safe `Mutex` registry, with `.serialized` execution available as a fallback.
+- **P6: Test Host Process Lifecycle Side Effects (Milestones M0, M4):** Unit tests running inside the application host can inadvertently launch background sessions, database reconcilers, or cleanup janitors. Mitigated by `AppEnvironment` detecting test-runner execution environments early during launch and disabling background tasks.
+- **P7: System Pasteboard Type Incompatibilities (Milestone M6):** Standard `PasteButton` bindings expecting generic data may fail to match varied image pasteboard representations. Mitigated by defining a custom `Transferable` conformance (`PastedImage`) supporting explicit uniform type representations for JPEG, PNG, and HEIC, verified through unit tests and device scenario D11.
+- **P8: Operating System API Name Drift (Milestones M0, M5):** Pre-release platform SDKs risk introducing breaking naming discrepancies in glass effect and concurrency APIs. Mitigated by `Support/PlatformProbe.swift` validating each platform API symbol during M0 compilation, catching discrepancies prior to feature development.
+- **P9: Simulator Media Interaction Limitations (Milestones M6, M7, M10):** Simulator limitations handling photo library assets, security-scoped files, and camera formats risk verification gaps. Mitigated by automating media injection via `simctl addmedia`, granting privacy entitlements via command-line flags, and validating edge cases on physical hardware.
+- **P10: Document Exporter File Inspection in Simulator (Milestone M7):** Locating files exported through system picker sheets within the simulator sandbox can be cumbersome. Mitigated by unit test verification asserting SHA-256 byte parity and on-device test scenario D18 verifying exact file hashes.
+- **P11: Merge Contention Across Concurrent Tracks (Milestones M6–M8):** Parallel feature development on shared UI files creates source conflicts. Mitigated by strict subsystem folder ownership, modular menu extensions demarcated by clear source comments, and sequential integration merging.
+- **P12: High-Resolution Test Fixture Performance Overhead (Milestones M1, M3):** Parsing 48 MP images and massive JSON payloads slows local automated test cycles. Mitigated by generating large fixtures once per test session into a local cache directory, gating heavy tests behind `.io` tags, and applying explicit execution timeouts.
+- **P13: Simulator Keychain Security Entitlements (Milestone M2):** Unsigned test host processes encountering Keychain error -34018 fail credential persistence tests. Mitigated by configuring ad-hoc simulator signing (`CODE_SIGN_IDENTITY[sdk=iphonesimulator*] = -`) and executing tests within the application host process.
+- **P14: Live API Generation Costs (Milestones M9, M10):** Live validation runs risk incurring unnecessary API billing charges. Mitigated by restricting smoke tests to 512 px and 2K resolutions, limiting total live hardware test iterations to approximately 15 requests.
+- **P15: Accidental API Key Exposure in Artifacts (All Milestones):** Automated screenshot capture risks exposing API keys in documentation artifacts. Mitigated by enforcing `SecureField` entry, masking keys to their trailing four characters in Settings, utilizing dummy mock keys during automated runs, and prohibiting real credentials in automation scripts.
+- **P16: Notification System Dialogs Blocking Automation (Milestone M5):** Unattended simulator runs can be blocked by modal notification permission prompts. Mitigated by requesting permission only upon first send, providing a `-SkipNotificationPrompt 1` debug flag to defer prompts, and incorporating the flag into all automated verification runs.
+- **P17: Release Configuration Compilation Discrepancies (Milestones M0–M9):** Debug-only constructs leaking into production paths cause Release builds to fail late in development. Mitigated by routing all debug hooks through `App/DebugHooks.swift` enforced by linting rules, and validating `scripts/build.sh --release` at every milestone exit gate.
+- **P18: Untestable Background Session Behaviors (Milestones M4, M10):** Complex background URLSession lifecycles, app relaunch deliveries, and forced termination cannot be simulated through standard unit tests. Mitigated by an append-only event stream architecture with persisted retry state and faked transport engines in unit tests, confirmed through hardware scenarios D12–D16.
+- **P19: Incomplete Activity Log Instrumentation (Milestones M2, M4–M9):** Incomplete instrumentation or missing Result entries on error paths undermine diagnostic observability. Mitigated by strict activity log protocol enforcement, test suite assertion helpers (`assertPaired()`), automatic launch-time reconciliation of orphaned entries, and static analysis checks.
 
 ---
 
 ## 5. Traceability matrix
 
-| # | Requirement (confirmed) | DESIGN | Milestones | Verification |
-|---|---|---|---|---|
-| R-01 | Personal iPhone app, installed once from Xcode with the user's paid Apple Developer Program team (profile lasts a year); no App Store or TestFlight | §1.4, §10, §11 R9 | M0, M10 | `project.yml`; D1 |
-| R-02 | iOS 26 minimum, Swift 6 strict concurrency, SwiftData, Liquid Glass, iPhone only | §1.4, §5, §3.1 | M0, M2, M5 | build settings; `check-warnings.sh`; M5 screenshots |
-| R-03 | Replicates the pipe: chat + generation/editing via Gemini REST | §2 | M1, M4, M5 | `PipeParityTests`; `GenerationServiceTests.endToEnd*`; D3/D6 |
-| R-04 | API key in the Keychain | §4.10, §3.2 | M2, M5, M8 | `KeychainStoreTests`; M5 `01-onboarding`; D2, D23 |
-| R-05 | Gemini 3.1 Flash Image is the default and mandatory | §2.5, §3.8 | M0, M1, M8 | `VocabularyTests.defaultModelIsFlash`; `AppSettingsTests.flashCannotBeDisabled`; M8 `02-models` |
-| R-06 | Other image models through a per-chat model switch: every known catalog model, on by default, filtered by what the key can use; Settings can hide any but Flash | §2.5, §3.5, §3.8, §11 Q1 | M0, M1, M2, M5, M8 | `VocabularyTests.everyBuiltInEnabledByDefault`; `AppSettingsTests.allCatalogModelsEnabledByDefault`; `SettingsResolverTests` (incl. Flash Lite, 2.5 Flash Image, disabled-override fallback); `SettingsBindingsTests.modelMenuOffersEnabledAvailableModels`; `ModelAvailabilityServiceTests.unlistedModelLeftOutOfMenuButFlashSelectable` and `uncheckedModelsOfferedUntilFirstCheck`; M5 `07-pro-menus`; M8 `02-models`; D22 |
-| R-07 | Stateless: only the selected images plus the latest instruction, as a single user turn | §2.1–2.4 | M1, M4 | `RequestBodyWriterTests`; `PipeParityTests` (one `contents` entry) |
-| R-08 | Several attachments per message, all sent | §2.2 rule 1, §3.5 | M1, M6 | `InputSelectorTests.canSendRules`; `ComposerAttachmentsTests` (incl. `failedItemBlocksSendUntilRemoved`, `fullTrayDisablesAttachEntryPoints`); `GenerationServiceTests.multipleAttachmentsInOrder`; M6 `05-sent-grid`; D9 |
-| R-09 | Fallback: pinned image, else the most recent image (model output or user upload); every turn in a chat with an image sends one (a text-only request happens only in a chat with no image yet, i.e. a new chat); the "Editing latest image" chip is informational and can't be dismissed | §2.2, §3.5, §4.3 | M1, M2, M4, M5 | `InputSelectorTests` (incl. `noImagesGivesNoImage`); `PipeParitySelectionTests` (p3, p6, p7, p8); `editLatestSendsOriginalBytes`; `pinnedUserUploadSendsPreparedBytes`; `modelImagesOrdinalFollowsPartsOrder`; `ChatScreenModelTests.implicitChipIsInformational`; M5 `09-success`; D6 |
-| R-10 | "Edit from here": long-press to pin, chip above the composer; the pin is one-shot | §2.2, §3.5, §3.6, §11 Q2 | M5, M7 (viewer action) | `pinnedSendClearsPin`; M5 `13a-unpinned` + `13-edit-from-here`; D7 |
-| R-11 | Saved chats: reopen, rename, delete | §3.3, §4.3, §4.4 | M2, M5 | `DataStoreTests`; M5 `03`, `15`, `16`; D25 |
-| R-12 | **Aspect ratio configurable, default 16:9** (global + per chat, recorded) | §2.4, §2.5, §3.5, §3.8 | M0, M1, M2, M5, M8 | `SettingsResolverTests.defaultsAre16x9And2K`; golden `flash_text_only_16x9_2k.json`; M5 `05`; M8 `03`/`04`; D3–D5 |
-| R-13 | **Resolution configurable, default 2K** (global + per chat, recorded) | §2.4, §2.5, §3.5, §3.8 | M0, M1, M2, M5, M8 | the same as R-12, plus `flash_512_9x16.json`; M5 `06`; D3–D5 |
-| R-14 | Regenerate reproduces the recorded settings | §4.3, §6 | M2, M4, M5 | `regenerateUsesRecordedSettings`; M5 `17-regenerate-recorded`; D8 |
-| R-15 | Safety threshold global, BLOCK_NONE default | §2.4, §3.8 | M1, M2, M8 | golden `flash_threshold_low.json`; `AppSettingsTests`; M8 `03` |
-| R-16 | Save to Photos with the original bytes | §4.9 | M7 | `PhotoLibrarySaverTests`; M7 `03-photos-app`; D17 |
-| R-17 | Save to Files with the original bytes | §4.9 | M7 | `ExportTests.imageFileExportsByteIdentical`; the M7 byte check; D18 |
-| R-18 | Share and Copy | §4.9 | M7 | `ExportTests.pasteboard*`; M7 `05`; D19 |
-| R-19 | Attach from Photos (PhotosPicker) and Files (fileImporter), plus Paste | §3.5, §4.8 | M6 | `FileImportTests`, `PasteSupportTests`; M6 `02`, `06`, `07`; D9–D11 |
-| R-20 | Not in v1: camera, share extension, drag-and-drop | §1.3 | none | review: no such code or entitlements |
-| R-21 | Downscale to a configurable max long edge (1536–4096); HEIC→JPEG; originals kept; ~20 MB limit | §4.8, §4.3, §3.8 | M3, M4, M6, M8 | `ImagePreprocessorTests` (incl. `heicWithAlphaBecomesJpeg`), `BudgetPlannerTests`; `heicUploadSentAsJpeg`; `SettingsBindingsTests.changingMaxLongEdgeAffectsNewAttachments`; `GenerationServiceTests.reusedUploadRepreparedAfterMaxEdgeChange`; `EditAndResendTests.clonesRepreparedAfterMaxEdgeChange`; M8 `05`, `05b-max-edge-4096`; D9, D9b |
-| R-22 | Requests finish in the background; result in the chat | §4.6, §4.7 | M4, M10 | `TransportTests` (event ordering, buffering, append-only accumulation), `ReconcilerTests`, `BackgroundConfigTests`, `GenerationServiceTests.preparationHoldsBackgroundAssertion` / `finishedEventsCallsRelayAfterParse` / `backgroundCreatedRetryRecreatedOnActive`, `AppEnvironmentLaunchTests`; D12, D12b, D13, D13b, D15, D16 |
-| R-23 | Local notification on completion when the app isn't active | §4.11 | M4, M5, M10 | `notificationPostedWhenInactive` / `Suppressed…`; D12–D14 (incl. D12b, D13b) |
-| R-24 | Model text parts as rendered Markdown | §2.7, §4.12 | M1, M3, M5 | `ResponseParserTests` (incl. `resp_split_sentence.json`); `MarkdownBlocksTests`; M5 `18-markdown` (`chat:textonly`); D21 |
-| R-24a | Undecodable image parts dropped with a notice; the previous image stays the edit base (confirmed, D§11 Q3) | §2.6, §2.7 | M1, M4 | `ResponseParserTests` (`resp_bad_image.json`); `GenerationServiceTests.noticesPersistedAndReloaded` and `undecodableImageKeepsPreviousEditBase` |
-| R-24c | Safety and policy refusals (`PROHIBITED_CONTENT`, `IMAGE_SAFETY`, `IMAGE_OTHER`, …, unknown reasons verbatim) are shown simply as "Request refused: <reason>" with Retry, Edit and New Chat (`PUP_LIMITED_DISABLED`: no Retry, a one-line note; Edit hidden when the user message was deleted); returned text and `finishMessage` (stored as `errorMessage`) only in Info; a surviving image is never a refusal; a refused chat gets the chat-list red dot; never retried automatically (user request, D§11 Q4) | §2.6, §2.7, §3.3, §3.4, §3.6, §4.6, §4.11, §6 #12–#15, §11 Q4 | M1, M4, M5, M6 | `ResponseParserTests` (`resp_prompt_refused.json`, `resp_image_safety.json`, `resp_image_other.json`, `resp_no_image_no_parts.json`, `resp_refused_with_text.json`, `resp_unknown_finish_reason.json`, `resp_pup_limited.json`, `resp_bad_image_refused.json`, `resp_image_with_safety_finish.json`, and the non-refusal boundary `resp_no_parts_stop.json`, `resp_no_parts_max_tokens.json`, `resp_no_parts_unspecified.json`, `resp_no_parts_no_finish.json`, `resp_text_only_max_tokens.json`, `resp_text_only_unspecified.json`, `resp_text_only_no_finish.json`); `RetryPolicyTests.refusalNeverRetried`; `GenerationServiceTests.refusedOutcomeStoredNotAutoRetried`, `refusedWithTextKeepsTextOutOfReply` and `userRetryAfterRefusalSucceeds`; `ReplyPresentationTests` (incl. the deleted-user-message rows and the chat-row red dot); `ChatScreenModelTests.refusedCardEditLoadsComposerAndFocuses`, `refusedCardEditOnRegeneratedReplyTargetsSourceMessage` and `refusedCardNewChatCreatesAndNavigates`; `EditAndResendTests.refusedCardEditClonesAttachments`; M5 `10-refused-and-error` and the live refusal flow (`19-live-refused`) |
-| R-24b | Response modalities: `["TEXT","IMAGE"]` by default; switches to `["IMAGE"]` if the smoke test confirms the 1K cap; the Advanced toggle re-enables text (user decision, D§11 R3) | §2.4, §3.8, §11 R3 | M1, M2, M8, M9, M10 | golden `flash_image_modality_only.json`; `AppSettingsTests.defaultsBlockNoneAnd2048AndTextOn` (or `…TextOff` after the flip); M9 task 8; D3 |
-| R-25 | Not in v1: thinking, grounding, usage readout | §1.3, §2.4 | M1 | goldens have no `thinkingConfig` or `tools`; thought parts dropped (`resp_thought_parts.json`) |
-| R-26 | Message actions: Regenerate, Edit and Resend, Delete, Copy prompt | §3.6 | M5, M6 | `ChatScreenModelTests`, `EditAndResendTests`; M6 `08`; D24 |
-| R-27 | Image actions: Save to Photos, Save to Files, Share, Copy, Edit from here | §3.6 | M5, M7 | M7 `01-image-menu`; D17–D19, D7 |
-| R-28 | Full-screen zoomable viewer | §3.7 | M7 | `ZoomMathTests`; M7 `06`–`09`; D20 |
-| R-29 | XcodeGen, Swift Testing with mocked network (URLProtocol), simulator checks per milestone, then device install | §9, §10 | every milestone | the "Done when" checklists; `artifacts/M*/REVIEW.txt` |
-| R-30 | Deliverables: DESIGN.md and IMPLEMENTATION_PLAN.md in `~/src/imagegen/doc/`, next to the reference pipe `doc/openwebui_gemini_filter.py` | none | none | these files |
-| R-31 | Activity log (user request, 2026-10-16): before every action, a terse natural-language line saying what is about to happen with every operative parameter (the full prompt included); then the result. Exactly one begin and one result per action, guaranteed across a killed process; never the API key, headers or image bytes; kept on the device | §1.2 goal 9, §4.13, §4.7, §5, §7, §11 R14 | M0, M1, M2, M4–M9, M10 | `ActivityLogTypesTests`; `ActivityLogTests`; `RedactorTests.forLog*`; `ActivityLogRedactionTests`; `JanitorTests.runLogged`; the `GenerationServiceTests` log assertions (`logsSendBeginParametersAndResult`, `relaunchContinuesSendAction`, …); `GenerationServiceTests.logsEmptyReplyAsFailed`, `flushesBeforeStoringActionID` and `assertionEndFlushesFirst`; `ReconcilerTests.orphanedLogActionsClosedAsInterrupted` and `actionOfLiveRequestKeptOpen`; `AppEnvironmentLaunchTests.launchActionIsFirstAndPaired` and `resetDeletesLogBeforeLaunchBegin`; `BackgroundEventsRelayTests.flushesBeforeCompletionHandler`; `ChatScreenModelTests.chatActionsLogged`, `chatSettingChangesLogged` and `notificationPermissionLogged`; `APIKeySectionTests.removeKeyLogged`; `OnboardingModelTests`; `ComposerAttachmentsTests.attachLogsSourceAndPreparation`, `attachPartialFailureEndsFailed` and `trayReorderLogged`; `ExportTests.*Logged` (including `shareLogged`); `SettingsBindingsTests.settingChangesLogged` and `customIDHoldingKeyIsScrubbed`; `InMemoryKeyStoreTests.readAndSaveRegisterSecret`; lint `no-key-in-activity-log`; M9 task 10; D28–D30 |
-| R-32 | Developer menu (`hammer`, always visible on the chat list and the chat screen, displacing nothing): Last Action, Last Error (refusals count), Full Log, Clear Log…; a monospaced, selectable (any range, `LogTextView`), live viewer with Copy and Share as `.txt`; Last Action shows the newest user-started action (D§11 Q5, confirmed) | §3.3, §3.4, §3.10, §11 Q5 | M5, M9, M10 | `LogViewerModelTests` (including `openSheetStaysOnItsAction`); `DeveloperMenuModelTests`; M5 `03`, `04`, `20-developer-menu`, `21-log-last-action`, `22-log-last-error`, `23-log-full`, `24-clear-log`; M9 regression and `06-log-after-relaunch`; D28–D30 |
+Engineering requirements correlate directly to design specifications, milestone delivery scopes, and validation criteria:
+
+- **R-01: Deployment Target and Distribution Model.** The application is built as a personal iPhone application installed directly via Xcode using an active Apple Developer Program team profile, bypassing App Store and TestFlight distribution (Design §1.4, §10, §11 R9). Addressed in milestones M0 and M10. Verified through `project.yml` configuration and on-device test D1.
+- **R-02: Platform Architecture and Visual Language.** The system targets iOS 26 minimum deployment, Swift 6 strict concurrency, SwiftData persistence, and the Liquid Glass visual hierarchy for iPhone exclusively (Design §1.4, §3.1, §5). Addressed in milestones M0, M2, and M5. Verified via build configuration, `check-warnings.sh` compiler passes, and M5 simulator review.
+- **R-03: Reference Pipeline Parity.** The core generation pipeline replicates the OpenWebUI Gemini filter reference implementation, integrating chat conversational flows with Gemini REST image generation and iterative editing (Design §2). Addressed in milestones M1, M4, and M5. Verified through `PipeParityTests`, end-to-end `GenerationServiceTests`, and device tests D3 and D6.
+- **R-04: Secure Credential Management.** API credentials are stored securely in the iOS Keychain (Design §3.2, §4.10). Addressed in milestones M2, M5, and M8. Verified via `KeychainStoreTests`, onboarding verification screenshot `01-onboarding`, and device tests D2 and D23.
+- **R-05: Default Model Assignment.** Gemini 3.1 Flash Image serves as the mandatory, non-disableable default model for all sessions (Design §2.5, §3.8). Addressed in milestones M0, M1, and M8. Verified through `VocabularyTests.defaultModelIsFlash`, `AppSettingsTests.flashCannotBeDisabled`, and settings screenshot `02-models`.
+- **R-06: Dynamic Model Catalog and Availability Filtering.** Provides an expandable catalog of available image generation models (Gemini 3 Pro, 2.1, Flash Lite, 2.5 Flash, and legacy aliases) selectable per chat, dynamically filtered against API key availability and user settings preferences (Design §2.5, §3.5, §3.8, §11 Q1). Addressed in milestones M0, M1, M2, M5, and M8. Verified via `VocabularyTests`, `SettingsResolverTests`, `ModelAvailabilityServiceTests`, M5 screenshot `07-pro-menus`, M8 screenshot `02-models`, and device test D22.
+- **R-07: Stateless Context Framing.** Requests operate statelessly, transmitting only the selected image inputs alongside the latest user instruction as a single prompt turn (Design §2.1–§2.4). Addressed in milestones M1 and M4. Verified by `RequestBodyWriterTests` and single-contents assertions in `PipeParityTests`.
+- **R-08: Multi-Image Attachment Ingestion.** Supports selecting and transmitting multiple image attachments per prompt turn within total request byte budgets (Design §2.2, §3.5). Addressed in milestones M1 and M6. Verified via `InputSelectorTests`, `ComposerAttachmentsTests`, `GenerationServiceTests.multipleAttachmentsInOrder`, screenshot `05-sent-grid`, and device test D9.
+- **R-09: Turn-to-Turn Image Inheritance and Edit Chaining.** In the absence of an explicit pin or fresh attachments, the pipeline automatically inherits the latest generated or uploaded image as the transformation base; the composer displays a non-dismissible informational chip indicating this state (Design §2.2, §3.5, §4.3). Addressed in milestones M1, M2, M4, and M5. Verified via `InputSelectorTests`, `PipeParitySelectionTests`, M5 screenshot `09-success`, and device test D6.
+- **R-10: Explicit Source Pinning via Edit From Here.** Users can pin any earlier image turn as the edit reference using the context menu action "Edit from here", setting a one-shot pin chip in the composer that clears upon dispatch (Design §2.2, §3.5, §3.6, §11 Q2). Addressed in milestones M5 and M7. Verified via `pinnedSendClearsPin`, screenshots `13a-unpinned` and `13-edit-from-here`, and device test D7.
+- **R-11: Conversation Session Persistence.** Chat sessions persist across app launches with capabilities for reopening, inline renaming, and deletion with cascading asset cleanup (Design §3.3, §4.3, §4.4). Addressed in milestones M2 and M5. Verified through `DataStoreTests`, M5 screenshots `03`, `15`, `16`, and device test D25.
+- **R-12: Configurable Aspect Ratio Selection.** Aspect ratios are configurable globally and on a per-chat basis, defaulting to 16:9 and persisting within message metadata (Design §2.4, §2.5, §3.5, §3.8). Addressed in milestones M0, M1, M2, M5, and M8. Verified via `SettingsResolverTests`, golden fixture `flash_text_only_16x9_2k.json`, screenshots `05`, `03`, `04`, and device tests D3–D5.
+- **R-13: Configurable Resolution Selection.** Output resolutions (512 px, 1K, 2K, 4K) are configurable globally and per chat, defaulting to 2K (Design §2.4, §2.5, §3.5, §3.8). Addressed in milestones M0, M1, M2, M5, and M8. Verified via resolution unit tests, golden fixture `flash_512_9x16.json`, screenshots `06`, `03`, `04`, and device tests D3–D5.
+- **R-14: Immutable Settings Reproduction on Regeneration.** Regenerating a response reproduces the exact generation parameters and input images recorded on the original turn (Design §4.3, §6). Addressed in milestones M2, M4, and M5. Verified via `regenerateUsesRecordedSettings`, screenshot `17-regenerate-recorded`, and device test D8.
+- **R-15: Content Safety Threshold Configuration.** Content filtering thresholds are configured globally across four severity levels, defaulting to `BLOCK_NONE` (Design §2.4, §3.8). Addressed in milestones M1, M2, and M8. Verified via golden fixture `flash_threshold_low.json`, `AppSettingsTests`, and screenshot `03-generation-defaults`.
+- **R-16: Lossless Photo Library Export.** Generated assets export to the iOS Photos library preserving original returned file bytes, MIME types, and dimensions (Design §4.9). Addressed in milestone M7. Verified via `PhotoLibrarySaverTests`, screenshot `03-photos-app`, and device test D17.
+- **R-17: Lossless Files System Export.** Generated images export to the iOS Files document system byte-for-byte identical to stored artifacts (Design §4.9). Addressed in milestone M7. Verified via `ExportTests.imageFileExportsByteIdentical`, simulator byte comparisons, and device test D18.
+- **R-18: System Share Sheet and Pasteboard Integration.** Images integrate with standard iOS Share sheets and system copy pasteboard without recompression (Design §4.9). Addressed in milestone M7. Verified via `ExportTests.pasteboard*`, screenshot `05-share-sheet`, and device test D19.
+- **R-19: Flexible Ingestion Sources.** Ingestion supports PhotosPicker, system document file importers, and direct system clipboard pasting (Design §3.5, §4.8). Addressed in milestone M6. Verified via `FileImportTests`, `PasteSupportTests`, screenshots `02`, `06`, `07`, and device tests D9–D11.
+- **R-20: Deliberate Scope Exclusions.** Feature set deliberately omits in-app camera capture, system share sheet extensions, and drag-and-drop interactions in v1 (Design §1.3). Verified by code and entitlements review confirming complete absence of excluded frameworks.
+- **R-21: Client-Side Upload Preprocessing and Downscaling.** Input images are automatically preprocessed, downscaling to a user-configured maximum long edge (1536–4096 px, defaulting to 2048 px), converting HEIC to JPEG while retaining original files on disk, and enforcing total payload budget limits (Design §3.8, §4.3, §4.8). Addressed in milestones M3, M4, M6, and M8. Verified via `ImagePreprocessorTests`, `BudgetPlannerTests`, screenshots `05`, `05b-max-edge-4096`, and device tests D9 and D9b.
+- **R-22: Resilient Background Execution.** Requests transition to background sessions with task assertions, allowing network transfer and processing to complete while the app is suspended or locked (Design §4.6, §4.7). Addressed in milestones M4 and M10. Verified via `TransportTests`, `ReconcilerTests`, `BackgroundConfigTests`, and device tests D12, D12b, D13, D13b, D15, and D16.
+- **R-23: Local Background Completion Notifications.** The system posts local push notifications upon request completion whenever the application is inactive or in the background (Design §4.11). Addressed in milestones M4, M5, and M10. Verified via `notificationPostedWhenInactive` tests and device tests D12–D14.
+- **R-24: Structured Markdown Parsing.** Returned text parts render natively as formatted Markdown blocks (Design §2.7, §4.12). Addressed in milestones M1, M3, and M5. Verified via `ResponseParserTests`, `MarkdownBlocksTests`, screenshot `18-markdown`, and device test D21.
+- **R-24a: Corrupt Part Fault Tolerance.** Undecodable image parts are safely discarded with user notification, retaining the previous valid image as the editing anchor (Design §2.6, §2.7, §11 Q3). Addressed in milestones M1 and M4. Verified via `ResponseParserTests` (`resp_bad_image.json`) and `GenerationServiceTests.undecodableImageKeepsPreviousEditBase`.
+- **R-24b: Dual-Modality Response Configuration.** Response modalities request both text and image (`["TEXT","IMAGE"]`) by default, with an Advanced settings toggle and smoke test verification determining fallback to image-only (`["IMAGE"]`) if resolution caps occur (Design §2.4, §3.8, §11 R3). Addressed in milestones M1, M2, M8, M9, and M10. Verified via golden fixtures, `AppSettingsTests`, M9 task 8, and device test D3.
+- **R-24c: Safety and Policy Refusal Handling.** Safety, policy, and account limitation refusals present clean diagnostic status cards without echoing unfiltered response messages, exposing Retry, Edit, and New Chat actions where permissible, flagging chat rows with red status indicators, and never retrying automatically (Design §2.6, §2.7, §3.3, §3.4, §3.6, §4.6, §4.11, §6, §11 Q4). Addressed in milestones M1, M4, M5, and M6. Verified via comprehensive response parsing suites, `RetryPolicyTests`, `ReplyPresentationTests`, screenshots `10-refused-and-error` and `19-live-refused`.
+- **R-25: Advanced Feature Exclusions.** Omits thinking configurations, tool grounding, and token usage readouts in v1 (Design §1.3, §2.4). Addressed in milestone M1. Verified by golden fixtures omitting `thinkingConfig` and parser tests dropping thought parts.
+- **R-26: Message Bubble Action Capabilities.** Each message bubble exposes contextual actions for Regenerate, Edit and Resend, Delete, and Copy Prompt (Design §3.6). Addressed in milestones M5 and M6. Verified via `ChatScreenModelTests`, `EditAndResendTests`, screenshot `08-edit-resend`, and device test D24.
+- **R-27: Contextual Image Operations.** Image cards expose actions to Save to Photos, Save to Files, Share, Copy, and Edit from here (Design §3.6). Addressed in milestones M5 and M7. Verified via screenshot `01-image-menu` and device tests D7, D17, D18, and D19.
+- **R-28: Interactive Full-Screen Image Viewer.** Provides a dedicated modal image viewer supporting pinch-to-zoom, pan gestures, double-tap zoom targets, rotation, and multi-image swipe pagination (Design §3.7). Addressed in milestone M7. Verified via `ZoomMathTests`, screenshots `06`–`09`, and device test D20.
+- **R-29: Deterministic Build and Test Automation.** Utilizes XcodeGen for reproducible project generation, Swift Testing with custom `URLProtocol` mocking for network independence, structured simulator verification across all milestones, and physical device test validation (Design §9, §10). Addressed across all milestones. Verified via milestone review checklists and test suite logs.
+- **R-30: Documentation Architecture.** Design specifications and detailed implementation planning are maintained as foundational documents in the repository alongside reference pipelines (Design §1.4). Verified by file presence and maintenance in the project root.
+- **R-31: Deterministic Activity Log Traceability.** Maintains an append-only local activity log recording natural-language descriptions of every action before invocation with complete operative parameters, followed by exact results upon completion; guarantees paired begin and result records across terminations while strictly excluding API credentials, secret headers, and image payloads (Design §1.2, §4.7, §4.13, §5, §7, §11 R14). Addressed across milestones M0, M1, M2, M4–M9, and M10. Verified via `ActivityLogTypesTests`, `ActivityLogRedactionTests`, `GenerationServiceTests`, sanitization lint passes, and device tests D28–D30.
+- **R-32: Integrated Developer Diagnostic Interface.** A dedicated developer menu accessible from chat list and conversation toolbars presents immediate inspection of Last Action, Last Error, Full Log, and log clearing, backed by a monospaced, selectable, exportable log viewer (Design §3.3, §3.4, §3.10, §11 Q5). Addressed in milestones M5, M9, and M10. Verified via `LogViewerModelTests`, `DeveloperMenuModelTests`, screenshots `20`–`24`, regression suites, and device tests D28–D30.
 
 ---
 

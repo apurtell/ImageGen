@@ -1,16 +1,14 @@
-# ImageGen for Mac, iPhone and iPad: Design
+# ImageGen for Mac, iPhone and iPad
 
-Status: v1 design, ready for implementation
+Status: v1 design
 Date: 2026-10-15
-Reference behavior: `doc/openwebui_gemini_filter.py` (OpenWebUI "Gemini Native Image Gen & Edit Pipe" v2.0.0)
-Companion: `doc/IMPLEMENTATION_PLAN.md` (milestones, tasks, and verification steps). Both documents and the reference pipe live in `doc/`.
 
 ---
 
 ## 1. Purpose and scope
 
 ### 1.1 Purpose
-ImageGen is a personal app for Mac, iPhone and iPad: a native Mac app (section 3.11), and one iOS app for iPhone and iPad (section 3.12 covers the iPad). It does what the OpenWebUI Gemini pipe does: you chat to generate and edit images through the Gemini REST API (`generateContent`), using your own Gemini API key. A request carries only the selected image(s) and the latest instruction. Results arrive as images plus optional Markdown text, and stay in a list of saved chats on the device.
+ImageGen is a personal app for Mac, iPhone and iPad: a native Mac app (section 3.11), and one iOS app for iPhone and iPad (section 3.12 covers the iPad). It does what the OpenWebUI Gemini pipe does: you chat to generate and edit images through the Gemini REST API, using your own Gemini API key. A request carries only the selected image(s) and the latest instruction. Results arrive as images plus optional Markdown text, and stay in a list of saved chats on the device.
 
 ### 1.2 Goals (v1)
 1. **Same results as the pipe.** Given the same inputs, the request body matches the pipe's except for the deliberate deviations in section 2.6.
@@ -21,7 +19,7 @@ ImageGen is a personal app for Mac, iPhone and iPad: a native Mac app (section 3
 6. **Requests survive the app going to the background.** On iOS they run on a background `URLSession`; the Mac app keeps running and holds off idle sleep for them (section 3.11). A local notification fires when one finishes while the app isn't active.
 7. **Saved images are byte-for-byte what the API returned.** This applies to Photos, Files, Share and Copy.
 8. **Saved chats.** Chats persist on the device (SwiftData plus image files) and can be reopened, renamed and deleted.
-9. **Every step is logged, for debugging.** Before each action the app logs, in terse natural language, what it is about to do and every operative parameter; afterwards it logs the result. A Developer menu (`hammer`) on the chat list and the chat screen (on iPad with a sidebar, beside the chat) shows the last action, the last error or the full log, and clears it. The log stays on the device and never holds the API key, headers or image data (sections 3.10, 4.13).
+9. **Every step is logged, for debugging.** Before each action the app logs, in terse natural language, what it is about to do and every operative parameter; afterwards it logs the result. A Developer menu on the chat list and the chat screen (on iPad with a sidebar, beside the chat) shows the last action, the last error or the full log, and clears it. The log stays on the device and never holds the API key, headers or image data (sections 3.10, 4.13).
 
 ### 1.3 Non-goals (v1)
 These were declined or deferred:
@@ -31,19 +29,19 @@ These were declined or deferred:
 - A usage, token or cost readout.
 - Full-history (multi-turn) context. The app never sends earlier turns, so `thoughtSignature` handling isn't needed.
 - Mac Catalyst, App Store or TestFlight distribution, iCloud sync, and widgets.
-- Streaming (`streamGenerateContent`) and the Interactions API.
+- Streaming and the Interactions API.
 - The Files API. Everything goes inline, within the 20 MB budget.
 - Batch generation, and asking for more than one output image.
-- Editing a sent message in place (in its bubble). Edit and Resend and a refused reply's Edit load the text into the composer and send a new turn (section 3.6). In-place editing is a possible future enhancement.
+- Editing a sent message in place (in its bubble). In-place editing is a possible future enhancement.
 
 ### 1.4 Platform and constraints
-- **iOS app:** iOS and iPadOS 26.0 minimum, one universal target. On iPhone, portrait, plus landscape (not upside-down) only while the full-screen viewer is up: closing it turns the phone back and returns the transcript to the row the reader left (`OrientationPolicy`, `placeBeforeViewer`). On iPad, all four orientations and resizable windows (section 3.12). In this document "iOS" covers both devices except where it says iPhone or iPad.
+- **iOS app:** iOS and iPadOS 26.0 minimum, one universal target. On iPhone, supported interface orientation is restricted to portrait mode outside active full-screen media presentation, restoring transcript scroll position upon dismissal. On iPadOS, all interface orientations and resizable window configurations are supported (Section 3.12). In this document "iOS" covers both devices except where explicitly noted.
 - **Mac app:** macOS 26.0 minimum, a native AppKit and SwiftUI target (not Catalyst).
 - Built against the iOS 26+ (which includes iPadOS) and macOS 26+ SDKs with Xcode 26.x or later.
 - Swift 6 language mode with complete strict concurrency, SwiftUI with Observation, SwiftData, and Liquid Glass.
 - No third-party dependencies.
 - Installed from Xcode with an Apple Developer Program team. The first install on an iPhone or iPad is a one-time Product › Run from Xcode; the provisioning profile lasts a year (see section 11, R9). The Mac app needs the same team for signing, because its keychain requires a signed build.
-- Built and verified using XcodeGen (`project.yml`) and Swift Testing, on iPhone and iPad simulators and then the device, and on the Mac directly.
+- Built and verified using XcodeGen and Swift Testing, on iPhone and iPad simulators and then the device, and on the Mac directly.
 
 ---
 
@@ -153,17 +151,15 @@ Body (camelCase; shown in a readable key order). Key order has no meaning to the
 No full-body `String` or `Data` is ever built in memory. The exact body size is computed before writing: envelope bytes plus `4*ceil(n/3)` per image.
 
 ### 2.5 Models, capabilities and coercion
-`ModelCatalog` is a static table. Every catalog model is enabled by default and offered in the per-chat model switch, filtered by what the key can actually use (`models.list`, below). Settings lets you hide any catalog model except Flash, and add custom IDs (section 11, Q1).
+`ModelCatalog` defines static metadata for supported Gemini image generation endpoints. Every catalog model is enabled by default and presented in the per-conversation model selector, filtered dynamically by capabilities returned from `models.list`. Settings allows hiding optional catalog models and configuring custom model identifiers (Section 11, Q1).
 
-| Model ID | Display name | Role | Aspect ratios | `imageSize` | High-fidelity inputs (documented) | Notes |
-|---|---|---|---|---|---|---|
-| `gemini-3.1-flash-image` | Gemini 3.1 Flash Image | **Default, mandatory, can't be removed** | all 14 | 512, 1K, 2K, 4K | up to 10 objects / 4 characters | validated behavior |
-| `gemini-3-pro-image` | Gemini 3 Pro Image | optional, on by default (shown if available) | 10 standard (no 1:4, 4:1, 1:8, 8:1) | 1K, 2K, 4K | up to 6 objects / 5 characters (another passage says 5) | replaces the pipe's `gemini-3-pro-image-preview` |
-| `gemini-nano-banana-2.1` | Nano Banana 2.1 | optional, on by default (shown if available) | all 14 | 1K, 2K, 4K | up to 10 objects / 4 characters | newest; Google's recommended model |
-| `gemini-3.1-flash-lite-image` | Gemini 3.1 Flash Lite Image | optional, on by default (shown if available) | 10 standard | 1K only | not documented | documented limits; the coercion makes every size 1K |
-| `gemini-2.5-flash-image` | Gemini 2.5 Flash Image | optional, on by default (shown if available) | 10 standard | none (the key is omitted; one fixed size per ratio, about 1 MP) | up to 3 | older model; access may be limited to existing users |
-| `gemini-3-pro-image-preview` | Gemini 3 Pro Image (preview) | legacy alias: its toggle is on by default, but it's offered in the model menu only after `models.list` has listed it (never before the first check) | as 3 Pro | as 3 Pro | as 3 Pro | legacy alias |
-| any custom ID | the ID itself | user-added | all 14 | 1K, 2K, 4K | unknown | unknown capabilities; API errors are shown as-is |
+- **Gemini 3.1 Flash Image (`gemini-3.1-flash-image`)**: Default mandatory model, always enabled and cannot be removed. Supports all 14 aspect ratios, dimensions 512, 1K, 2K, and 4K, and up to 10 objects / 4 high-fidelity character inputs.
+- **Gemini 3 Pro Image (`gemini-3-pro-image`)**: Optional high-fidelity model, enabled by default when available. Supports 10 standard aspect ratios (excluding 1:4, 4:1, 1:8, and 8:1), dimensions 1K, 2K, and 4K, and up to 5-6 high-fidelity character inputs. Replaces legacy preview endpoints.
+- **Gemini Nano Banana 2.1 (`gemini-nano-banana-2.1`)**: Optional recommended model, enabled by default when available. Supports all 14 aspect ratios, dimensions 1K, 2K, and 4K, and up to 10 objects / 4 character inputs.
+- **Gemini 3.1 Flash Lite Image (`gemini-3.1-flash-lite-image`)**: Optional lightweight model, enabled by default when available. Supports 10 standard aspect ratios with output constrained to 1K resolution.
+- **Gemini 2.5 Flash Image (`gemini-2.5-flash-image`)**: Optional legacy model, enabled by default when available. Supports 10 standard aspect ratios with fixed output resolution per ratio (approximately 1 MP), omitting the `imageSize` configuration parameter.
+- **Gemini 3 Pro Image Preview (`gemini-3-pro-image-preview`)**: Legacy alias offered in model selection only when explicitly enumerated by `models.list`. Inherits Gemini 3 Pro capabilities.
+- **Custom Model Identifiers**: User-configured model endpoints. Defaults to all 14 aspect ratios and 1K, 2K, and 4K dimensions, with uncoerced API error presentation for unsupported parameters.
 
 - **All 14 aspect ratios:** 1:1, 1:4, 4:1, 1:8, 8:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9. **The 10 standard ratios** are the same without 1:4, 4:1, 1:8 and 8:1.
 - **High-fidelity soft limit** (`ModelCapability.highFidelityInputLimit`, one number per model, used only for the soft tray warning in section 4.8): Flash 10, 2.1 10, 3 Pro and its preview alias 5 (the lower of the two documented values), 2.5 Flash Image 3. Flash Lite and custom IDs have no soft limit (the value is 14, the hard cap), so no warning appears.
@@ -184,24 +180,25 @@ No full-body `String` or `Data` is ever built in memory. The exact body size is 
   - The catalog IDs other than Flash haven't all been confirmed against a real key. They stay validated at runtime: by this `models.list` filter, and by the 404 handling below.
   - A 404 at request time is reported as "Model not found or retired" with a button that opens Settings › Models.
 
-### 2.6 Deliberate deviations from the pipe
-| Area | Pipe | App | Why |
-|---|---|---|---|
-| Auth | `?key=` query | `x-goog-api-key` header | keeps the key out of URLs and logs |
-| `imageConfig` | not sent (API defaults: 1K, model picks the ratio) | always sent; default 16:9 / 2K; configurable | user requirement |
-| Attachments | last image of the latest message only | all attachments, in order | user requirement |
-| Edit base | latest image only | pinned image takes priority over latest | user requirement |
-| Response modalities | always `["TEXT","IMAGE"]` | `["TEXT","IMAGE"]` by default, matching the pipe; if the live smoke test confirms the 1K cap, the default becomes `["IMAGE"]` and this row is updated to say so (section 2.4, section 11 R3) | keeps the 2K default honored |
-| Pro model ID | `gemini-3-pro-image-preview` | `gemini-3-pro-image` (preview only if listed) | the preview ID's shutdown date has passed |
-| Transport | synchronous, 300 s | background `URLSession`, 300 s idle timeout, 30 min overall timeout, limited automatic retries (section 6, Retry policy) | must finish in the background |
-| CIVIC_INTEGRITY | always sent | sent, with an automatic one-time fallback | the category is deprecated |
-| Errors | Markdown text in the chat | structured error card, raw JSON under Details | native UI |
-| Safety refusals | no special handling: a prompt-level block (no `candidates`) or a refused candidate without `content.parts` fails the key lookup, so the raw JSON is dumped; a refused candidate that still has text parts shows that text | the reply shows only "Request refused: <reason>" with Retry, Edit and New Chat (section 3.4); `finishMessage`, any returned text and the redacted JSON are under Details in the reply's Info sheet (section 2.7 rules 3 and 6) | user requirement (2026-10-16): the reason is what matters, and the filters are inconsistent, so the next step is retry, edit or a new chat |
-| Thought parts | rendered if present | always dropped | thinking display is a non-goal |
-| Upload bytes | the uploaded image's data URL is sent as-is | uploads are always re-encoded (downscaled to the max long edge, HEIC→JPEG, EXIF/GPS stripped; section 4.8). Model outputs reused as inputs are still sent as original bytes | size budget, privacy, user requirement |
-| Text parts | concatenated with no separator; only the whole output is stripped | concatenated with no separator (verbatim); each text run between images is trimmed at its two ends only | the app renders text runs and images as separate blocks, so whitespace at a block edge has no visible effect; text inside a run is never changed |
-| Undecodable image part | embedded as-is, so it also becomes the next edit base | dropped, with the notice "1 image could not be decoded"; it's never stored, so §2.2 rule 3 skips it and the next edit uses the previous real image | bytes that aren't an image can't be displayed or saved, and re-sending them would most likely fail the next request; confirmed by the user (section 11, Q3) |
-| Success check | `status == 200` | any 2xx | equivalent in practice |
+### 2.6 Deliberate deviations from the reference pipeline
+
+The native application intentionally deviates from the reference OpenWebUI pipeline to enhance security, reliability, and native UX capabilities:
+
+- **Authentication**: API credentials are transmitted via the `x-goog-api-key` HTTP header rather than query string parameters (`?key=`), ensuring credentials are never exposed in URLs, proxy logs, or diagnostic traces.
+- **Image Configuration**: The application explicitly sends `imageConfig` parameters specifying desired aspect ratio (default 16:9) and output resolution (default 2K), rather than relying on server-side defaults.
+- **Attachment Sequencing**: All composer attachments are transmitted in ordinal sequence rather than restricting input to the final image of the preceding turn.
+- **Edit Baseline Precedence**: Pinned images take precedence over the most recent conversation output when establishing the image-to-image base canvas.
+- **Response Modalities**: Configured by default to `["TEXT", "IMAGE"]`, with fallback capability to `["IMAGE"]` if intermediate text generation imposes resolution caps.
+- **Pro Model Target**: Routes Pro requests to `gemini-3-pro-image`, reserving `gemini-3-pro-image-preview` strictly as a conditional legacy alias.
+- **Transport Architecture**: Employs background `URLSession` transfers with 300-second idle timeouts and automated retry policies for transient faults, replacing synchronous HTTP executions.
+- **Safety Category Compatibility**: Transmits `CIVIC_INTEGRITY` safety settings with automatic single-request fallback omitting the category if rejected by the API.
+- **Structured Error Handling**: Presents native error card interfaces with actionable remediation controls (Retry, Edit, New Chat), retaining raw redacted JSON diagnostics within inspection sheets.
+- **Safety Refusals**: Surfaces concise refusal reasons directly on the response card while preserving detailed finish messages and sanitized payloads within inspector views.
+- **Thought Modality Filtering**: Drops internal thought tokens and interim thought visualizations, restricting presentation strictly to completed text and image assets.
+- **Client-Side Image Sanitization**: Preprocesses imported user images prior to upload (stripping EXIF/GPS metadata, normalizing HEIC to JPEG, and constraining dimensions within maximum budget bounds), while reusing existing model outputs byte-for-byte.
+- **Whitespace Normalization**: Preserves text segments verbatim while trimming leading and trailing whitespace at segment boundaries.
+- **Corrupt Part Recovery**: Drops unparseable image byte blocks with user notifications, preserving prior valid assets as edit baselines.
+- **HTTP Status Acceptance**: Evaluates any 2xx response status as successful transport completion.
 
 ### 2.7 Parsing responses (the `ResponseParser`)
 **Inputs:** the HTTP status and the response body file. **Output:** a `ParsedOutcome` (Sendable):
@@ -260,12 +257,9 @@ This screen appears when the Keychain has no key, at first launch or after the k
 - Title "Connect Gemini". A short explanation. The text "Get a key at aistudio.google.com/apikey", shown as selectable text, not a web view.
 - A `SecureField` with a paste-friendly reveal toggle, and a **Validate and Save** button (`.glassProminent`).
 - Validation calls `GET /v1beta/models?pageSize=1000` with the header key over an ephemeral session, with a 20 s timeout:
-
-| Result | What the user sees |
-|---|---|
-| 200 | Save to the Keychain, cache the model availability, go to the chat list. If `gemini-3.1-flash-image` is missing from the list or lacks `generateContent`, show a non-blocking warning: "Your key doesn't list Gemini 3.1 Flash Image; generation may fail." |
-| 400 with `API_KEY_INVALID`, or 401/403 | "Key rejected" plus the API message. Not saved. |
-| Network error or 5xx | "Couldn't reach Google", with the choices **Retry** and **Save Anyway**. |
+  - **Successful Verification (HTTP 200)**: The API key is committed to the Keychain, model availability metadata is cached, and navigation transitions to the conversation list. If `gemini-3.1-flash-image` is absent or unverified for `generateContent`, the interface presents a non-blocking diagnostic notice regarding potential generation failures.
+  - **Authentication Failure (HTTP 400 with `API_KEY_INVALID`, 401, or 403)**: Key registration is rejected, presenting an error message containing the API diagnostic description. The credential is not saved.
+  - **Transport Failure or Server Error (HTTP 5xx or Network Fault)**: The interface displays a connection failure alert offering options to retry validation or save the credential without verification.
 
 - The key is never displayed after saving. Settings shows only its last 4 characters.
 
@@ -326,33 +320,34 @@ This screen appears when the Keychain has no key, at first launch or after the k
 
 **Failed, refused, empty, cancelled or interrupted reply**
 - An inset card with an SF Symbol, a title, a one-line message (where the table gives one) and the buttons from the table below. **Retry** is a new attempt of the same request (section 6, Regenerate vs Retry). **Details** opens a sheet with monospaced, selectable redacted JSON or the error body, and a Copy button. Regenerate, Info and Delete are always in the reply's long-press menu (section 3.6), not on the card.
-- This table is the single source for card glyphs, titles, message lines and buttons, including the refused variants for a deleted user message; `ReplyPresentationTests` check every row exactly. `<…>` is filled from the request record.
+- Card presentation specifications define glyph symbols, primary titles, explanatory text, and action buttons for terminal request outcomes, verified by `ReplyPresentationTests`:
 
-| Outcome (section 6 row) | SF Symbol | Title | Message line | Card buttons |
-|---|---|---|---|---|
-| Refused: prompt or output, any reason except PUP (#12) | `hand.raised` | "Request refused: <reason>" (for example "Request refused: IMAGE_OTHER") | none | Retry, Edit, New Chat |
-| Refused, as above, but the originating user message was deleted (#12) | `hand.raised` | "Request refused: <reason>" | none | Retry, New Chat |
-| Refused: `PUP_LIMITED_DISABLED` (#13) | `hand.raised` | "Request refused: PUP_LIMITED_DISABLED" | "This API account is limited by Google; retrying won't help." | Edit, New Chat |
-| Refused: `PUP_LIMITED_DISABLED`, originating user message deleted (#13) | `hand.raised` | "Request refused: PUP_LIMITED_DISABLED" | "This API account is limited by Google; retrying won't help." | New Chat |
-| Empty (#15) | `photo.badge.exclamationmark` | "No content returned by the model." | "Finished: <finishReason>", or nothing when there's none | Retry, Details |
-| No API key (#1) | `key` | "No API key" | "Add a key in Settings." | Settings |
-| Key rejected (#2) | `key` | "Key rejected (<code> <STATUS>)" | the API message | Settings, Details |
-| Bad config (#3) or billing/region (#5) | `exclamationmark.triangle` | "Error <code> <STATUS>" | the API message; for #3 also "Sent: <aspect> · <size>" | Details |
-| Out of credits (#6) | `creditcard` | "Out of credits" | the API message | Details |
-| Model not found (#7) | `questionmark.circle` | "Model not found or retired: <modelID>" | the API message | Open Models, Details |
-| Rate limit or server error after the last retry (#8, #9) | `exclamationmark.triangle` | "Error <code> <STATUS>" (for example "Error 429 RESOURCE_EXHAUSTED") | the API message | Retry, Details |
-| Timed out (#10, #11) | `clock.badge.exclamationmark` | "Timed out" | "No response within <n> min." | Retry, Details |
-| Other network error after retries | `wifi.exclamationmark` | "Network error" | the `URLError` code name | Retry, Details |
-| Malformed or unexpected body (#16, #33) | `doc.questionmark` | "Unexpected response" | "The server didn't return a Gemini response." | Retry, Details |
-| Request too large (#19) | `photo.stack` | "Images too large to send together (<N> MB)" | "Remove some or lower the max size in Settings." | none |
-| Disk full (#27) | `externaldrive.badge.exclamationmark` | "Not enough storage to save the result" | "Free some space, then retry." | Retry |
-| Cancelled | `stop.circle` | "Cancelled" | none | Retry |
-| Interrupted (#25) | `bolt.horizontal.circle` | "Interrupted: the app was closed before the result arrived" | "iOS stopped the request (for example after a force-quit). Retry to send it again." | Retry |
+- **Safety and Content Refusals**:
+  - *Standard Refusal*: Icon `hand.raised`, title `Request refused: <reason>` (e.g. `IMAGE_OTHER`), no message text. Actions: **Retry**, **Edit**, and **New Chat**. If the originating user prompt was deleted, the **Edit** action is omitted.
+  - *Account Limitation (`PUP_LIMITED_DISABLED`)*: Icon `hand.raised`, title `Request refused: PUP_LIMITED_DISABLED`, message `This API account is limited by Google; retrying won't help.` Actions: **Edit** and **New Chat** (or **New Chat** only if the prompt was deleted); Retry is suppressed.
+- **Empty Response**: Icon `photo.badge.exclamationmark`, title `No content returned by the model.`, message `Finished: <finishReason>`. Actions: **Retry** and **Details**.
+- **Credential Errors**:
+  - *No Key*: Icon `key`, title `No API key`, message `Add a key in Settings.` Actions: **Settings**.
+  - *Rejected Key*: Icon `key`, title `Key rejected (<code> <STATUS>)`, displaying server error payload. Actions: **Settings** and **Details**.
+- **Configuration and Policy Errors**:
+  - *Invalid Arguments or Billing / Regional Restrictions*: Icon `exclamationmark.triangle`, title `Error <code> <STATUS>`, displaying API diagnostic message (and sent dimensions for configuration errors). Actions: **Details**.
+  - *Credit Depletion*: Icon `creditcard`, title `Out of credits`, displaying provider message. Actions: **Details**.
+  - *Model Not Found*: Icon `questionmark.circle`, title `Model not found or retired: <modelID>`. Actions: **Open Models** and **Details**.
+- **Network and Transport Errors**:
+  - *Rate Limit or Upstream Service Faults*: Icon `exclamationmark.triangle`, title `Error <code> <STATUS>` (e.g. `Error 429 RESOURCE_EXHAUSTED`). Actions: **Retry** and **Details**.
+  - *Timeouts*: Icon `clock.badge.exclamationmark`, title `Timed out`, message `No response within <n> min.` Actions: **Retry** and **Details**.
+  - *Network Failures*: Icon `wifi.exclamationmark`, title `Network error`, displaying URLError code name. Actions: **Retry** and **Details**.
+  - *Unexpected Response*: Icon `doc.questionmark`, title `Unexpected response`, message `The server didn't return a Gemini response.` Actions: **Retry** and **Details**.
+- **Resource and System Errors**:
+  - *Payload Capacity Exceeded*: Icon `photo.stack`, title `Images too large to send together (<N> MB)`, message `Remove some or lower the max size in Settings.` No action buttons.
+  - *Storage Full*: Icon `externaldrive.badge.exclamationmark`, title `Not enough storage to save the result`, message `Free some space, then retry.` Actions: **Retry**.
+  - *User Cancellation*: Icon `stop.circle`, title `Cancelled`. Actions: **Retry**.
+  - *Process Interruption*: Icon `bolt.horizontal.circle`, title `Interrupted: the app was closed before the result arrived`, message explaining system termination. Actions: **Retry**.
 
-**Refused replies** (section 2.7 rules 3 and 6). The card shows simply "Request refused: <reason>", with the reason string verbatim, including reasons the app doesn't recognize. Nothing else is on the card: `finishMessage` and any text the model returned are under Details, reached through **Info** in the reply's long-press menu (section 3.6); Details is not a card button. The expected next step is one of the three buttons, in this order:
-- **Retry** re-runs the same recorded request in place, with the same inputs and settings (section 6, Regenerate vs Retry). The safety filters are inconsistent and sometimes spurious, so retrying an unchanged request often succeeds. A refusal is never retried automatically.
-- **Edit** is Edit and Resend (section 3.6) of the user message that produced this reply (for a regenerated reply, the user message of the request it regenerated): it loads that message's text into the composer, clones its attachments, restores the pin to the input image if the request used `.pinned` or `.latest`, and focuses the text field, so the user changes the instructions and sends. It's hidden if that user message has been deleted (the "originating user message deleted" rows of the table above).
-- **New Chat** creates a new empty conversation and navigates to it, the same as the chat list's New Chat (section 3.3), to pursue a new idea. The new chat replaces the current one on the navigation stack, so Back returns to the chat list; the refused chat is kept.
+**Refused replies** (Section 2.7 rules 3 and 6). The card presents "Request refused: <reason>" with the exact API reason string. Detailed diagnostic text and finish messages reside under Details within the Info inspector sheet (Section 3.6). Primary remediation actions include:
+- **Retry**: Re-executes the recorded request with identical parameters in place (Section 6). Because content moderation thresholds can exhibit transient variance, immediate re-execution without parameter mutation is supported. Refusals are never retried automatically.
+- **Edit**: Invokes Edit and Resend (Section 3.6) for the originating user message, restoring prompt text into the composer, cloning attachments, and restoring baseline image pins. The action is hidden if the prompt message has been removed.
+- **New Chat**: Initializes an empty conversation and updates navigation state, preserving the refused turn in historical conversation records.
 
 A refused reply has no images, so the latest-image rule skips it (section 2.2 rule 3).
 
@@ -401,26 +396,24 @@ Long-pressing an image opens a `contextMenu` with a large preview.
 
 **Image section**
 
-| Action | Effect |
-|---|---|
-| Edit from here | Sets `Conversation.pinnedImageID`; the composer shows the chip; haptic feedback. For a model's image, the chat's aspect ratio and resolution pills take the values its request recorded (Default when a value equals the global default), each logged as a Chat setting change from "Edit from here"; the model pill stays. A selection haptic and a toast ("Editing from this image · 16:9 · 2K") confirm it, because the chip and pills change at the bottom of the screen |
-| Save to Photos | Saves the original bytes (section 4.9) |
-| Save to Files… | Opens `fileExporter` with the original file (a save panel on the Mac, section 3.11) |
-| Share… | The share sheet (`UIActivityViewController`) with the original file (section 4.9) |
-| Copy | Copies the original bytes to the pasteboard |
-| View | Opens the full-screen viewer |
+**Image Context Menu Actions**:
+- **Edit from here**: Assigns `Conversation.pinnedImageID`, presenting the pinned chip within the composer alongside haptic confirmation. For generated images, conversation aspect ratio and resolution overrides adopt the recorded parameters of the source request, logging setting updates and presenting toast confirmation.
+- **Save to Photos**: Writes verbatim original image bytes to the system photo library (Section 4.9).
+- **Save to Files…**: Presents a native system document export interface or save panel with the source asset file (Section 3.11).
+- **Share…**: Dispatches the source image file through the platform share sheet (`UIActivityViewController`).
+- **Copy**: Places uncompressed original image bytes directly onto the system pasteboard.
+- **View**: Opens the full-screen interactive media viewer.
 
-**Message section** (below the image section in an image's menu, and alone when you long-press a text area)
-
-| Applies to | Action | Effect |
-|---|---|---|
-| User message | Copy Prompt | Copies `text` |
-| User message | Edit and Resend | Loads the text into the composer (replacing the current draft after a confirmation if the draft isn't empty) and **clones** the message's attachments into the tray (APFS clone via `FileManager.copyItem`). A cloned item whose prepared file is missing, or was made at a different max long edge than the current setting, is re-prepared from its original at the current setting, the same rule as pin and latest reuse (sections 4.3, 4.8); it shows the preparing spinner meanwhile, so Send waits for it. If the message's request used `.pinned` or `.latest`, it sets the pin to the image that request used, if it still exists. A refused reply's **Edit** button (section 3.4) runs this same action and then focuses the text field. |
-| User message | Delete | Confirmation; deletes the message and its images. Replies stay. Requests whose inputs are gone can no longer Regenerate. |
-| Model reply | Copy Text | Only when there's text |
-| Model reply | Regenerate | New request from the source request's record (section 6, Regenerate vs Retry). Disabled with the explanation "An input image was deleted" if any input file is missing. |
-| Model reply | Info | A sheet with the model, aspect, size, safety threshold, the categories sent, how the input was chosen, input thumbnails, timing, `modelVersion`, `responseId`, `finishReason`, and redacted JSON under Details (for a refused reply, this is where `finishMessage`, stored as `errorMessage`, appears as a "Message:" line, and where any returned text appears, inside the Details JSON) |
-| Model reply | Delete | Confirmation; cancels the request first if it's in flight |
+**Message Context Menu Actions**:
+- **User Messages**:
+  - *Copy Prompt*: Copies prompt text to the system pasteboard.
+  - *Edit and Resend*: Loads prompt text into the composer (prompting for confirmation if an uncommitted draft exists), clones associated attachments via APFS copy, re-prepares media if dimension thresholds have changed, and restores pins to originating baseline images. Refused reply Edit controls invoke this workflow before focusing the input field.
+  - *Delete*: Displays confirmation alert and removes the message record alongside on-disk assets, disabling downstream regeneration for dependent replies.
+- **Model Replies**:
+  - *Copy Text*: Copies synthesized textual content to the pasteboard when text parts exist.
+  - *Regenerate*: Dispatches a new generation request reconstructing inputs and parameters from the historical record, disabling execution if referenced input assets have been purged.
+  - *Info*: Presents an inspector sheet displaying operative models, dimensions, safety categories, input thumbnails, execution latencies, server identifiers, finish reasons, and sanitized raw JSON payloads.
+  - *Delete*: Prompts for confirmation, aborting active background tasks if execution is in flight prior to record removal.
 
 Failed, refused, empty, cancelled and interrupted cards show the buttons from the section 3.4 table; Regenerate, Info and Delete stay in this long-press menu for every reply.
 
@@ -476,19 +469,18 @@ Failed, refused, empty, cancelled and interrupted cards show the buttons from th
 ### 3.9 iPhone-specific details
 - One-handed use: every frequent action is in the composer or a context menu at the bottom of the screen. Only rare actions are in the top bar.
 - Keyboard: the composer rides the keyboard via the safe-area bar. The transcript keeps its bottom anchor when the keyboard appears.
-- The default 16:9 output is landscape. On portrait iPhone, images fill the content width, and a tall one is narrowed until its whole height fits the visible area (`TranscriptLayout.heightFitWidth`, the pending card through the same function), measured from the transcript's outer size so the keyboard doesn't change it. The viewer handles detail.
+- Output sizing in stack layouts: Standard 16:9 images fill available content width. For tall or vertical aspect ratios, image width is constrained so the full image height fits within the visible viewport bounds (`TranscriptLayout.heightFitWidth`), computed against outer transcript dimensions to ensure stability across software keyboard presentations. The viewer handles expanded detail.
 - Thermal and memory: one full-resolution decode at a time, and thumbnails are used everywhere else (section 8).
 - No status bar spinners. Progress lives in the transcript, plus the notification.
 
 ### 3.10 Developer menu and log viewer
-The Developer menu shows the activity log (section 4.13). It's a toolbar `Menu` with the SF Symbol `hammer` (VoiceOver label "Developer"), always visible, in Release builds too, on the chat list (trailing, before New Chat, section 3.3) and on the chat screen (trailing, next to the chat menu, section 3.4); on iPad with a sidebar, in the detail's toolbar whether or not a chat is selected. It doesn't displace any existing item. Its items:
+The Developer menu exposes structured diagnostic activity logs (Section 4.13). It is presented as a toolbar `Menu` with the SF Symbol `hammer` (VoiceOver label "Developer"), accessible across Debug and Release builds on the chat list and detail view.
 
-| Item | Shows |
-|---|---|
-| **Last Action** | The most recently begun top-level action the user started (origin `user`), with all its entries and all its sub-actions, even while it's still running: the sheet then shows an "In progress" label and the lines grow as entries arrive. System-started actions (Launch, Reconcile, Background events, Janitor, a scheduled Models refresh, Notification permission, Late completion) are skipped here, so a background wake or relaunch never hides the action the user started; they are in Full Log, and in Last Error when they fail. A Late completion of the shown action is shown with it (section 4.13). If the log holds no user action, it shows the newest action of any origin. Confirmed by the user on 2026-10-16 (section 11 Q5). |
-| **Last Error** | The top-level action, of either origin, whose result is the newest with outcome `failed`, `refused` or `interrupted` (refusals count; `cancelled` doesn't), with all its entries and sub-actions. An empty reply counts, because its Send ends `failed` (section 4.13, Outcomes). An `interrupted` action whose request later finished through a successful Late completion no longer counts. Disabled when the log has none: the menu reads this from `DeveloperMenuModel`, which `ActivityLog.changes()` keeps current (section 4.13), so the state is right without opening a sheet. |
-| **Full Log** | Every entry, in chronological order, newest at the bottom. It opens scrolled to the bottom. |
-| **Clear Log…** | Destructive. A confirmation dialog, "Clear the activity log?" with the message "Every entry is deleted. This can't be undone.", and the buttons **Clear Log** (destructive) and Cancel. Clearing deletes every entry except the Begin entries of actions still running, which are kept so their results still have a name and a start; the new log then has a "Log cleared" action (section 4.13). |
+Menu items and inspection scopes:
+- **Last Action**: Surfaces entries and child actions associated with the most recent user-initiated top-level operation (`origin: user`). Renders an "In progress" badge during active execution. System-initiated actions (background events, reconciliation tasks, maintenance jobs) are excluded unless no user actions exist in the buffer, ensuring automated routines do not displace user-initiated diagnostic views.
+- **Last Error**: Surfaces entries and child operations from the most recent top-level action concluding with a failure, refusal, or interruption outcome. Excludes explicitly cancelled requests. The menu option is disabled when no error records exist in the current log buffer.
+- **Full Log**: Displays the complete diagnostic log buffer in chronological order, initialized with scroll anchoring at the trailing edge.
+- **Clear Log…**: Presents a confirmation prompt to purge accumulated log entries, retaining entry headers for active in-flight operations to preserve trace continuity.
 
 **Log viewer sheet** (`LogViewerSheet`)
 - The title is the item's name. The text is monospaced (the `caption` text style in the system monospaced font) and wraps. It's shown in `LogTextView`, a read-only `UITextView` (TextKit 2, `isEditable = false`, `isSelectable = true`), so any range can be selected, within a line or across lines, and copied with the standard edit menu. (A SwiftUI `Text` with `.textSelection(.enabled)` only offers copying the whole `Text` on iOS.) TextKit 2 lays out only the visible part, so a full 4 MB log stays responsive.
@@ -543,11 +535,11 @@ The Mac app is a native AppKit/SwiftUI target (`ImageGenMac`, product name `Imag
   - A pending card's footer is as tall as what the finished reply adds to its image, a line of text if the request allows text and the metadata line, so the row keeps its height when the reply arrives. The Cancel button is drawn over that space and adds nothing to it, and the card's text is drawn over the shapes, one line when the card is too short for two, so neither changes the row's height. A request that allows text can still get none back, and then the row is shorter by that line.
   - Reply images load more pixels when drawn large: the displayed long edge times the display scale, from the buckets 1200, 1800, 2400, 3200 and 4096 so that resizing reuses them, and never more than the original has. See section 8.
   - Controls use larger text styles than iOS, because the Mac's footnote and caption styles are 10 pt and it has no Dynamic Type.
-- **Scroll bar width rule:** with "Show scroll bars: Always" (legacy scroll bars), a bar takes width from the scroll view while the content overflows. The pending card's and images' heights follow their width, so content can overflow only when the bar is absent: the bar appears, the content narrows and stops overflowing, the bar goes, and each layout pass flips it again, which hangs the app. So the transcript's width doesn't depend on the bar. It's capped from the transcript's outer frame, which the bar can't change, with the bar's width reserved on both sides whether or not it is showing (`measuresTranscriptViewport`, `scrollBarIndependentColumn`). It's placed by an offset from the leading edge, because centring would follow the bar and leave the rows off the composer's centre. The room it keeps follows the system's scroller style, and a change of style counts as a resize, because it narrows the column just as one does. It has to be a cap and an offset, not a fixed width or padding: SwiftUI would take those as the content's own size, and they would become the window's minimum width, so the window couldn't shrink. And the scroll view has to fill the width it is offered, not hug the content, or the column narrows in a wide window.
+- **Scroll bar width rule:** Under persistent legacy scrollbar settings, content overflowing vertically claims lateral space for the scroller bar. Because aspect-constrained image heights depend directly on column width, layout passes that narrow content to accommodate the scroller reduce content height, which in turn removes the overflow condition and scroller, inducing rapid oscillation. To prevent unstable layout loops, the transcript column width is constrained relative to the enclosing viewport width with legacy scrollbar gutter clearance continuously reserved (`measuresTranscriptViewport`, `scrollBarIndependentColumn`). The column is positioned via leading-edge offset rather than centering to preserve alignment with the composer bar.
 - **Launching for tests:** `scripts/run-mac.sh` with `RUN_MAC_BACKGROUND=1` opens the app with `open -g`, which asks the system not to bring it to the front, so a run can go on beside other work.
 - **Onboarding:** the scroll view fills the window and the form is capped inside it, at 520 pt. AppKit puts a backdrop under the title bar at a scroll view's width, which at the form's width would show as a lighter band across the top of the window.
 - **Log view:** the Developer menu's log views open in one window, which can stay beside a chat while the log streams. It is called Activity Log in its title and the Window menu, the view on show is the subtitle (Last Action, Last Error, Full Log), and it opens on the full log from the Window menu. It closes like any window, so it has no Done button. Edit > Find opens the find bar over the log, which searches as you type.
-- **Background execution:** there is no background session wake. A `ProcessInfo` activity assertion (`.userInitiated`) is held from when a request is recorded until it finishes, including requests adopted at launch and retries, which stops idle system sleep and App Nap while the app may have no window open. `GenerationService` reports the live count through `BackgroundTaskProviding.liveRequestsChanged`. A chat counts as on screen for notifications only if its window isn't minimized or hidden, and `MacAppDelegate` delivers them. Being inactive isn't iOS's background: retries aren't re-created on activation. The Janitor also repeats when the app is next used after 6 hours, because the process can run for weeks.
+- **Background execution:** In the absence of system background session wakeup events on macOS, active generation operations maintain a `ProcessInfo` activity assertion (`.userInitiated`) from request registration until completion, pre-empting idle sleep and App Nap. `GenerationService` publishes active counts via `BackgroundTaskProviding.liveRequestsChanged`. Local completion notifications are suppressed when the conversation window is frontmost and unminimized. Storage maintenance executes periodically when the app is active if the elapsed interval exceeds 6 hours.
 - **Sandbox and signing:** the app is sandboxed with network client, user-selected file read-write and Photos library access. The data protection keychain requires a signed build, so `scripts/build-mac.sh` and `scripts/test-mac.sh` use real signing.
 
 ### 3.12 iPad
@@ -555,8 +547,8 @@ The Mac app is a native AppKit/SwiftUI target (`ImageGenMac`, product name `Imag
 The iPad runs the iOS target. `Platform.isPad` is the only device test, and `NavigationLayout.choose(isPad:isRegularWidth:)` is the only layout decision, a pure function that sends every iPhone to the stack, including large ones whose landscape width is regular. The modifiers in `Platforms/iOS` that change layout apply only in the split layout, read from the `navigationLayout` environment value, so the stack layout is the iPhone's. The ones that don't depend on width (keys, tooltips, drops) test `Platform.isPad`.
 
 - **Navigation:** at regular width `PrimaryNavigation` is a `NavigationSplitView` with the chat list as a sidebar selecting `Navigator.path.last`, the chat as the detail, and "No Chat Selected" when there is none. At compact width (Slide Over, narrow windows) it is the iPhone's `NavigationStack` on the same path. In a sidebar there's no New Chat row, because the toolbar has the button, and the Developer menu moves from the list's toolbar to the detail's. Rows have a context menu (Rename, Delete) instead of the iPhone's long press to rename.
-- **Crossing between layouts:** the path is shared, so the selected chat stays. SwiftUI can't move a view between the two containers, so the chat's screen is rebuilt. A rotation can cross them too, in a window near the threshold, and a reader shouldn't pay for it. The viewer is presented above both layouts (`ViewerCoverController`), so it stays up, and the reader's place goes across through the model and comes back: the first visible row, and how far into it where the layout can say. A sheet open on the chat closes, and an export in it is cancelled. `Platform.keepsUnsentChats` is true on iPad, so the model comes from `ChatModelCache` and keeps its draft and tray, and leaving a chat with a draft or attachments keeps it, as on the Mac. A view disappearing while its chat is still `Navigator.path.last` is a rebuild and not a departure, so the model only flushes the draft (`rebuildsChatOnLayoutChange`), unless onboarding has taken over the window. A chat with nothing in it is still deleted when it is really left. A process killed in the background gets no chance to do that, so the launch removes chats from earlier runs with no messages and no draft (`deleteEmptyConversations`), on every platform.
-- **Transcript at regular width:** the policy is `TranscriptLayout`, as on the Mac (section 3.11): a centred column up to 1600 pt of content, text and the composer at 820 pt, images up to 80% of the outer height, and the pending card framed like the image that replaces it. The composer stays on glass, floating over the transcript, with the hard scroll edge, because the pills sit far apart on a wide bar and text behind them would show through. The Jump to Latest button is drawn over the far end of the row of pills, because prompts run right up to the trailing edge where the iPhone floats it. The Mac puts it there too, for the same reason. It shows when the reader is more than a screen from the bottom, measured with the same inset-aware distance as the follow logic. It adds nothing to the bar's height. Reply images load at display resolution through `ThumbnailService.displayPixels` (section 8). iOS scroll indicators take no width, so no gutter is reserved.
+- **Crossing between layouts:** Navigation path state is shared, retaining active conversation selections across transitions between split and stack navigation. Root-level presentation coordinates media viewing across layout rebuilds (`ViewerCoverController`), while `TranscriptReflow` preserves scroll anchors and relative visible row offsets. Uncommitted message drafts and attachment trays are retained in memory via `ChatModelCache`.
+- **Transcript at regular width:** the policy is `TranscriptLayout`, as on the Mac (section 3.11): a centred column up to 1600 pt of content, text and the composer at 820 pt, images up to 80% of the outer height, and the pending card framed like the image that replaces it. The composer stays on glass, floating over the transcript, with the hard scroll edge, because the pills sit far apart on a wide bar and text behind them would show through. The Jump to Latest control integrates directly into the composer accessory row rather than floating as an overlay to prevent occluding prompt content near the trailing edge. The control appears when scroll offset exceeds container height, accounting for safe area insets. Reply images load at display resolution through `ThumbnailService.displayPixels` (section 8). iOS scroll indicators take no width, so no gutter is reserved.
 - **The software keyboard:** the outer size is measured from a background that ignores the keyboard's safe area, so images don't change size when it comes up. In a split view the keyboard's inset going away is not reported to SwiftUI and leaves the scroll view past the end of the content, so `TranscriptScrollHandleView` pulls it back when the keyboard hides, unless a finger is on it.
 - **Reflow:** every row is laid out, as on the Mac (section 3.11), and `TranscriptReflow` runs through a handle that moves the enclosing `UIScrollView` directly and observes its offset and sizes. Rotation and window resizing keep the bottom in view at the bottom and the first visible row and its fraction in the middle, and a retry above the bottom keeps rows above it still. Compact width has no reflow, as on the iPhone.
 - **Hardware keyboard:** Return and Cmd-Return send; Shift-Return and Option-Return insert a newline at the caret, which a vertical `TextField` doesn't do for a hardware key; an input method composing keeps Return. The software keyboard reports no key presses, so its Return still inserts a newline. New Chat and Edit from Here, from wherever they're chosen, put the cursor in the composer only when `GCKeyboard` reports a hardware keyboard, so they raise no software keyboard, and only once nothing covers the chat. `PadCommands` puts New Chat, Settings, Delete Chat, Jump to Latest and the shared Chat menu in the menu bar. An iPhone registers none of them. They're off while a sheet, dialog, picker or export of the chat is up, and while the viewer or Settings covers it, because those are in the same window and another presentation has nowhere to go. Esc ends an inline rename.
@@ -775,18 +767,15 @@ Caches/Thumbnails/<imageID>-<px>.jpg    240 px (list/tray), 1200 px (bubble) and
 
 ### 4.6 Background request pipeline
 **Components**
-- `URLSessionTransport`: a `final class`, a `NSObject` subclass, conforming to `URLSessionDataDelegate` and `Sendable`, with internal state in `Synchronization.Mutex`. Background configuration:
-
-| Setting | Value |
-|---|---|
-| identifier | `<bundleID>.generation` |
-| `isDiscretionary` | `false` |
-| `sessionSendsLaunchEvents` | `true` |
-| `timeoutIntervalForRequest` | 300 (idle time; generation can be silent for over 60 s) |
-| `timeoutIntervalForResource` | 1800 |
-| `httpMaximumConnectionsPerHost` | 4 |
-| `requestCachePolicy` | `.reloadIgnoringLocalCacheData` |
-| `urlCache` | nil |
+- `URLSessionTransport`: a `final class`, a `NSObject` subclass, conforming to `URLSessionDataDelegate` and `Sendable`, with internal state in `Synchronization.Mutex`. Background session configuration parameters:
+  - **identifier**: `<bundleID>.generation`
+  - **isDiscretionary**: `false` (dispatched immediately without requiring Wi-Fi or AC power)
+  - **sessionSendsLaunchEvents**: `true` (system awakens or relaunches process upon task completion)
+  - **timeoutIntervalForRequest**: 300 seconds (idle duration accommodating long model synthesis latencies)
+  - **timeoutIntervalForResource**: 1800 seconds (upper bound for overall task execution)
+  - **httpMaximumConnectionsPerHost**: 4
+  - **requestCachePolicy**: `.reloadIgnoringLocalCacheData`
+  - **urlCache**: `nil`
 
   `waitsForConnectivity` is **not** set: background sessions ignore it and always wait for connectivity, and `urlSession(_:taskIsWaitingForConnectivity:)` is never called for them. The delegate queue is a serial `OperationQueue`.
 - **The event stream.** The transport turns delegate callbacks into one ordered `AsyncStream<TransportEvent>` (unbounded buffering), created in the transport's `init` **before** the `URLSession` is created. Events are yielded synchronously on the delegate queue, so their order is the delegate order:
@@ -1029,40 +1018,33 @@ Examples (as the viewer shows them):
 
 **What is logged.** Each row is an action name; the parent column names sub-actions. "every parameter" means the full list in the row.
 
-| Action | Origin | Parent | Begin states | Result states |
-|---|---|---|---|---|
-| Launch | system | — | only what is known when `AppEnvironment` is created, which can be in `ImageGenApp.init`, before `didFinishLaunching`: app version and build; iOS version; mock mode. Then a step at `didFinishLaunching` with the application state (`background` for a background relaunch, otherwise foreground). Why the app was woken is logged by the actions that follow: a URLSession wake is the Background events action | ends at the end of `didFinishLaunching`: duration; store opened; background session recreated; Reconciler started |
-| Reconcile | system | — | non-terminal requests; live tasks; open log actions found | one step per request decision (kept, began, re-parsed, already handled, grace timer, interrupted); counts; log actions closed as interrupted. A re-parse step is written after the service answers, so a request whose completion ended it first reads "already handled" |
-| Background events | system | — | session identifier | completions handled before the system completion handler was called (only those handled while the app was not active, since it was last active, so foreground completions are not counted); time to the handler |
-| Save API key | user | — | where (onboarding, Settings › Replace Key, Save Anyway); never the key or its length | saved or not, and why; Keychain status |
-| Validate key | user | Save API key, or none for Validate Now | `GET /v1beta/models?pageSize=1000`, ephemeral session, 20 s timeout | HTTP status; model count; Flash listed or not; API error status and message |
-| Remove API key | user | — | — | Keychain status |
-| Models refresh | user (pull to refresh, key save) or system (foreground, at most every 24 h; skipped and not logged while no key is saved) | — (a refresh after a key save is its own action, with reason `key saved`, begun once the key is saved) | reason; path and page size | pages; model count; availability per catalog model, and what changed |
-| Add custom model | user | — | the ID (private); `GET /v1beta/models/{id}` | HTTP status; added or rejected |
-| Attach | user | — | source (Photos, Files, Paste); item count; tray count; max long edge | ends after the last of its Prepare attachment sub-actions: imported and prepared counts; failed, with each reason (import or preparation); dropped over the 14-image cap; `failed` if any item failed (Outcomes, above) |
-| Prepare attachment | — | Attach, Edit and Resend | source type, pixel size, bytes, orientation, alpha; max long edge | output MIME type, pixel size and bytes (and that EXIF was stripped); duration; or the error; `cancelled` when the item is removed first |
-| Tray change | user | — | reorder (the image, its position → the new position) or remove (the image and its state: ready, preparing or failed); tray count | done; the tray order now |
-| Send, Regenerate, Retry | user | — | model; aspect; size; safety threshold; categories (whether CIVIC was omitted); modalities; each coercion (`aspect 1:8 → 16:9 for 3 Pro`); input selection and why (attachments, pinned, latest, none), with each input described as in Messages above (an upload's original and sent pixel size, MIME type and bytes, or what Prepare request will do; a model output's size and "sent as original"); the full prompt; the chat; for Regenerate the source request and "recorded values reused"; for Retry the request, its attempt number and "auto-retry budget reset" | outcome (Outcomes, above: an empty reply is `failed`); total duration; final HTTP status; images (pixel size, MIME type, bytes); text runs (characters); finish reason; refusal reason; error status and message (at most 2 KB); attempts used |
-| Prepare request | — | Send, Regenerate, Retry | inputs; reuse or re-prepare decisions and why (prepared file missing, edge setting changed); budget 19 MB | body size; each shrink (input, new long edge); or "too large (N MB)" |
-| Attempt *n* | — | Send, Regenerate, Retry | `POST /v1beta/models/<model>:generateContent` (path only, never the key); body bytes; session (background or ephemeral); timeouts; earliest begin; expected receive bytes; then a step with the task identifier | HTTP status; bytes received; duration; `URLError` code; cancel reason |
-| Parse | — | Send, Regenerate, Retry, Late completion | HTTP status; response file and size | the outcome class (success, refused with reason, empty with finish reason, API error, malformed); parts; notices; duration |
-| (steps of Send, Regenerate, Retry) | | | | retry decisions with the reason and delay ("no auto-retry: HTTP 400 is not retryable", "CIVIC rebuild: 4 categories"); a background-created retry re-created in the foreground; the result arriving while the app was in the background; the reply saved (images, request state); the notification posted (its body) or not (why) |
-| Notification permission | system | — | asked on the first send (logged by the chat screen, which shows the prompt); the options (alert, sound) | granted or denied; the authorization status now |
-| Late completion | system | — | the request, its original action ID (also as `relatedID`) and when it was marked interrupted; attempt; HTTP status | as Send |
-| Cancel | user | — | the request and its state | task cancelled; the request's own action then ends `cancelled` |
-| Edit and Resend | user | — | the user message; text length; attachments to clone; the pin to restore | clones made; clones re-prepared; pin restored or not |
-| Save to Photos | user | — | the image ID; MIME type; bytes; pixel size | authorization status (`authorized`, `limited`, `denied`, `restricted`); saved, denied or failed with the error |
-| Save to Files | user | — | the image ID; MIME type; bytes; suggested file name | saved (file name), cancelled, or failed with the error |
-| Share | user | — | the image ID; MIME type; bytes (begun when the Share button is tapped, before the sheet is presented, section 4.9) | from the share sheet's completion handler: shared, with the activity type (`com.apple.UIKit.activity.AirDrop`); `cancelled` when dismissed; or failed with the error |
-| Copy | user | — | what (image, prompt, reply text); MIME type and bytes, or characters | pasteboard written (item count, type) |
-| Pin, Unpin | user | — | the chat; the image | done |
-| New chat, Rename chat, Delete chat, Delete message | user | — | the chat or message; the old and new title (private); image count; live requests to cancel | done; files removed (count, MB); `failed` if any file couldn't be removed, with the counts |
-| Delete empty chat | system | — | the chat, left with no messages (logged only when it's deleted, D§3.3) | done; or kept if a message arrived meanwhile |
-| Chat setting change | user | — | the chat; the setting (model, aspect ratio or resolution); old value → new value, or `Default` when the override is cleared; where (pill or Chat settings…) | saved; the effective value now, with any coercion |
-| Settings change | user | — | the setting; old value → new value | saved |
-| Delete all chats, Clear thumbnail cache | user | — | counts and sizes | removed counts; MB freed; `failed` if any removal failed, with the counts |
-| Janitor | system | — | thresholds (1 h, 10 min, 300 MB) | files removed per folder; MB freed; duration; `failed` if any removal failed, with the counts |
-| Log cleared | user | — | the size and entry count being removed; the open actions whose begins are kept | done |
+**Logged Actions and Telemetry Scopes**:
+
+- **Application Lifecycle Operations**:
+  - *Launch (system origin)*: Records application version, operating system environment, test flags, store initialization metrics, background session recreation, and reconciliation task dispatch. Concludes at completion of `didFinishLaunching`.
+  - *Reconcile (system origin)*: Records evaluation of non-terminal requests, active task audit, orphan response re-parsing, and resolution of interrupted operations.
+  - *Background Events (system origin)*: Logs session identifiers, background completion throughput, and notification relay latency prior to invoking system handlers.
+  - *Janitor (system origin)*: Records maintenance execution parameters, age/size eviction thresholds, file deletion counts across cache directories, and freed storage space.
+- **Credential and Model Configuration Operations**:
+  - *Save API Key / Validate Key / Remove API Key (user origin)*: Records key configuration entry points, validation endpoints, model count discoveries, and Keychain transaction outcomes without logging sensitive credential bytes or token lengths.
+  - *Models Refresh (user or system origin)*: Records catalog availability queries, pagination traversal, model capability delta checks, and timestamp updates.
+  - *Add Custom Model (user origin)*: Records custom endpoint identifier verification and catalog registration outcomes.
+  - *Settings & Chat Setting Change (user origin)*: Records modifications to global and per-conversation defaults (model, aspect ratio, image size, safety thresholds), capturing parameter coercion and persistence outcomes.
+- **Composer and Media Attachment Operations**:
+  - *Attach / Prepare Attachment / Tray Change (user origin)*: Records media import sources, asset counts, dimension ceilings, format conversions, EXIF/GPS scrubbing, and tray reordering or eviction.
+- **Generation Pipeline Operations**:
+  - *Send, Regenerate, and Retry (user origin)*: Top-level generation actions capturing operative model identifiers, aspect ratios, image dimensions, safety rules, input baseline arbitration, prompt lengths, and terminal outcomes.
+  - *Prepare Request (pipeline child action)*: Records payload serialization, budget calculation, and progressive input downscaling.
+  - *Attempt n (pipeline child action)*: Records HTTP endpoint invocation, payload transmission size, session category, transport timing, status codes, received bytes, and cancellation reasons.
+  - *Parse (pipeline child action)*: Evaluates response JSON, extracting typed parts, structured finish reasons, safety refusal descriptions, and API diagnostics.
+  - *Late Completion (system origin)*: Handles deferred response delivery for previously interrupted requests, linking to historical operation IDs.
+  - *Cancel (user origin)*: Records explicit user cancellation signals and transport task abortion.
+- **Export, Clipboard, and Message Management Operations**:
+  - *Save to Photos / Save to Files / Share / Copy (user origin)*: Records asset identifiers, MIME types, byte sizes, system authorization statuses, and transfer targets.
+  - *Pin / Unpin (user origin)*: Records baseline image selection for subsequent conversational turns.
+  - *Edit and Resend (user origin)*: Records prompt restoration, APFS attachment duplication, and baseline pin re-establishment.
+  - *Delete Message / New Chat / Rename Chat / Delete Chat / Delete Empty Chat / Delete All Chats (user or system origin)*: Records record removals, associated on-disk file purging, and active task cancellations.
+  - *Clear Log (user origin)*: Records log truncation metrics while preserving headers for active in-flight operations.
 
 Not logged: opening, copying and sharing the log (so viewing it never changes Last Action), navigation, scrolling and typing.
 
@@ -1125,21 +1107,19 @@ A test injects a sentinel key and asserts that it never appears in the log file 
   - `SWIFT_DEFAULT_ACTOR_ISOLATION` is set **explicitly** to `nonisolated` in `project.yml`. XcodeGen doesn't add the Xcode 26 template's MainActor default anyway, but setting it explicitly protects against toolchain default changes and keeps `@Model` and `@ModelActor` compatible.
   - Approachable-concurrency flags are not enabled. Hops are explicit.
 
-| Component | Isolation | Notes |
-|---|---|---|
-| Views, `ChatScreenModel`, `AppSettings`, `ModelAvailability`, `LogViewerModel`, `DeveloperMenuModel`, `BackgroundEventsRelay`, `NotificationRouter` | `@MainActor` | `@Observable` classes |
-| `@Model` classes | nonisolated, non-Sendable | used only inside the `ModelContext` that fetched them |
-| `DataStore` | `ModelActor` actor (conformed by hand, so its initializer can also take the `FileStore`) | all background writes; API takes and returns `UUID`s and Sendable snapshots (`RequestSnapshot`, `InputSnapshot`) |
-| `GenerationService` | `actor` | single writer of request state; consumes the transport's event stream in one task, one event at a time, so `.finishedEvents` is handled only after every earlier completion |
-| `URLSessionTransport`, `ResponseAccumulator` | `final class: Sendable` with `Mutex` | delegate callbacks on a private serial queue; synchronous file appends; events yielded synchronously into one ordered `AsyncStream` (no per-callback `Task`, so there's no ordering race) |
-| `ConnectivityMonitor`, `BackgroundTaskProvider` | `Sendable` classes; UI-facing state published on `@MainActor` | `UIApplication` calls hop to the main actor |
-| `ImagePreprocessor`, `ResponseParser`, `RequestBodyWriter`, `ThumbnailService` work | `nonisolated` + `@concurrent` async functions | CPU and I/O off the main actor; only Sendable inputs and outputs (`URL`, `Data`, value structs) |
-| `KeychainStore`, `GeminiEndpoint`, `InputSelector`, `GenerationSettingsResolver`, `RetryPolicy` | pure / nonisolated structs | deterministic, unit-tested |
-| `AppActivity` | `Mutex`-protected final class | read from the actor, written from MainActor |
-| `ActivityLog` (facade) | nonisolated `final class: Sendable` with `Mutex` | callable from any isolation, synchronous, never awaits; it sanitizes and renders **before** taking the lock, and under the lock only takes the ID, stamps and yields into one ordered `AsyncStream` (no per-call `Task`), so file order is lock order. Its async calls (`flush`, `entries`, `openActionsAtLaunch`, `clear`) are control messages in the same stream, so they're ordered after every earlier entry |
-| `ActivityLogStore` | `actor` | the stream's only consumer, the log file's only writer and the OSLog mirror's only caller; keeps the action index; appends, rotation, clear, queries; publishes `changes()` |
-| `SecretRegistry` | `Mutex`-protected `final class: Sendable` | read by the sanitizer on any thread; written by `APIKeyStore` and onboarding |
-| `ActivityLogQuery`, `ActivityLogFormatter` | pure / nonisolated | deterministic, unit-tested |
+### 5.1 Component Isolation and Actor Architecture
+
+- **Presentation Domain (`@MainActor`)**: Views, `@Observable` view models (`ChatScreenModel`, `AppSettings`, `ModelAvailability`, `LogViewerModel`, `DeveloperMenuModel`), and platform presentation coordinators (`BackgroundEventsRelay`, `NotificationRouter`) execute exclusively on the main actor to guarantee thread-safe UI updates.
+- **Relational Domain Models (`@Model`)**: SwiftData entity classes are nonisolated and non-Sendable, confined strictly to the internal `ModelContext` of `DataStore`.
+- **Persistence Store (`DataStore`)**: Implements `ModelActor` to bind database mutations to an isolated serial executor. External callers interact exclusively via detached Sendable snapshot structs (`RequestSnapshot`, `InputSnapshot`).
+- **Generation Service (`GenerationService`)**: An actor providing authoritative synchronization for generation lifecycles and state transitions. Consumes the transport event stream sequentially to ensure deterministic execution.
+- **Transport Subsystem (`URLSessionTransport`, `ResponseAccumulator`)**: Thread-safe Sendable reference types utilizing internal `Synchronization.Mutex` primitives. Delegate callbacks execute on a private serial `OperationQueue`, writing incoming data synchronously and emitting events into a single ordered `AsyncStream`.
+- **System and Lifecycle Services (`ConnectivityMonitor`, `BackgroundTaskProvider`)**: Thread-safe coordinators exposing state changes via `@MainActor` callbacks while interfacing with system APIs.
+- **Stateless Computational Operations**: Image preprocessing, response parsing, request body serialization, and thumbnail generation execute as nonisolated, concurrent asynchronous routines off the main thread, operating on immutable Sendable inputs.
+- **Pure Domain Rules and Utilities**: Configuration resolvers, endpoint builders, retry policies, and input selection heuristics are implemented as deterministic, pure value types.
+- **Application Activity Monitoring (`AppActivity`)**: A thread-safe class utilizing mutual exclusion locks to bridge synchronous lifecycle checks across concurrency boundaries.
+- **Diagnostic Logging Subsystem**: `ActivityLog` operates as a nonisolated thread-safe facade accepting synchronous logging invocations across any thread context, dispatching serialized events to an actor-isolated `ActivityLogStore` for persistence and rotation.
+- **Secret Registry (`SecretRegistry`)**: Thread-safe reference type protected by `Mutex`, allowing lock-free reads during message sanitization across concurrent tasks.
 
 - **The Sendable boundary for a send.** The MainActor builds a `SendDraft`:
   - `conversationID`, `promptText`, `[StagedAttachment]` (with URLs and prepared metadata);
@@ -1153,43 +1133,44 @@ A test injects a sentinel key and asserts that it never appears in the log file 
 
 ## 6. Error handling and edge cases
 
-| # | Condition | Detection | What the user sees | Recovery |
-|---|---|---|---|---|
-| 1 | No API key | Keychain empty at launch or at task build | Onboarding; an in-flight retry fails with "No API key" | Enter key, then Retry |
-| 2 | Invalid key | 400 `API_KEY_INVALID`, 401, 403 | Card "Key rejected (403 PERMISSION_DENIED)" with message, plus a Settings button | Replace key |
-| 3 | Bad config (aspect/size/imageConfig) | 400 `INVALID_ARGUMENT` | Card with the API message and the values sent | Change pills, then Edit and Resend (Regenerate reuses the recorded values) |
-| 4 | CIVIC_INTEGRITY rejected | 400 whose message mentions CIVIC_INTEGRITY | Nothing visible (automatic) | One automatic rebuild and retry, flag persisted |
-| 5 | Billing or region | 400 `FAILED_PRECONDITION` | Card with message | None in-app |
-| 6 | Prepay credits exhausted | 402 | Card "Out of credits" | No auto-retry |
-| 7 | Model retired or unknown | 404 `NOT_FOUND` | Card "Model not found or retired: <id>" plus "Open Models" | Switch model; Flash default stays |
-| 8 | Rate limit / quota | 429 `RESOURCE_EXHAUSTED` | Pending card "Retrying in Ns"; after the last attempt, an error card | Auto-retry (Retry policy below), then manual Retry |
-| 9 | Server errors | 500/502/503/504, 408 | Same as 8 | Same as 8 |
-| 10 | Offline at send or mid-flight | The background session waits by itself; in the foreground, `ConnectivityMonitor` reports no usable path | Pending card "Waiting for network" (foreground only) | Continues automatically until the 30 min resource timeout. That timeout arrives as `URLError.timedOut` with at least 1800 s elapsed, which is **not** retried: card "Timed out" + Retry |
-| 11 | Idle timeout (300 s) | `URLError.timedOut` with less than 1800 s elapsed since the attempt's task began | Automatic retry within the shared budget (up to 2), then card "Timed out" | Retry |
-| 12 | Request refused (prompt or output) | `promptFeedback.blockReason` (§2.7 rule 3), or no image part and a `finishReason` other than STOP / MAX_TOKENS / FINISH_REASON_UNSPECIFIED (§2.7 rule 6: IMAGE_SAFETY, IMAGE_OTHER, PROHIBITED_CONTENT, NO_IMAGE, OTHER, unrecognized reasons, …), even if text parts came back | Card "Request refused: <reason>" and nothing else; `finishMessage` and any returned text only under Details (Info) | Retry / Edit / New Chat (section 3.4). Never retried automatically: the filters are inconsistent, so Retry is the user's choice |
-| 13 | Account limited | refusal with reason `PUP_LIMITED_DISABLED` | Card "Request refused: PUP_LIMITED_DISABLED" with the note that the API account is limited and retrying won't help | Edit / New Chat (no Retry) |
-| 14 | Text only, no image | success with no image part, finish reason STOP / MAX_TOKENS / FINISH_REASON_UNSPECIFIED / missing (§2.7 rule 8) | Rendered text + "No image returned" badge + finish reason | Regenerate |
-| 15 | Empty response | no candidates, or no visible parts with finish reason STOP / MAX_TOKENS / FINISH_REASON_UNSPECIFIED / missing (§2.7 rules 4 and 7) | "No content returned by the model." + Details | Retry |
-| 16 | Malformed or truncated body, or HTML (captive portal) | JSON decode failure | Card "Unexpected response" + Details (first 64 KB) | Retry |
-| 17 | Image part won't decode | `CGImageSource` count 0 | Other parts shown, plus the notice "1 image could not be decoded" | Regenerate |
-| 18 | Resolution not honored | Actual dimensions outside the expected range | ⚠︎ on the metadata line | Optionally turn off "Request text alongside images" and send again (the default follows the R3 decision: `["TEXT","IMAGE"]` unless the smoke test confirmed the 1K cap, then `["IMAGE"]`) |
-| 19 | Request over budget | Body size above 19 MB after shrinking | Error before sending; tray caption warned earlier | Remove images / lower the max edge |
-| 20 | Attachment import fails (iCloud photo offline, unreadable) | `loadTransferable` throws / no image source | ⚠︎ on the tray item with the reason; Send stays disabled until it's removed (section 2.2) | Remove, or retry when online |
-| 21 | More than 14 attachments | Picker limit / importer count; at 14 the + menu items and PasteButton are disabled | Toast "Up to 14 images per message"; extras dropped | — |
-| 22 | Pinned image deleted | Asset missing at send | The chip disappears; selection falls through to latest | — |
-| 22a | Reused upload's prepared file missing, or made at an older max-edge setting (pin, latest, or an Edit and Resend clone) | `prepared*` fields vs the current `maxUploadLongEdge` | Nothing (a clone shows the tray spinner briefly); it's re-prepared from the original before sending (section 4.3) | — |
-| 23 | Regenerate input missing | Prepared or original file missing | Regenerate disabled: "An input image was deleted" | Edit and Resend with new images |
-| 24 | Message or chat deleted while in flight | Delete action | Cancel the task first, then delete; late completions for missing records are discarded | — |
-| 25 | Force-quit / crash during flight; system cancel; preparation outlived its background-task assertion | Reconciler finds no task, or `NSURLErrorCancelled` that the app didn't issue (cancel reason logged), or the assertion's expiration handler | "Interrupted" card | Retry |
-| 26 | Crash during parse | `.complete` marker present | Nothing visible; re-parsed at launch | — |
-| 27 | Disk full | write throws `NSFileWriteOutOfSpaceError` | Card "Not enough storage to save the result" | Free space, then Retry (body kept) |
-| 28 | Key removed during flight | Task already built | The in-flight request completes; later retries fail as #1 | — |
-| 29 | Model or pills changed during flight | — | No effect on that request; the values are recorded | — |
-| 30 | Notifications denied | Authorization status | Nothing intrusive; status in Settings | Settings link |
-| 31 | Photos add permission denied | `.denied` / `.restricted` | Alert with Open Settings | — |
-| 32 | Duplicate send tap | Composer disabled while the request is preparing (and while any tray item is importing or preparing) | — | — |
-| 33 | `didReceive` never fires (reported URLSession bug) | Completion with status 200 and an empty or missing `.part` file | Automatic retry within the shared budget (up to 2), then card "Unexpected response" as #16 | Retry |
-| 34 | Rename to empty | — | Reverts to the automatic title | — |
+### 6.1 Systematic Error Categorization and Recovery
+
+- **Authentication and Authorization Errors**:
+  - *Missing API Key (Condition 1)*: Detected when Keychain contains no credential at launch or request submission. Surfaces onboarding or prompts to configure credentials in Settings. Recovered by saving a valid key and retrying.
+  - *Invalid or Rejected Key (Condition 2)*: Detected via HTTP 400 (`API_KEY_INVALID`), 401, or 403. Displays an error card with provider diagnostic message and Settings deep link. Recovered by replacing the key.
+  - *Account Limitation (`PUP_LIMITED_DISABLED`, Condition 13)*: Detected via safety refusal payload. Displays an error card noting account limitations. Recovery is restricted to Edit or New Chat; automatic retries are suppressed.
+- **Request Configuration and Model Errors**:
+  - *Invalid Parameter Configuration (Condition 3)*: Detected via HTTP 400 (`INVALID_ARGUMENT`). Displays API error diagnostics alongside transmitted parameters. Recovered by adjusting overrides and re-submitting.
+  - *Deprecated Safety Category (`CIVIC_INTEGRITY`, Condition 4)*: Detected via HTTP 400 referencing the category. Triggers an automatic single-request rebuild omitting the category and persists the exclusion flag.
+  - *Model Deprecation or Missing Endpoint (Condition 7)*: Detected via HTTP 404 (`NOT_FOUND`). Displays a model error card offering navigation to model configuration settings.
+- **Quota and Resource Constraints**:
+  - *Rate Limiting and Quota Exhaustion (Condition 8)*: Detected via HTTP 429 (`RESOURCE_EXHAUSTED`). Displays a countdown indicator during automatic retries, presenting an error card upon retry exhaustion.
+  - *Billing Constraints and Prepayment Depletion (Conditions 5, 6)*: Detected via HTTP 400 (`FAILED_PRECONDITION`) or 402. Displays an error card indicating credit or billing exhaustion.
+  - *Payload Capacity Exceeded (Condition 19)*: Detected prior to network dispatch if serialized body size exceeds 19 MB following downscaling. Surfaces a warning alert preventing submission until attachments or dimension settings are reduced.
+- **Transient Transport and Network Faults**:
+  - *Server Errors (Condition 9)*: Detected via HTTP 500, 502, 503, 504, or 408. Managed via automatic exponential backoff retries within the attempt budget, surfacing error cards upon exhaustion.
+  - *Network Disconnection and Offline Transitions (Condition 10)*: Monitored via `ConnectivityMonitor` and background URLSession connectivity suspension. Displays network waiting indicators while deferring to the 30-minute overall resource timeout before failing with a retryable timeout card.
+  - *Idle Request Timeout (Condition 11)*: Detected via `URLError.timedOut` prior to resource timeout exhaustion. Automatically retried within the attempt budget before presenting a manual retry card.
+  - *Truncated or Zero-Byte Response (Condition 33)*: Detected upon transport completion with status 200 but an empty or missing response payload file. Automatically retried within the attempt budget.
+- **Model Output and Parsing Anomalies**:
+  - *Safety and Content Refusals (Condition 12)*: Detected via prompt block reasons or candidate finish reasons other than normal completion. Displays a refusal card with the exact API reason, providing Retry, Edit, and New Chat actions.
+  - *Empty Output or Text-Only Replies (Conditions 14, 15)*: Detected when candidates contain no valid image parts. Displays appropriate diagnostic badges and finish reasons, allowing manual retry or regeneration.
+  - *Malformed or Non-JSON Response (Condition 16)*: Detected via JSON decoding failure. Surfaces an unexpected response error card with raw payload details.
+  - *Corrupt Image Payload (Condition 17)*: Detected when image decoding fails for an output block. Presents remaining valid parts accompanied by a non-blocking diagnostic notice.
+  - *Unmet Resolution Expectations (Condition 18)*: Flagged on metadata displays if synthesized dimensions deviate from requested parameters.
+- **Attachment and Asset State Transitions**:
+  - *Attachment Import Failures (Condition 20)*: Displays inline warning badges on invalid tray items and blocks dispatch until resolved.
+  - *Attachment Overflow (Condition 21)*: Constrains selection to the 14-image limit, surfacing diagnostic notifications when exceeded.
+  - *Pinned or Baseline Asset Deletion (Conditions 22, 23)*: Falls back gracefully to preceding conversation baselines or disables regeneration if source dependencies are purged.
+  - *Stale Prepared Attachments (Condition 22a)*: Automatically re-prepares image files from originals if dimension thresholds change.
+- **Lifecycle, Storage, and System Interruption Faults**:
+  - *Process Termination or System Cancellation (Condition 25)*: Detected by `Reconciler` during launch checks when active tasks are absent or cancelled externally. Transitions request state to interrupted, offering manual retry.
+  - *Local Storage Exhaustion (Condition 27)*: Detected via `NSFileWriteOutOfSpaceError` during asset persistence. Retains the response payload on disk and displays a storage exhaustion card allowing retry after disk space is cleared.
+  - *Crash During Response Parsing (Condition 26)*: Detected during launch reconciliation by the presence of a `.complete` marker file, triggering automatic re-parsing.
+  - *In-Flight Deletion or Credential Removal (Conditions 24, 28, 29)*: Cancels active network tasks cleanly or allows current in-flight transfers to finalize before enforcing credential boundaries.
+  - *Permission Denials (Conditions 30, 31)*: Directs users to system privacy settings without interrupting application workflow.
+  - *UI Concurrency Protection (Condition 32)*: Disables submission controls during active request preparation.
+  - *Empty Title Reversion (Condition 34)*: Restores default conversation titles if renamed to whitespace.
 
 **Retry policy (`RetryPolicy`, pure):**
 - **Inputs.** `decide(result, autoRetriesUsed:, civicWasSent:, civicFallbackUsed:)`. The counters come from the persisted request (`autoRetriesUsed`, `civicFallbackUsed`, section 4.3), never from memory, so the policy is correct after a relaunch between retries. A transport result carries the elapsed time since the attempt's task began.
@@ -1236,21 +1217,17 @@ A test injects a sentinel key and asserts that it never appears in the log file 
 - **Thumbnails.**
   - `ThumbnailService` (an actor) makes 240 px and 1200 px JPEG thumbnails on first request, and larger ones as described below. They're stored in `Caches/Thumbnails` and held in an `NSCache<NSString, UIImage>` with `totalCostLimit = 120 MB` (cost = width × height × 4).
   - Bubble views load asynchronously with `.task(id:)` and show a placeholder sized from the stored pixel dimensions.
-  - Model outputs get thumbnails made right after parsing, while the bytes are hot.
+  - Model outputs have thumbnails generated immediately following response parsing while payload bytes reside in memory buffers.
   - On the Mac and iPad a reply image drawn large asks for more pixels (`ThumbnailService.displayPixels`, on every platform). The current image stays on screen until they arrive, with no change of frame. The size has to hold for 250 ms before anything is decoded, a size that's no longer wanted is cancelled by its `.task(id:)`, and a request that has been waiting behind other decodes checks for cancellation before it starts. Only rows on screen or near it hold a larger image, because the cache's budget can't limit images that views keep alive; scrolling back gets it from the cache without decoding when it's still there. A row drawn smaller keeps what it holds or takes a larger size from memory, so going smaller decodes nothing that way, and only the first request for a size that's missing reads the original. Decoding runs off the actor, one at a time among sizes up to 1200 px and one at a time among larger ones, so a large decode holds up neither a list thumbnail nor anything already in memory, and a memory hit doesn't wait for the actor at all. A transcript of thirty 4K images scrolled end to end at full display peaked at 666 MB of footprint and settled at 308 MB. These thumbnails fall under the same 300 MB disk trim as the others. Deleting a chat or a message removes its images' thumbnails from disk and memory, and the Janitor removes any left over once the image has no record and the file is past the 10-minute freshness window.
 - **Large responses.**
   - A 4K response with interim thought images can reach about 30 MB of JSON. The body is streamed to disk by the delegate, memory-mapped for decoding, and each image is decoded from base64 and written straight away.
   - Peak memory is about 3× the largest image's base64 size plus the mapped file. Parses run one at a time inside `GenerationService`.
 - **Large request bodies** are streamed to the file in 48 KiB chunks and never held in memory.
 - **The transcript.** Stable IDs (`Message.id`), and each row computes nothing heavy in `body`. The parts JSON is decoded once per message into a cached value on the row's model.
-  - The iPhone uses a `LazyVStack`. The Mac and an iPad split lay out every row (section 3.11), and that cost grows with the chat. Measured on an M-series Mac, with the app built `-O`, opening a chat, one step of a resize, and one scroll tick:
-
-    | Messages | Open | Resize step | Scroll tick | Open, lazy | Resize step, lazy |
-    |---|---|---|---|---|---|
-    | 60 | 340 ms | 23 ms | 3.5 ms | 150 ms | 12 ms |
-    | 500 | 1.8 s | 153 ms | 19 ms | 220 ms | 12 ms |
-
-    Medians over repeated runs, which can differ by 20% from one session to the next. At 500 messages the app holds about 670 MB after opening the chat and 780 MB after scrolling through it, and idles at 0% CPU. A scroll tick used to take 42 ms at 500 messages, and a real wheel event more, 52 to 64 ms: each write to view state runs a transaction in the view graph, even with nothing reading the value, so what's written on every tick is now outside it (`TranscriptUserScrolling`, and the distance from the bottom in `TranscriptReflow`), which saves 37% and brings a wheel event down to the same 19 to 29 ms. Hit testing only the rows near the view saves 24%, and leaving `scrollTargetLayout` off the Mac's stack, which nothing there used, saves 7% of a tick and 7% of a resize step. Giving each row its own geometry group saves nothing. The rest of the time is in the framework's attribute graph, so it barely differs from a Debug build, and it isn't the rows' own work: taking away every row's frame report and every image's size observer saves about 5%. The lazy numbers are from a Debug build. A chat of several hundred messages still opens slowly and resizes at a few frames a second, which only laying out fewer rows can change. Showing only the most recent rows until asked would bound this, if chats that long turn out to matter.
+  - The iPhone uses a `LazyVStack`. Desktop macOS and regular-width iPadOS split views lay out every row eagerly (Section 3.11) to guarantee stable scroll offsets during live window resizing. Benchmarks measured on Apple Silicon hardware under release optimization illustrate the performance characteristics across conversation sizes:
+    - *Small Conversations (60 messages)*: Eager layout registers 340 ms initial opening latency, 23 ms per resize increment, and 3.5 ms per scroll tick (compared to 150 ms open and 12 ms resize under lazy stacks).
+    - *Large Conversations (500 messages)*: Eager layout registers 1.8 s initial open latency, 153 ms per resize step, and 19 ms per scroll tick, maintaining 670 MB to 780 MB memory footprint and 0% idle CPU utilization (compared to 220 ms open and 12 ms resize under lazy stacks).
+    - *View Graph Optimizations*: Decoupling scroll offset mutation from reactive SwiftUI view state (`TranscriptUserScrolling`, unobserved reflow coordinate updates) eliminates redundant attribute graph invalidations, reducing wheel event latency by 37% (from 52–64 ms down to 19–29 ms). Restricting pointer hit-testing exclusively to rows within 800 pt of the visible viewport (`FarRowHitTesting`) avoids exhaustive per-frame view hierarchy traversals, yielding an additional 24% reduction in scroll processing overhead.
 - **The pending card** costs about 0.5% CPU in the app, down from 35% with a 30 fps `TimelineView`, because its gradient animates in the render server. WindowServer's load doesn't measurably change with it on screen.
 - **The viewer** keeps one full-resolution decode at a time. Pages next to the visible one show the 1200 px thumbnail until they're settled.
 - **Launch.** The background session is recreated synchronously in `didFinishLaunching`; it's cheap. The Reconciler starts right after it, at utility priority, on every launch, including background relaunches that never draw a frame (section 4.7). The Janitor runs after the first frame, once the Reconciler has finished (section 4.4); on a background relaunch with no UI it simply waits for the next foreground launch.

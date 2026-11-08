@@ -6,21 +6,19 @@ This document outlines the architecture of the ImageGen codebase.
 
 ## 1. Architecture
 
-High level feature workflows delegate downwards through pipeline coordination, protocol translation, and platform infrastructure, preventing cyclic references and isolating subsystem failures.
+High level feature workflows delegate downwards through pipeline coordination, protocol translation, and platform infrastructure, preventing cyclic references and isolating subsystem failures. The system is partitioned into the following functional layers:
 
-| Layer | Subsystem Directory | Architectural Invariants & Scope |
-|---|---|---|
-| **Presentation** | `Features/` | Declarative SwiftUI views and `@Observable` view models. View models are isolated to `@MainActor`, orchestrating UI state, user intents, and presentation lifecycles without maintaining persistent storage references. |
-| **Composition Root** | `App/` | Centralizes application initialization, singleton service composition (`AppEnvironment`), UIKit lifecycle adaptation, and system notification dispatch. |
-| **Generation Pipeline** | `Pipeline/` | Coordinates multimodal request arbitration, background execution assertions, transient network recovery, and state reconciliation (`GenerationService`). |
-| **Transport** | `Networking/` | Manages background network transfers via `URLSessionDownloadTask` and serializes transport event streams for consumption by the pipeline. |
-| **Protocol Translation** | `Gemini/` | Implements bidirectional serialization for the Gemini REST API (`generateContent`), structured error parsing, and sensitive data redaction. |
-| **Persistence** | `Persistence/` | Implements an isolated SwiftData actor (`DataStore`) for relational conversation state alongside disk-backed payload storage (`FileStore`) and orphaned file garbage collection (`Janitor`). |
-| **Image Processing** | `Imaging/` | Executes CoreGraphics and ImageIO operations for metadata sanitization, downscaling, format transformation, and thumbnail generation off the main thread. |
-| **Export Services** | `Export/` | Handles platform export operations (Photos library, Files document tree, system share sheets) while preserving bit-identical payload integrity. |
-| **Security** | `Security/` | Manages credential lifecycle in the iOS Keychain with hardware-enforced protection classes. |
-| **Foundations** | `Support/` | Implements structured diagnostic logging (`ActivityLog`), formatting utilities, and synchronization primitives. |
-| **Test Instrumentation** | `DebugSupport/` | In-memory protocol interception and deterministic fixture generation utilized during automated testing and simulator demonstration modes. Excluded from production binaries. |
+- **Presentation (`Features/`)**: Declarative SwiftUI views and `@Observable` view models. View models are isolated to `@MainActor`, orchestrating UI state, user intents, and presentation lifecycles without maintaining persistent storage references.
+- **Composition Root (`App/`)**: Centralizes application initialization, singleton service composition (`AppEnvironment`), UIKit lifecycle adaptation, and system notification dispatch.
+- **Generation Pipeline (`Pipeline/`)**: Coordinates multimodal request arbitration, background execution assertions, transient network recovery, and state reconciliation (`GenerationService`).
+- **Transport (`Networking/`)**: Manages background network transfers via `URLSessionDownloadTask` and serializes transport event streams for consumption by the pipeline.
+- **Protocol Translation (`Gemini/`)**: Implements bidirectional serialization for the Gemini REST API (`generateContent`), structured error parsing, and sensitive data redaction.
+- **Persistence (`Persistence/`)**: Implements an isolated SwiftData actor (`DataStore`) for relational conversation state alongside disk-backed payload storage (`FileStore`) and orphaned file garbage collection (`Janitor`).
+- **Image Processing (`Imaging/`)**: Executes CoreGraphics and ImageIO operations for metadata sanitization, downscaling, format transformation, and thumbnail generation off the main thread.
+- **Export Services (`Export/`)**: Handles platform export operations (Photos library, Files document tree, system share sheets) while preserving bit-identical payload integrity.
+- **Security (`Security/`)**: Manages credential lifecycle in the iOS Keychain with hardware-enforced protection classes.
+- **Foundations (`Support/`)**: Implements structured diagnostic logging (`ActivityLog`), formatting utilities, and synchronization primitives.
+- **Test Instrumentation (`DebugSupport/`)**: In-memory protocol interception and deterministic fixture generation utilized during automated testing and simulator demonstration modes. Excluded from production binaries.
 
 ---
 

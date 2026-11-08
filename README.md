@@ -1,6 +1,6 @@
 # ImageGen
 
-ImageGen is a native macOS, iPhone and iPad client for multimodal image generation and iterative editing powered by Google's Gemini REST API (`generateContent`). Using direct client-to-API communication with user managed API credentials, the application provides a conversational interface for text-to-image and image-to-image generation, persisting conversation state and generated media locally on device. The macOS app and the iOS app, which is one universal target for iPhone and iPad, are separate native targets (UIKit-free SwiftUI shared code plus per-platform code), not Catalyst.
+ImageGen is a native macOS, iPhone and iPad client for multimodal image generation and iterative editing powered by Google's Gemini REST API. Using direct client-to-API communication with user-managed API credentials, the application provides a conversational interface for text-to-image and image-to-image generation, persisting conversation state and generated media locally on device.
 
 ## Capabilities
 
@@ -10,27 +10,27 @@ ImageGen is a native macOS, iPhone and iPad client for multimodal image generati
 - **Dimensional and Aspect Ratio Controls**: Aspect ratio (14 standard options) and output resolution (512, 1K, 2K, 4K) are governed by global defaults in Settings and can be overridden per conversation. Each dispatched request captures its exact operational parameters to guarantee deterministic re-execution upon **Regenerate**.
 - **Resilient Background Execution**: Dispatched requests run via a background `URLSession`. On iOS, background task assertions keep them running across app suspension and process termination; on macOS a `ProcessInfo` activity assertion prevents idle system sleep and App Nap from the moment a request is prepared until its reply arrives. Local notifications are delivered on completion.
 - **Bit-Identical Export Pipeline**: Export operations (Photos library or a save panel, Files filesystem, share sheet, pasteboard) deliver the uncompressed byte streams returned by the Gemini API without intermediate re-encoding.
-- **Layout for each device**: macOS and a regular-width iPad window show the chat list as a sidebar beside the chat, with text and the composer in a readable column and reply images sized to the window and loaded at the resolution they are drawn. The iPhone and narrow iPad windows show the chat list with a chat pushed on top of it, at full width. Resizing and rotating keep the reader's place.
+- **Adaptive Multi-Platform Layouts**: macOS and regular-width iPad presentations utilize a two-column sidebar layout with constrained reading column widths and dynamic high-resolution image scaling. iPhone and compact iPad windows use full-width stack navigation, maintaining scroll positions and navigation state across orientation changes and window resizes.
 - **Structured Activity Logging**: Comprehensive activity instrumentation records request preparation parameters, transport phases, and terminal states in plain-text diagnostic logs, inspectable through an on device Developer menu without capturing sensitive credentials or binary image data.
 
 ## System Architecture
 
 ### Architectural Layers
 
-| Directory | Layer | Architectural Responsibility |
-|---|---|---|
-| `ImageGen/Features/` | Presentation | SwiftUI user interfaces and `@Observable` view models governing chat interaction, settings, media viewing, and developer utilities. |
-| `ImageGen/App/` | Composition Root | Application initialization, dependency injection (`AppEnvironment`), lifecycle monitoring, and lifecycle event routing. |
-| `ImageGen/Pipeline/` | Generation Pipeline | Request preparation, input arbitration, background assertion management, transient fault recovery, and outcome reconciliation (`GenerationService`). |
-| `ImageGen/Networking/` | Transport | Background HTTP communication via `URLSessionDownloadTask` and event stream demultiplexing. |
-| `ImageGen/Gemini/` | Protocol Translation | Serialization and deserialization of Gemini API JSON contracts, error payload extraction, and data sanitization. |
-| `ImageGen/Persistence/` | Persistence | SwiftData storage engine (`DataStore`) and on-disk payload management (`FileStore`), with automatic orphaned asset purging (`Janitor`). |
-| `ImageGen/Imaging/` | Image Processing | CoreGraphics and ImageIO operations for metadata stripping, downscaling, format normalization, and thumbnail caching. |
-| `ImageGen/Export/` | Export Services | System photo library writes, sandboxed document export, and pasteboard serialization. |
-| `ImageGen/Security/` | Security | Secure storage of Gemini API credentials in the Keychain with device-locked protection attributes (the data protection keychain on macOS). |
-| `ImageGen/Support/` | Foundations | Activity logging pipeline, typography, formatting utilities, and synchronization primitives. |
-| `ImageGen/DebugSupport/` | Testing Support | In-memory mock transports and demo dataset seeders for automated tests and standalone mock-mode execution. Compiled in Debug only. |
-| `Platforms/iOS/`, `Platforms/macOS/` | Platform | Per-platform UI and system glue (navigation, toolbars, composer attachments, viewer, log view, share sheet, app entry point and delegate). Both directories define the same type and function names, so `ImageGen/` calls them without conditional compilation. `ImageGen/` never imports UIKit or AppKit (enforced by `scripts/lint.sh`). |
+The codebase is organized into modular subsystems with unidirectional dependency boundaries:
+
+- **Presentation (`ImageGen/Features/`)**: SwiftUI user interfaces and `@Observable` view models governing chat interaction, settings, media viewing, and developer utilities.
+- **Composition Root (`ImageGen/App/`)**: Application initialization, dependency injection (`AppEnvironment`), lifecycle monitoring, and lifecycle event routing.
+- **Generation Pipeline (`ImageGen/Pipeline/`)**: Request preparation, input arbitration, background assertion management, transient fault recovery, and outcome reconciliation (`GenerationService`).
+- **Transport (`ImageGen/Networking/`)**: Background HTTP communication via `URLSessionDownloadTask` and event stream demultiplexing.
+- **Protocol Translation (`ImageGen/Gemini/`)**: Serialization and deserialization of Gemini API JSON contracts, error payload extraction, and data sanitization.
+- **Persistence (`ImageGen/Persistence/`)**: SwiftData storage engine (`DataStore`) and on-disk payload management (`FileStore`), with automatic orphaned asset purging (`Janitor`).
+- **Image Processing (`ImageGen/Imaging/`)**: CoreGraphics and ImageIO operations for metadata stripping, downscaling, format normalization, and thumbnail caching.
+- **Export Services (`ImageGen/Export/`)**: System photo library writes, sandboxed document export, and pasteboard serialization.
+- **Security (`ImageGen/Security/`)**: Secure storage of Gemini API credentials in the Keychain with device-locked protection attributes (the data protection keychain on macOS).
+- **Foundations (`ImageGen/Support/`)**: Activity logging pipeline, typography, formatting utilities, and synchronization primitives.
+- **Testing Support (`ImageGen/DebugSupport/`)**: In-memory mock transports and demo dataset seeders for automated tests and standalone mock-mode execution. Compiled in Debug only.
+- **Platform Implementations (`Platforms/iOS/`, `Platforms/macOS/`)**: Per-platform UI and system integration components, including navigation structures, toolbars, composer attachments, media viewing, log presentation, share sheet integration, and application lifecycle delegates. Both directories expose identical type and function interfaces, allowing shared code in `ImageGen/` to call platform operations without conditional compilation. Enforced by static analysis, `ImageGen/` contains no direct imports of UIKit or AppKit.
 
 ### Request Lifecycle
 
@@ -145,35 +145,33 @@ Execute live integration verification against the production Gemini API:
 TEST_RUNNER_GEMINI_API_KEY="$GEMINI_API_KEY" scripts/live-smoke.sh
 ```
 
-### macOS App
+### macOS Application
 
-The macOS target (`ImageGenMac`, product name `ImageGen`, sandboxed) needs `DEVELOPMENT_TEAM` in `Config/Local.xcconfig`; the data protection keychain refuses unsigned binaries. The scripts pass `-allowProvisioningUpdates`.
+The macOS target (`ImageGenMac`, product name `ImageGen`, sandboxed) requires `DEVELOPMENT_TEAM` configuration in `Config/Local.xcconfig` to sign the binary for data protection keychain access. Build and execution scripts automatically request provisioning updates.
 
 ```bash
 scripts/gen.sh
-scripts/build-mac.sh              # Debug; --release for Release
+scripts/build-mac.sh              # Debug build; pass --release for Release
 scripts/run-mac.sh -UITestMockGemini 1 -SkipNotificationPrompt 1 -SeedDemoData 1
-scripts/test-mac.sh               # tests hosted in the signed app
+scripts/test-mac.sh               # Unit and integration test suite
 ```
 
-`run-mac.sh` quits any running copy, waits for it to exit, and opens the built Debug app through Launch Services, trying again for a few seconds if Launch Services is still tearing down the old instance. `RUN_MAC_BACKGROUND=1` opens it with `open -g`, which asks the system not to bring it to the front. The Debug configuration has its own bundle ID (`<IMAGEGEN_BUNDLE_ID>.debug`) and so its own sandbox container (`~/Library/Containers/com.andrewpurtell.imagegen.debug`), keychain item and defaults, which makes `-ResetStore 1` safe: it can't reach a Release install's data.
+The execution runner terminates prior running instances and launches the built Debug binary through Launch Services. Setting `RUN_MAC_BACKGROUND=1` invokes `open -g` to launch without stealing focus. The Debug build utilizes an isolated application bundle identifier (`<IMAGEGEN_BUNDLE_ID>.debug`) and a distinct sandbox container (`~/Library/Containers/com.andrewpurtell.imagegen.debug`), preventing interference with production data when running with store-reset flags (`-ResetStore 1`).
 
-Two layout rules hold on the Mac, explained in `doc/DESIGN.md` section 3.11:
+macOS layout architecture adheres to specific desktop invariants detailed in `doc/DESIGN.md` Section 3.11:
 
-- **The transcript's width doesn't depend on the scroll bar.** With "Show scroll bars: Always", a bar takes width while content overflows, and an image's height follows its width, so content can overflow only when the bar is absent. Left alone, the bar toggles on every layout pass and hangs the app. So the width is capped from the scroll view's outer frame with the bar's width always reserved. It's a cap and not a fixed width, because a fixed width would become the window's minimum width.
-- **The composer is an opaque system-background bar.** Its pills and chips sit directly on that background, outlined by a hairline capsule, instead of the glass they use on iPhone and iPad.
+- **Scrollbar-Independent Content Sizing**: To prevent circular layout oscillations when persistent scrollbars are enabled in system settings, the transcript column width is constrained relative to the enclosing viewport width with legacy scrollbar gutter width continuously reserved.
+- **Opaque Desktop Composer Surface**: The composer bar renders on an opaque window background surface with a structural divider, presenting accessory controls within bordered capsule containers rather than translucent materials.
+- **Keystroke Forwarding**: Alphanumeric input received while focus resides in the navigation sidebar automatically transfers focus to the composer text field, appending to existing draft text while preserving standard keyboard navigation shortcuts (Return, Tab, arrow keys) for list selection.
 
-Typing a character while the sidebar has the keyboard starts a prompt in the composer, with the caret after any draft; arrow keys, Return, Tab and menu shortcuts stay with the list and the menus.
+### iPadOS Application
 
-### iPad
+The iOS target supports both iPhone and iPad (`TARGETED_DEVICE_FAMILY = 1,2`). iPadOS supports all four device orientations, whereas iPhone presentation is constrained to portrait mode outside active full-screen media viewing (detailed in `doc/DESIGN.md` Section 3.12).
 
-The iPhone and iPad share the `ImageGen` target (`TARGETED_DEVICE_FAMILY = 1,2`). The iPad has all four orientations; the iPhone is in portrait except in the full-screen viewer, which also turns to the two landscapes. `doc/DESIGN.md` section 3.12 has the details.
-
-- **Navigation follows the window.** A window of regular width is a sidebar and a detail; a narrow one, such as Slide Over or a small Stage Manager window, is the iPhone's stack. Crossing between them keeps the selected chat, the draft and the attachment tray. The viewer stays up and the reader's place comes across. The crossing rebuilds the chat's screen, so a sheet open on it closes.
-- **The transcript in the sidebar layout follows the Mac's policy**, with the composer floating on glass as on the iPhone. The stack layout is the same as on the iPhone.
-- **A hardware keyboard:** Return sends and Shift-Return inserts a newline. The on-screen keyboard's Return inserts a newline. The menu bar has New Chat (Cmd-N), Settings (Cmd-comma), Delete Chat, Jump to Latest and the Chat menu.
-- **A pointer:** hover effects and tooltips on icon controls, a secondary click for the context menus, and a double click (or double tap) to open an image.
-- **Images can be dropped on the chat** from another app.
+- **Adaptive Window Navigation**: View hierarchy adapts between split-view and stack navigation based on horizontal size class. Regular-width windows present a two-column sidebar and detail layout; compact windows (including Slide Over and constrained Stage Manager configurations) transition to stack navigation. Active conversation selection, message drafts, attachment trays, and scroll positions are preserved across container transitions.
+- **Responsive Transcript Geometry**: Regular-width split presentations apply desktop-aligned reading column widths and proportional image constraints, floating the composer bar over transcript content on translucent material. Compact presentations utilize full-width stack layouts identical to iPhone.
+- **Hardware Keyboard Integration**: Physical keyboard input maps Return to message submission and Shift-Return to line insertion, while the software keyboard preserves standard multi-line insertion semantics. Global keyboard shortcuts and menu bar commands provide quick access to common actions (New Chat, Settings, Delete Conversation, Jump to Latest).
+- **Pointer and Gesture Support**: Interactive controls provide hover states, tooltips, secondary click context menus, and double-tap activation for media inspection. Drag-and-drop ingestion allows images to be imported directly from external applications.
 
 ### Physical Device Installation
 
